@@ -1,0 +1,183 @@
+import json
+import os
+from dataclasses import dataclass, asdict
+from typing import Dict, List, Optional, Callable
+
+import tensorflow as tf
+
+import neuraltide
+import neuraltide.config
+from neuraltide.core.network import NetworkRNN, NetworkOutput
+from neuraltide.training.losses import CompositeLoss
+from neuraltide.core.types import TensorType
+
+
+@dataclass
+class TrainingHistory:
+    """История обучения."""
+    loss_history: List[float]
+    epochs: int
+
+    def to_dict(self) -> dict:
+        return {
+            'loss_history': self.loss_history,
+            'epochs': self.epochs,
+        }
+
+
+class Trainer:
+    """
+    Высокоуровневый API обучения.
+
+    Args:
+        network: сеть.
+        loss_fn: функция потерь.
+        optimizer: оптимизатор.
+        grad_clip_norm: максимальная норма градиента (0.0 — без клиппинга).
+        run_eagerly: отключить tf.function для отладки.
+    """
+
+    def __init__(
+        self,
+        network: NetworkRNN,
+        loss_fn: CompositeLoss,
+        optimizer: tf.keras.optimizers.Optimizer,
+        grad_clip_norm: float = 1.0,
+        run_eagerly: bool = False,
+    ):
+        self.network = network
+        self.loss_fn = loss_fn
+        self.optimizer = optimizer
+        self.grad_clip_norm = grad_clip_norm
+        self.run_eagerly = run_eagerly
+
+        if not run_eagerly:
+            self._train_step = tf.function(self._train_step)
+
+    def _train_step(self, t_sequence: TensorType) -> Dict[str, float]:
+        with tf.GradientTape() as tape:
+            output = self.network(t_sequence, training=True)
+            loss = self.loss_fn(output, self.network)
+
+        grads = tape.gradient(loss, self.network.trainable_variables)
+
+        grads_and_vars = [(g, v) for g, v in zip(grads, self.network.trainable_variables) if g is not None]
+        
+        if not grads_and_vars:
+            return {'loss': loss}
+
+        if self.grad_clip_norm > 0:
+            grads_only = [g for g, v in grads_and_vars]
+            clipped_grads, _ = tf.clip_by_global_norm(grads_only, self.grad_clip_norm)
+            grads_and_vars = [(g, v) for g, (_, v) in zip(clipped_grads, grads_and_vars)]
+
+        self.optimizer.apply_gradients(grads_and_vars)
+
+        return {'loss': loss}
+
+    def train_step(self, t_sequence: TensorType) -> Dict[str, float]:
+        if self.run_eagerly:
+            return self._train_step_eager(t_sequence)
+        return self._train_step(t_sequence)
+
+    def _train_step_eager(self, t_sequence: TensorType) -> Dict[str, float]:
+        with tf.GradientTape() as tape:
+            output = self.network(t_sequence, training=True)
+            loss = self.loss_fn(output, self.network)
+
+        grads = tape.gradient(loss, self.network.trainable_variables)
+
+        grads_and_vars = [(g, v) for g, v in zip(grads, self.network.trainable_variables) if g is not None]
+        
+        if not grads_and_vars:
+            return {'loss': loss}
+
+        if self.grad_clip_norm > 0:
+            grads_only = [g for g, v in grads_and_vars]
+            clipped_grads, _ = tf.clip_by_global_norm(grads_only, self.grad_clip_norm)
+            grads_and_vars = [(g, v) for g, (_, v) in zip(clipped_grads, grads_and_vars)]
+
+        self.optimizer.apply_gradients(grads_and_vars)
+
+        return {'loss': loss}
+
+    def fit(
+        self,
+        t_sequence: TensorType,
+        epochs: int,
+        callbacks: Optional[List] = None,
+        verbose: int = 1,
+    ) -> TrainingHistory:
+        """Обучение на заданное число эпох."""
+        history = TrainingHistory(loss_history=[], epochs=epochs)
+
+        for epoch in range(epochs):
+            step_result = self.train_step(t_sequence)
+            loss_val = float(step_result['loss'])
+
+            if verbose > 0:
+                print(f"Epoch {epoch + 1}/{epochs} - loss: {loss_val:.6f}")
+
+            history.loss_history.append(loss_val)
+
+            if callbacks:
+                for callback in callbacks:
+                    if hasattr(callback, 'on_epoch_end'):
+                        callback.on_epoch_end(epoch, {'loss': loss_val})
+
+        return history
+
+    def predict(self, t_sequence: TensorType) -> NetworkOutput:
+        """Предсказание без обучения."""
+        return self.network(t_sequence, training=False)
+
+    def save_experiment(self, path: str) -> None:
+        """Сохранение состояния эксперимента."""
+        os.makedirs(path, exist_ok=True)
+
+        checkpoint_dir = os.path.join(path, 'checkpoint')
+        checkpoint = tf.train.Checkpoint(
+            optimizer=self.optimizer,
+            network=self.network,
+        )
+        checkpoint.save(file_prefix=os.path.join(checkpoint_dir, 'ckpt'))
+
+        config_data = {
+            'stability_penalty_weight': self.network._stability_penalty_weight,
+            'grad_clip_norm': self.grad_clip_norm,
+        }
+        with open(os.path.join(path, 'config.json'), 'w') as f:
+            json.dump(config_data, f)
+
+        versions_data = {
+            'neuraltide': neuraltide.__version__,
+            'tensorflow': tf.__version__,
+        }
+        with open(os.path.join(path, 'versions.json'), 'w') as f:
+            json.dump(versions_data, f)
+
+    @classmethod
+    def load_experiment(cls, path: str, network: NetworkRNN,
+                        loss_fn: CompositeLoss,
+                        optimizer: tf.keras.optimizers.Optimizer) -> 'Trainer':
+        """Загрузка состояния эксперимента."""
+        checkpoint_dir = os.path.join(path, 'checkpoint')
+        checkpoint = tf.train.Checkpoint(
+            optimizer=optimizer,
+            network=network,
+        )
+        latest = tf.train.latest_checkpoint(checkpoint_dir)
+        if latest is not None:
+            checkpoint.restore(latest)
+
+        with open(os.path.join(path, 'config.json'), 'r') as f:
+            config_data = json.load(f)
+
+        trainer = cls(
+            network=network,
+            loss_fn=loss_fn,
+            optimizer=optimizer,
+            grad_clip_norm=config_data.get('grad_clip_norm', 1.0),
+        )
+
+        return trainer
