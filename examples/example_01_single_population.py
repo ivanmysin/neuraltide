@@ -18,7 +18,7 @@ from neuraltide.utils import seed_everything, print_summary
 seed_everything(42)
 
 dt = 0.5
-T = 2000
+T = 20
 
 pop = IzhikevichMeanField(n_units=2, dt=dt, params={
     'alpha':     {'value': [0.5, 0.5],   'trainable': False},

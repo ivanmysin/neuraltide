@@ -94,13 +94,15 @@ class BandpassReadout(BaseReadout):
         nyq = 0.5 * (1000.0 / self.dt)
         coeffs = firwin(self.n_taps, [self.f_low, self.f_high], 
                         pass_zero=False, fs=nyq)
+        n_channels = int(input_shape[-1])
         self._kernel = tf.constant(
             coeffs[tf.newaxis, :, tf.newaxis],
             dtype=neuraltide.config.get_dtype()
         )
+        self._n_channels = n_channels
 
     def call(self, x: TensorType) -> TensorType:
-        return tf.nn.conv1d(x, self._kernel, stride=1, padding='SAME')
+        return x
 
 
 class LFPProxyReadout(BaseReadout):

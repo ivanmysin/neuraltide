@@ -62,7 +62,7 @@ register_population('MyRateModel', MyRateModel)
 
 n_units = 2
 dt = 0.5
-T = 500
+T = 50
 
 pop = MyRateModel(n_units=n_units, dt=dt, params={
     'tau': {'value': [10.0]*n_units, 'trainable': False},

@@ -51,8 +51,11 @@ class SimpleFokkerPlanck(PopulationModel):
         mu = tf.constant(self.mu, dtype=neuraltide.config.get_dtype())
         dV = tf.constant(self.dV, dtype=neuraltide.config.get_dtype())
 
-        dP_dV = tf.gradient(P, self.v_grid)[0]
-        d2P_dV2 = tf.gradient(dP_dV, self.v_grid)[0]
+        dP_dV = (P[:, 1:] - P[:, :-1]) / dV
+        dP_dV = tf.concat([dP_dV[:, :1], dP_dV], axis=1)
+
+        d2P_dV2 = (dP_dV[:, 1:] - dP_dV[:, :-1]) / dV
+        d2P_dV2 = tf.concat([d2P_dV2[:, :1], d2P_dV2], axis=1)
 
         diffusion = D * d2P_dV2
         drift = -mu * dP_dV
@@ -62,10 +65,9 @@ class SimpleFokkerPlanck(PopulationModel):
 
     def get_firing_rate(self, state):
         P = state[0]
-        threshold = tf.constant([self.v_max - self.dV], dtype=neuraltide.config.get_dtype())
-        idx = tf.constant(self.grid_size - 1)
-        J_out = -self.D * (P[:, :, idx:idx+1] - P[:, :, idx-1:idx]) / self.dV
-        return J_out
+        idx = self.grid_size - 1
+        J_out = -self.D * (P[:, idx] - P[:, idx-1]) / self.dV
+        return J_out[:, tf.newaxis]
 
     @property
     def parameter_spec(self):
@@ -88,7 +90,7 @@ class SimpleFokkerPlanck(PopulationModel):
 register_population('SimpleFokkerPlanck', SimpleFokkerPlanck)
 
 dt = 0.5
-T = 500
+T = 50
 
 pop = SimpleFokkerPlanck(n_units=1, dt=dt, grid_size=100)
 

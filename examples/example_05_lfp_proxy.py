@@ -18,7 +18,7 @@ from neuraltide.utils import seed_everything
 seed_everything(42)
 
 dt = 0.5
-T = 2000
+T = 20
 
 exc_params = {
     'alpha':     {'value': [0.5]*4,   'trainable': False},
@@ -49,11 +49,7 @@ graph.add_input_population('stim', gen)
 graph.add_population('exc', pop)
 graph.add_synapse('stim->exc', syn, src='stim', tgt='exc')
 
-network = NetworkRNN(graph, integrator=RK4Integrator(),
-                     return_hidden_states=True)
-
-lfp_weights = {'exc': [1.0, 0.8, 0.9, 0.7]}
-lfp_readout = LFPProxyReadout(weights=lfp_weights)
+network = NetworkRNN(graph, integrator=RK4Integrator())
 
 t_values = np.arange(T, dtype=np.float32) * dt
 t_seq = tf.constant(t_values[None, :, None])

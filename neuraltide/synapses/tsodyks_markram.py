@@ -91,8 +91,8 @@ class TsodyksMarkramSynapse(SynapseModel):
         R_new = r_ - released
 
         g_eff = gsyn_max * A_new
-        post_v_T = tf.transpose(post_voltage)
-        I_pair = g_eff * (e_r - post_v_T)
+        post_v_flat = tf.reshape(post_voltage, [self.n_post])
+        I_pair = g_eff * (e_r - post_v_flat)
         I_syn = tf.reduce_sum(I_pair, axis=0, keepdims=True)
         g_syn = tf.reduce_sum(g_eff, axis=0, keepdims=True)
 

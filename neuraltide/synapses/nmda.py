@@ -68,14 +68,14 @@ class NMDASynapse(SynapseModel):
         s_input = pconn_nmda * firing_probs_T
 
         dgnmda_new = (dgnmda + dt * (s_input - gnmda - (tau1_nmda + tau2_nmda) * dgnmda)
-                      / (tau1_nmda * tau2_nmda))
+                       / (tau1_nmda * tau2_nmda))
         gnmda_new = gnmda + dt * dgnmda_new
 
-        post_v_T = tf.transpose(post_voltage)
-        mg_block = 1.0 / (1.0 + Mgb * tf.exp(-av_nmda * (post_v_T - v_ref)))
+        post_v_flat = tf.reshape(post_voltage, [self.n_post])
+        mg_block = 1.0 / (1.0 + Mgb * tf.exp(-av_nmda * (post_v_flat - v_ref)))
 
         g_eff = gsyn_max_nmda * gnmda_new * mg_block
-        I_pair = g_eff * (e_r_nmda - post_v_T)
+        I_pair = g_eff * (e_r_nmda - post_v_flat)
         I_syn = tf.reduce_sum(I_pair, axis=0, keepdims=True)
         g_syn = tf.reduce_sum(g_eff, axis=0, keepdims=True)
 

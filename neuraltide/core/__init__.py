@@ -1,6 +1,5 @@
 from neuraltide.core.network import (
     NetworkGraph,
-    NetworkRNNCell,
     NetworkRNN,
     NetworkOutput,
 )
@@ -10,7 +9,6 @@ from neuraltide.core.types import TensorType, StateList, ParamDict, get_pi
 
 __all__ = [
     "NetworkGraph",
-    "NetworkRNNCell",
     "NetworkRNN",
     "NetworkOutput",
     "NetworkState",

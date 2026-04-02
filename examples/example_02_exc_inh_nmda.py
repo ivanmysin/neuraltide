@@ -11,17 +11,18 @@ import tensorflow as tf
 import neuraltide
 from neuraltide.core.network import NetworkGraph, NetworkRNN
 from neuraltide.populations import IzhikevichMeanField
-from neuraltide.synapses import TsodyksMarkramSynapse, NMDASynapse, CompositeSynapse, StaticSynapse
+from neuraltide.synapses import TsodyksMarkramSynapse, NMDASynapse
 from neuraltide.inputs import VonMisesGenerator
 from neuraltide.integrators import RK4Integrator
 from neuraltide.training import Trainer, CompositeLoss, MSELoss, StabilityPenalty
 from neuraltide.training.readouts import BandpassReadout
 from neuraltide.utils import seed_everything
 
+
 seed_everything(42)
 
 dt = 0.5
-T = 2000
+T = 20
 
 exc_params = {
     'alpha':     {'value': [0.5]*4,   'trainable': False},
@@ -81,10 +82,15 @@ exc_to_inh = TsodyksMarkramSynapse(n_pre=4, n_post=2, dt=dt, params={
     'e_r':      {'value': 0.0,   'trainable': False},
 })
 
-inh_to_exc = StaticSynapse(n_pre=2, n_post=4, dt=dt, params={
-    'gsyn_max': {'value': 0.1,  'trainable': True},
-    'pconn':    {'value': [[1]*4]*2, 'trainable': False},
-    'e_r':      {'value': -70.0, 'trainable': False},
+inh_to_exc = NMDASynapse(n_pre=2, n_post=4, dt=dt, params={
+    'gsyn_max_nmda': {'value': 0.1,  'trainable': True},
+    'tau1_nmda':     {'value': 2.0,   'trainable': False},
+    'tau2_nmda':     {'value': 100.0, 'trainable': False},
+    'Mgb':           {'value': 1.0,   'trainable': False},
+    'av_nmda':       {'value': 0.062, 'trainable': False},
+    'pconn_nmda':    {'value': [[1]*4]*2, 'trainable': False},
+    'e_r_nmda':      {'value': -70.0,   'trainable': False},
+    'v_ref':         {'value': 1.0,   'trainable': False},
 })
 
 theta_syn = TsodyksMarkramSynapse(n_pre=1, n_post=4, dt=dt, params={
@@ -101,14 +107,9 @@ graph = NetworkGraph(dt=dt)
 graph.add_input_population('theta', gen)
 graph.add_population('exc', exc)
 graph.add_population('inh', inh)
-
-graph.add_synapse('exc->exc',
-    CompositeSynapse(n_pre=4, n_post=4, dt=dt,
-                     components=[('ampa', ampa_ee), ('nmda', nmda_ee)]),
-    src='exc', tgt='exc'
-)
-
 graph.add_synapse('theta->exc', theta_syn, src='theta', tgt='exc')
+graph.add_synapse('ampa_ee', ampa_ee, src='exc', tgt='exc')
+graph.add_synapse('nmda_ee', nmda_ee, src='exc', tgt='exc')
 graph.add_synapse('exc->inh', exc_to_inh, src='exc', tgt='inh')
 graph.add_synapse('inh->exc', inh_to_exc, src='inh', tgt='exc')
 
