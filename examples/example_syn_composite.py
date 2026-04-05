@@ -1,0 +1,205 @@
+"""
+Пример: Динамика CompositeSynapse (AMPA + NMDA) с входом Von Mises.
+
+CompositeSynapse объединяет быстрый AMPA и медленный NMDA каналы.
+Суммарный ток = I_AMPA + I_NMDA
+
+Демонстрируется:
+- Быстрая компонента AMPA (от TsodyksMarkramSynapse)
+- Медленная компонента NMDA с магниевым блоком
+- Суммарный ток и проводимость
+"""
+
+import numpy as np
+import tensorflow as tf
+import matplotlib.pyplot as plt
+
+from neuraltide.core.network import NetworkGraph, NetworkRNN
+from neuraltide.populations.izhikevich_mf import IzhikevichMeanField
+from neuraltide.synapses.tsodyks_markram import TsodyksMarkramSynapse
+from neuraltide.synapses.nmda import NMDASynapse
+from neuraltide.synapses.composite import CompositeSynapse
+from neuraltide.inputs.von_mises import VonMisesGenerator
+from neuraltide.integrators import RK4Integrator
+from neuraltide.utils import seed_everything
+
+seed_everything(42)
+
+dt = 0.5
+T = 200
+
+gen = VonMisesGenerator(params=[
+    {'MeanFiringRate': 30.0, 'R': 0.8, 'ThetaFreq': 8.0, 'ThetaPhase': 0.0},
+], name='theta_gen')
+
+ampa_syn = TsodyksMarkramSynapse(n_pre=1, n_post=2, dt=dt, params={
+    'gsyn_max': {'value': [[0.1, 0.08]], 'trainable': False},
+    'tau_f':    {'value': 20.0,  'trainable': False},
+    'tau_d':    {'value': 5.0,   'trainable': False},
+    'tau_r':    {'value': 200.0, 'trainable': False},
+    'Uinc':     {'value': 0.2,   'trainable': False},
+    'pconn':    {'value': [[1.0, 1.0]], 'trainable': False},
+    'e_r':      {'value': 0.0,   'trainable': False},
+})
+
+nmda_syn = NMDASynapse(n_pre=1, n_post=2, dt=dt, params={
+    'gsyn_max_nmda': {'value': [[0.08, 0.06]], 'trainable': False},
+    'tau1_nmda':     {'value': 5.0,   'trainable': False},
+    'tau2_nmda':     {'value': 80.0,  'trainable': False},
+    'Mgb':           {'value': 0.1,   'trainable': False},
+    'av_nmda':       {'value': 0.18,  'trainable': False},
+    'pconn_nmda':    {'value': [[1.0, 1.0]], 'trainable': False},
+    'e_r_nmda':      {'value': 0.0,   'trainable': False},
+    'v_ref':         {'value': 0.0,   'trainable': False},
+})
+
+composite = CompositeSynapse(
+    n_pre=1, n_post=2, dt=dt,
+    components=[('AMPA', ampa_syn), ('NMDA', nmda_syn)]
+)
+
+pop = IzhikevichMeanField(n_units=2, dt=dt, params={
+    'alpha':     {'value': [0.5, 0.5],   'trainable': False},
+    'a':         {'value': [0.02, 0.02], 'trainable': False},
+    'b':         {'value': [0.2, 0.2],   'trainable': False},
+    'w_jump':    {'value': [0.1, 0.1],   'trainable': False},
+    'dt_nondim': {'value': [0.01, 0.01], 'trainable': False},
+    'Delta_eta': {'value': [0.5, 0.5],   'trainable': False},
+    'I_ext':     {'value': [1.5, 1.5],   'trainable': False},
+})
+
+graph = NetworkGraph(dt=dt)
+graph.add_input_population('theta', gen)
+graph.add_population('main', pop)
+graph.add_synapse('theta->main', composite, src='theta', tgt='main')
+
+network = NetworkRNN(graph, integrator=RK4Integrator())
+
+t_values = np.arange(0, T, dt, dtype=np.float32)
+t_seq = tf.constant(t_values[None, :, None], dtype=tf.float32)
+
+output = network(t_seq, training=False)
+
+I_syn_total_hist = []
+g_syn_total_hist = []
+I_syn_ampa_hist = []
+I_syn_nmda_hist = []
+
+init_syn = list(network._init_syn_states)
+syn_states = list(init_syn)
+syn_states_dict = {}
+idx = 0
+for name in graph.synapse_names:
+    entry = graph._synapses[name]
+    n = len(entry.model.state_size)
+    syn_states_dict[name] = syn_states[idx:idx + n]
+    idx += n
+
+pop_states_dict = {}
+pop_states = list(network._init_pop_states)
+idx = 0
+for name in graph.population_names:
+    p = graph._populations[name]
+    n = len(p.state_size)
+    pop_states_dict[name] = pop_states[idx:idx + n]
+    idx += n
+
+from neuraltide.core.network import _step_fn
+
+for step in range(len(t_values)):
+    t = t_seq[:, step:step+1, 0]
+
+    for name in graph.input_population_names:
+        pop_states_dict[name] = [t]
+
+    tgt_pop = graph._populations['main']
+    src_pop = graph._populations['theta']
+
+    tgt_obs = tgt_pop.observables(pop_states_dict['main'])
+    post_v = tgt_obs.get('v_mean', tf.zeros([1, tgt_pop.n_units], dtype=tf.float32))
+
+    syn_entry = graph._synapses['theta->main']
+    pre_rate = src_pop.get_firing_rate(pop_states_dict['theta'])
+    syn_state = syn_states_dict['theta->main']
+
+    total_dict, new_syn_state = syn_entry.model.forward(
+        pre_rate, post_v, syn_state, syn_entry.model.dt
+    )
+
+    I_syn_total_hist.append(total_dict['I_syn'][0].numpy())
+    g_syn_total_hist.append(total_dict['g_syn'][0].numpy())
+
+    ampa_current, _ = ampa_syn.forward(pre_rate, post_v, syn_state[:3], dt)
+    nmda_current, _ = nmda_syn.forward(pre_rate, post_v, syn_state[3:], dt)
+    I_syn_ampa_hist.append(ampa_current['I_syn'][0].numpy())
+    I_syn_nmda_hist.append(nmda_current['I_syn'][0].numpy())
+
+    new_pop, new_syn, _ = _step_fn(
+        (tuple(pop_states), tuple(syn_states), tf.zeros([1], dtype=tf.float32)),
+        t, graph, network._integrator
+    )
+
+    pop_states = list(new_pop)
+    syn_states = list(new_syn)
+
+    idx = 0
+    for name in graph.population_names:
+        p = graph._populations[name]
+        n = len(p.state_size)
+        pop_states_dict[name] = pop_states[idx:idx + n]
+        idx += n
+    idx = 0
+    for name in graph.synapse_names:
+        entry = graph._synapses[name]
+        n = len(entry.model.state_size)
+        syn_states_dict[name] = syn_states[idx:idx + n]
+        idx += n
+
+I_syn_total_hist = np.array(I_syn_total_hist)
+g_syn_total_hist = np.array(g_syn_total_hist)
+I_syn_ampa_hist = np.array(I_syn_ampa_hist)
+I_syn_nmda_hist = np.array(I_syn_nmda_hist)
+rates = output.firing_rates['main'].numpy()[0]
+
+fig, axes = plt.subplots(4, 1, figsize=(12, 10))
+
+axes[0].plot(t_values, I_syn_ampa_hist[:, 0], color='tab:blue', linewidth=1.5, label='AMPA Unit 0', alpha=0.8)
+axes[0].plot(t_values, I_syn_ampa_hist[:, 1], color='tab:cyan', linewidth=1.5, label='AMPA Unit 1', alpha=0.8)
+axes[0].plot(t_values, I_syn_nmda_hist[:, 0], color='tab:red', linewidth=1.5, label='NMDA Unit 0', alpha=0.8)
+axes[0].plot(t_values, I_syn_nmda_hist[:, 1], color='tab:orange', linewidth=1.5, label='NMDA Unit 1', alpha=0.8)
+axes[0].set_ylabel('I_syn (per component)')
+axes[0].set_title('AMPA vs NMDA Synaptic Currents')
+axes[0].legend(fontsize=8)
+axes[0].grid(True, alpha=0.3)
+
+axes[1].plot(t_values, I_syn_total_hist[:, 0], color='tab:blue', linewidth=2, label='Unit 0')
+axes[1].plot(t_values, I_syn_total_hist[:, 1], color='tab:orange', linewidth=2, linestyle='--', label='Unit 1')
+axes[1].set_ylabel('I_syn total')
+axes[1].set_title('Total Synaptic Current (AMPA + NMDA)')
+axes[1].legend(fontsize=9)
+axes[1].grid(True, alpha=0.3)
+
+axes[2].plot(t_values, g_syn_total_hist[:, 0], color='tab:blue', linewidth=1.5, label='Unit 0')
+axes[2].plot(t_values, g_syn_total_hist[:, 1], color='tab:orange', linewidth=1.5, linestyle='--', label='Unit 1')
+axes[2].set_ylabel('g_syn total')
+axes[2].set_title('Total Synaptic Conductance')
+axes[2].legend(fontsize=9)
+axes[2].grid(True, alpha=0.3)
+
+axes[3].plot(t_values, rates[:, 0], color='tab:blue', linewidth=1.5, label='Unit 0')
+axes[3].plot(t_values, rates[:, 1], color='tab:orange', linewidth=1.5, linestyle='--', label='Unit 1')
+axes[3].set_ylabel('Firing Rate (Hz)')
+axes[3].set_xlabel('Time (ms)')
+axes[3].set_title('Population Firing Rate')
+axes[3].legend(fontsize=9)
+axes[3].grid(True, alpha=0.3)
+
+fig.suptitle(
+    "CompositeSynapse: AMPA + NMDA Combined Response\n"
+    "AMPA: fast STP | NMDA: slow with Mg block",
+    fontsize=13
+)
+plt.tight_layout()
+plt.savefig("example_syn_composite.png", dpi=150)
+plt.show()
+print("Figure saved as example_syn_composite.png")

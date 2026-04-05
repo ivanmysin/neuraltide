@@ -5,6 +5,7 @@
 """
 import numpy as np
 import tensorflow as tf
+import matplotlib.pyplot as plt
 
 import neuraltide
 from neuraltide.core.network import NetworkGraph, NetworkRNN
@@ -77,10 +78,75 @@ target = {
     )
 }
 
+output_before = network(t_seq, training=False)
+
 loss_fn = CompositeLoss([
     (1.0,  MSELoss(target)),
     (1e-3, StabilityPenalty()),
 ])
 trainer = Trainer(network, loss_fn,
                   optimizer=tf.keras.optimizers.Adam(1e-3))
-history = trainer.fit(t_seq, epochs=200, verbose=1)
+history = trainer.fit(t_seq, epochs=2000, verbose=1)
+
+output_after = network(t_seq, training=False)
+
+tgt = target['exc'].numpy()[0]
+pred_before = output_before.firing_rates['exc'].numpy()[0]
+pred_after = output_after.firing_rates['exc'].numpy()[0]
+
+fig, axes = plt.subplots(2, 3, figsize=(15, 8))
+
+epochs = np.arange(1, len(history.loss_history) + 1)
+axes[0, 0].plot(epochs, history.loss_history, color='tab:blue', linewidth=1.5)
+axes[0, 0].set_xlabel("Epoch")
+axes[0, 0].set_ylabel("Loss")
+axes[0, 0].set_title(f"Training Loss (final: {history.loss_history[-1]:.2f})")
+axes[0, 0].grid(True, alpha=0.3)
+
+for unit in range(2):
+    axes[0, 1].plot(t_values, tgt[:, unit], color='tab:green', linewidth=2, label=f'Target unit {unit}', alpha=0.8)
+    axes[0, 1].plot(t_values, pred_before[:, unit], color=f'C{unit}', linewidth=1.5, linestyle='--', label=f'Before unit {unit}', alpha=0.8)
+axes[0, 1].set_xlabel("Time (ms)")
+axes[0, 1].set_ylabel("Firing Rate (Hz)")
+axes[0, 1].set_title("Before Training: Target vs Prediction")
+axes[0, 1].legend(fontsize=8)
+axes[0, 1].grid(True, alpha=0.3)
+
+for unit in range(2):
+    axes[0, 2].plot(t_values, tgt[:, unit], color='tab:green', linewidth=2, label=f'Target unit {unit}', alpha=0.8)
+    axes[0, 2].plot(t_values, pred_after[:, unit], color=f'C{unit}', linewidth=1.5, linestyle='--', label=f'After unit {unit}', alpha=0.8)
+axes[0, 2].set_xlabel("Time (ms)")
+axes[0, 2].set_ylabel("Firing Rate (Hz)")
+axes[0, 2].set_title("After Training: Target vs Prediction")
+axes[0, 2].legend(fontsize=8)
+axes[0, 2].grid(True, alpha=0.3)
+
+for unit in range(2):
+    axes[1, 1].plot(t_values, pred_before[:, unit] - tgt[:, unit],
+                    color=f'C{unit}', linewidth=1.5, linestyle='--',
+                    label=f'Unit {unit}', alpha=0.8)
+axes[1, 1].axhline(0, color='black', linewidth=0.5)
+axes[1, 1].set_xlabel("Time (ms)")
+axes[1, 1].set_ylabel("Prediction - Target (Hz)")
+axes[1, 1].set_title("Prediction Error Before Training")
+axes[1, 1].legend(fontsize=8)
+axes[1, 1].grid(True, alpha=0.3)
+
+for unit in range(2):
+    axes[1, 2].plot(t_values, pred_after[:, unit] - tgt[:, unit],
+                    color=f'C{unit}', linewidth=1.5, linestyle='--',
+                    label=f'Unit {unit}', alpha=0.8)
+axes[1, 2].axhline(0, color='black', linewidth=0.5)
+axes[1, 2].set_xlabel("Time (ms)")
+axes[1, 2].set_ylabel("Prediction - Target (Hz)")
+axes[1, 2].set_title("Prediction Error After Training")
+axes[1, 2].legend(fontsize=8)
+axes[1, 2].grid(True, alpha=0.3)
+
+axes[1, 0].axis('off')
+
+fig.suptitle("Example 1: IzhikevichMeanField + TsodyksMarkramSynapse Training", fontsize=13)
+plt.tight_layout()
+plt.savefig("example_01_training_results.png", dpi=150)
+plt.show()
+print("Figure saved as example_01_training_results.png")

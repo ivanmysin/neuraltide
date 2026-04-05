@@ -372,6 +372,16 @@ class NetworkRNN(tf.keras.layers.Layer):
             stability_loss=stability_loss,
         )
     
+    @property
+    def trainable_variables(self) -> List[tf.Variable]:
+        """Агрегирует trainable_variables из всех популяций и синапсов графа."""
+        vars_ = list(super().trainable_variables)
+        for pop in self._graph._populations.values():
+            vars_.extend(pop.trainable_variables)
+        for entry in self._graph._synapses.values():
+            vars_.extend(entry.model.trainable_variables)
+        return vars_
+
     def get_initial_state(self, batch_size: int = 1) -> Tuple[StateList, StateList]:
         """Возвращает начальное состояние сети."""
         init_pop = []
