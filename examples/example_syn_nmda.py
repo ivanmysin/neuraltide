@@ -7,7 +7,8 @@ Von Mises генератор (тета-ритм ~8Hz) подаётся на NMDA
 - Mg block (магниевый блок): зависит от постсинаптического потенциала
 - I_syn (синаптический ток): фильтрованный отклик на входную частоту
 """
-
+import matplotlib
+matplotlib.use('Agg')
 import numpy as np
 import tensorflow as tf
 import matplotlib.pyplot as plt

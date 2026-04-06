@@ -8,6 +8,8 @@ Von Mises генератор (тета-ритм ~8Hz) подаётся на си
 - A (аккумулятор): растёт при высвобождении, затухает экспоненциально
 - I_syn и g_syn как функции от U, R, A
 """
+import matplotlib
+matplotlib.use('Agg')
 import numpy as np
 import tensorflow as tf
 import matplotlib.pyplot as plt
