@@ -1,5 +1,6 @@
 venv/
 .idea/
+context/
 
 
 # Byte-compiled / optimized / DLL files
