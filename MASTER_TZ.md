@@ -1421,15 +1421,14 @@ local_error   = mean(||new_state - heun_state||²)
 | `a` | [0.02, ...] | нет | — |
 | `b` | [0.2, ...] | нет | — |
 | `w_jump` | [0.1, ...] | нет | — |
-| `dt_nondim` | [0.01, ...] | нет | — |
-| `Delta_eta` | [0.5, ...] | **да** | [min, max] |
+| `Delta_I` | [0.5, ...] | **да** | [min, max] |
 | `I_ext` | [1.0, ...] | **да** | — |
 
 `trainable` для каждого параметра задаётся пользователем через `params`.
 
 **`get_firing_rate()`:**
 ```python
-return tf.nn.relu(r) * dt_nondim / (dt * 1e-3)  # Гц
+return tf.nn.relu(r)  # dimensionless rate
 ```
 
 **`observables()`:** `{'firing_rate': ..., 'v_mean': v, 'w_mean': w}`.
@@ -1441,7 +1440,7 @@ g_syn_tot  = total_synaptic_input['g_syn']   # [1, n_units]
 I_syn      = total_synaptic_input['I_syn']   # [1, n_units]
 PI         = get_pi()
 
-drdt = Delta_eta/PI + 2*r*v - (alpha + g_syn_tot)*r
+drdt = Delta_I/PI + 2*r*v - (alpha + g_syn_tot)*r
 dvdt = v**2 - alpha*v - w + I_ext + I_syn - (PI*r)**2
 dwdt = a*(b*v - w) + w_jump*r
 return [drdt, dvdt, dwdt]
@@ -1885,10 +1884,10 @@ print_summary(network) выводит:
 ├────────────┬──────────────────────┬─────────┬────────────────  │
 │ Name       │ Model                │ n_units │ Parameters       │
 ├────────────┼──────────────────────┼─────────┼────────────────  │
-│ exc        │ IzhikevichMeanField   │ 4       │ Delta_eta T [4] │
+│ exc        │ IzhikevichMeanField   │ 4       │ Delta_I    T [4] │
 │            │                      │         │ I_ext     T [4] │
 │            │                      │         │ alpha     F [4] │
-│ inh        │ IzhikevichMeanField   │ 2       │ Delta_eta T [2] │
+│ inh        │ IzhikevichMeanField   │ 2       │ Delta_I    T [2] │
 ├──────────────────────────────────────────────────────────────── │
 │ PROJECTIONS                                                     │
 ├──────────────┬────────────────┬──────────┬──────────────────   │
@@ -1982,8 +1981,7 @@ def small_izh_params():
         'a':         {'value': [0.02, 0.02],  'trainable': False},
         'b':         {'value': [0.2, 0.2],    'trainable': False},
         'w_jump':    {'value': [0.1, 0.1],    'trainable': False},
-        'dt_nondim': {'value': [0.01, 0.01],  'trainable': False},
-        'Delta_eta': {'value': [0.5, 0.6],    'trainable': True,
+        'Delta_I':   {'value': [0.5, 0.6],    'trainable': True,
                       'min': 0.01, 'max': 2.0},
         'I_ext':     {'value': [1.0, 1.2],    'trainable': True},
     }
@@ -2132,7 +2130,7 @@ def small_izh_params():
 ### `test_gradient_check.py`
 ```
 Тест 1: Numerical gradient check — IzhikevichMeanField + TsodyksMarkramSynapse
-        Параметры: Delta_eta, I_ext, gsyn_max
+        Параметры: Delta_I, I_ext, gsyn_max
         Критерий: max relative error < 1e-3
         (сравнить tape.gradient с конечными разностями)
 
@@ -2151,7 +2149,7 @@ def small_izh_params():
 Тест 2: WilsonCowan — установившееся значение при постоянном входе
         совпадает с аналитически вычисленной фиксированной точкой (< 1% ошибка)
 
-Тест 3: IzhikevichMeanField — при Delta_eta=0, I_ext=0, w_jump=0
+Тест 3: IzhikevichMeanField — при Delta_I=0, I_ext=0, w_jump=0
         частота монотонно убывает к 0
 
 Тест 4: TsodyksMarkramSynapse — установившееся A_inf при постоянной частоте r0:
@@ -2230,8 +2228,7 @@ pop = IzhikevichMeanField(n_units=2, dt=dt, params={
     'a':         {'value': [0.02, 0.02], 'trainable': False},
     'b':         {'value': [0.2, 0.2],   'trainable': False},
     'w_jump':    {'value': [0.1, 0.1],   'trainable': False},
-    'dt_nondim': {'value': [0.01, 0.01], 'trainable': False},
-    'Delta_eta': {'value': [0.5, 0.6],   'trainable': True,
+    'Delta_I':   {'value': [0.5, 0.6],   'trainable': True,
                   'min': 0.01, 'max': 2.0},
     'I_ext':     {'value': [1.0, 1.2],   'trainable': True},
 })
