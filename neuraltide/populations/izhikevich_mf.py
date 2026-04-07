@@ -113,7 +113,6 @@ class IzhikevichMeanField(PopulationModel):
             )
 
         self._validate_params()
-
         self.tau_pop = self._make_param(self._params, 'tau_pop')
         self.alpha = self._make_param(self._params, 'alpha')
         self.a = self._make_param(self._params, 'a')
@@ -121,6 +120,17 @@ class IzhikevichMeanField(PopulationModel):
         self.w_jump = self._make_param(self._params, 'w_jump')
         self.Delta_I = self._make_param(self._params, 'Delta_I')
         self.I_ext = self._make_param(self._params, 'I_ext')
+
+        dtype = neuraltide.config.get_dtype()
+        self.PI = tf.constant(3.141592653589793, dtype=self.dtype)
+
+        self.tau_pop = tf.cast(self.tau_pop, dtype)
+        self.alpha = tf.cast(self.alpha, dtype)
+        self.Delta_I = tf.cast(self.Delta_I, dtype)
+        self.a = tf.cast(self.a, dtype)
+        self.b = tf.cast(self.b, dtype)
+        self.w_jump = tf.cast(self.w_jump, dtype)
+        self.I_ext = tf.cast(self.I_ext, dtype)
 
         self.state_size = [
             tf.TensorShape([1, n_units]),
@@ -254,20 +264,9 @@ class IzhikevichMeanField(PopulationModel):
         g_syn_tot = total_synaptic_input['g_syn']
         I_syn = total_synaptic_input['I_syn']
 
-        dtype = neuraltide.config.get_dtype()
-        PI = tf.constant(3.141592653589793, dtype=dtype)
-
-        tau_pop = tf.cast(self.tau_pop, dtype)
-        alpha = tf.cast(self.alpha, dtype)
-        Delta_I = tf.cast(self.Delta_I, dtype)
-        a = tf.cast(self.a, dtype)
-        b = tf.cast(self.b, dtype)
-        w_jump = tf.cast(self.w_jump, dtype)
-        I_ext = tf.cast(self.I_ext, dtype)
-
-        drdt = (Delta_I / PI + 2.0 * r * v - (alpha + g_syn_tot) * r) / tau_pop
-        dvdt = (v ** 2 - alpha * v - w + I_ext + I_syn - (PI * r) ** 2) / tau_pop
-        dwdt = (a * (b * v - w) + w_jump * r) / tau_pop
+        drdt = (self.Delta_I / self.PI + 2.0 * r * v - (self.alpha + g_syn_tot) * r) / self.tau_pop
+        dvdt = (v ** 2 - self.alpha * v - w + self.I_ext + I_syn - (self.PI * r) ** 2) / self.tau_pop
+        dwdt = (self.a * (self.b * v - w) + self.w_jump * r) / self.tau_pop
 
         return [drdt, dvdt, dwdt]
 
