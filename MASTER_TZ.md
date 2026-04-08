@@ -648,28 +648,62 @@ class BaseInputGenerator(tf.keras.layers.Layer):
     Генератор оборачивается в InputPopulation и подключается к
     динамическим популяциям через полноценные синапсы (SynapseModel).
 
-    Генератор — это Keras Layer, принимающий текущее время t
-    и возвращающий частоту разрядов в Гц.
+    Семантика n_units:
+        n_units — число независимых входных каналов одного типа.
+        Например, VonMisesGenerator с n_units=4 описывает 4 независимых
+        входных сигнала с (потенциально) разными параметрами.
+        Все n_units каналов обрабатываются одной векторизованной операцией.
+
+    Параметры:
+        Все параметры регистрируются через self._make_param(params, name).
+        Формат аналогичен PopulationModel:
+            - скаляр (broadcast к n_units)
+            - список длины n_units
+            - словарь {'value': ..., 'trainable': bool, 'min':, 'max':}
 
     Args:
-        n_outputs (int): число генерируемых выходных каналов.
-            Должно совпадать с n_units соответствующей InputPopulation.
-        name (str): имя слоя Keras.
+        params: словарь параметров генератора.
+        dt: шаг интегрирования в мс.
+        name: имя слоя Keras.
     """
 
-    def __init__(self, n_outputs: int, name: str = "input_generator", **kwargs):
+    def __init__(self, params: Dict[str, Any], dt: float,
+                 name: str = "input_generator", **kwargs):
         super().__init__(name=name, **kwargs)
-        self.n_outputs = n_outputs
+        self.dt = dt
+        self._params = params
+
+        self._infer_n_units_from_params()
+        self._validate_param_dimensions()
+
+        self.n_units = self._n_units
+
+    def _infer_n_units_from_params(self) -> None:
+        """Определяет n_units из размерности параметров."""
+        max_len = 1
+        for key, spec in self._params.items():
+            if isinstance(spec, dict):
+                value = spec.get('value', None)
+            else:
+                value = spec
+            if value is not None and isinstance(value, (list, tuple)):
+                max_len = max(max_len, len(value))
+        self._n_units = max_len
+
+    def _make_param(self, params: dict, name: str) -> tf.Variable:
+        """
+        Регистрирует параметр генератора через add_weight().
+        """
+        raise NotImplementedError
 
     @abstractmethod
     def call(self, t: TensorType) -> TensorType:
         """
         Args:
-            t: текущее время в мс. shape = [batch, 1] или [1, 1].
+            t: текущее время в мс. shape = [batch, 1].
 
         Returns:
-            tf.Tensor, shape = [1, n_outputs], в Гц.
-            Значения неотрицательны.
+            tf.Tensor, shape = [batch, n_units], в Гц.
         """
         raise NotImplementedError
 ```
@@ -696,20 +730,15 @@ class InputPopulation(PopulationModel):
         - get_firing_rate(state) вызывает generator(state[0]).
         - Не может быть целью синапса (только источником).
 
-    Args:
-        generator (BaseInputGenerator): генератор входного сигнала.
-        dt (float): шаг интегрирования в мс.
-
     Note:
-        n_units берётся из generator.n_outputs автоматически.
-        Пользователь не задаёт n_units вручную.
+        n_units и dt берутся из generator автоматически.
+        Пользователь не задаёт их вручную.
     """
 
-    def __init__(self, generator: BaseInputGenerator,
-                 dt: float, **kwargs):
+    def __init__(self, generator: BaseInputGenerator, **kwargs):
         super().__init__(
-            n_units=generator.n_outputs,
-            dt=dt,
+            n_units=generator.n_units,
+            dt=generator.dt,
             **kwargs
         )
         self.generator = generator
@@ -1630,24 +1659,127 @@ syn = CompositeSynapse(
 
 ## 3.10 Входные генераторы
 
-### `VonMisesGenerator`
+### Общий интерфейс
+
+Все генераторы теперь векторизованы аналогично популяциям. Интерфейс:
 
 ```python
-# Выход: rate(t) = (FiringRate/I0(kappa)) * exp(kappa * cos(2π*freq*t/1000 - phase))
-# kappa вычисляется из R через аппроксимацию r2kappa()
-# Все параметры — константы (не обучаемые)
+class BaseInputGenerator(tf.keras.layers.Layer):
+    def __init__(self, params: Dict[str, Any], dt: float, name: str, **kwargs):
+        # n_units определяется автоматически из размерности параметров:
+        # - скаляр → n_units=1
+        # - список len=n → n_units=n
+        # Все параметры регистрируются через _make_param()
+```
+
+**Параметры params:**
+- Ключ: имя параметра
+- Значение: скаляр, вектор (len=1 или n_units), или словарь `{'value': ..., 'trainable': bool, 'min':, 'max':}`
+
+### `VonMisesGenerator`
+
+Генератор тета-ритмического входа на основе распределения фон Мизаса.
+
+```python
+rate(t) = (mean_rate / I0(kappa)) * exp(kappa * cos(2π*freq*t/1000 - phase))
+
+# Параметры:
+#   mean_rate: средняя частота (Hz). Скаляр или вектор [n_units].
+#   R: R-value (0-1), характеризует концентрированность. Скаляр или вектор.
+#   freq: частота тета-ритма (Hz). Скаляр или вектор.
+#   phase: начальная фаза (рад). Скаляр или вектор.
+
+# r2kappa аппроксимация:
+#   R < 0.53:   kappa = 2*R + R^3 + 5/6*R^5
+#   0.53 ≤ R < 0.85: kappa = -0.4 + 1.39*R + 0.43/(1-R)
+#   R ≥ 0.85:   kappa = 1/(3*R - 4*R^2 + R^3)
+
+# Пример (один вход, n_units=1):
+gen = VonMisesGenerator(
+    dt=0.5,
+    params={
+        'mean_rate': 20.0,
+        'R': 0.8,
+        'freq': 8.0,
+        'phase': 0.0,
+    }
+)
+
+# Пример (три входа, n_units=3):
+gen = VonMisesGenerator(
+    dt=0.5,
+    params={
+        'mean_rate': [20.0, 15.0, 10.0],
+        'R': [0.9, 0.7, 0.5],
+        'freq': [8.0, 10.0, 12.0],
+        'phase': [0.0, np.pi/2, np.pi],
+    }
+)
 ```
 
 ### `SinusoidalGenerator`
 
 ```python
-# rate(t) = max(0, amplitude * sin(2π*freq*t/1000 + phase) + offset)
+rate(t) = max(0, amplitude * sin(2π*freq*t/1000 + phase) + offset)
+
+# Параметры:
+#   amplitude: амплитуда (Hz). Скаляр или вектор [n_units].
+#   freq: частота (Hz). Скаляр или вектор.
+#   phase: начальная фаза (рад). Скаляр или вектор.
+#   offset: смещение (Hz). Скаляр или вектор.
+
+# Пример:
+gen = SinusoidalGenerator(
+    dt=0.5,
+    params={
+        'amplitude': 10.0,
+        'freq': 8.0,
+        'phase': 0.0,
+        'offset': 5.0,
+    }
+)
 ```
 
 ### `ConstantRateGenerator`
 
 ```python
-# rate(t) = constant_rate  (независимо от t)
+rate(t) = rate  (независимо от t)
+
+# Параметры:
+#   rate: постоянная частота (Hz). Скаляр или вектор [n_units].
+
+# Пример:
+gen = ConstantRateGenerator(
+    dt=0.5,
+    params={
+        'rate': 10.0,
+    }
+)
+```
+
+### Подключение к сети
+
+Генераторы подключаются через `InputPopulation`:
+
+```python
+graph = NetworkGraph(dt=0.5)
+
+# Один вход (n_pre=1)
+gen1 = VonMisesGenerator(dt=0.5, params={'mean_rate': 20.0, 'R': 0.8, 'freq': 8.0, 'phase': 0.0})
+graph.add_input_population('theta', gen1)
+
+# Несколько входов (n_pre=3)
+gen2 = VonMisesGenerator(dt=0.5, params={
+    'mean_rate': [20.0, 15.0, 10.0],
+    'R': [0.9, 0.7, 0.5],
+    'freq': [8.0, 10.0, 12.0],
+    'phase': [0.0, np.pi/2, np.pi],
+})
+graph.add_input_population('inputs', gen2)
+
+# Синапс: 3 входа → 4 популяции
+syn = TsodyksMarkramSynapse(n_pre=3, n_post=4, dt=0.5, params={...})
+graph.add_synapse('inputs->exc', syn, src='inputs', tgt='exc')
 ```
 
 ---
