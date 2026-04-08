@@ -27,8 +27,8 @@ import neuraltide.config
 
 seed_everything(42)
 
-DT = 0.01
-T = 20
+DT = 0.05
+T = 150
 
 integrator = RK4Integrator()
 dtype = neuraltide.config.get_dtype()
@@ -45,8 +45,6 @@ print("\nThis example demonstrates that running IzhikevichMeanField with")
 print("dimensional and dimensionless parameters gives identical results.\n")
 
 
-Delta_I_target = 0.05
-
 V_R = -57.63
 K = 1.19
 C = 114
@@ -56,8 +54,8 @@ B = 0.22
 V_peak = 20.0
 V_reset = -50.0
 W_jump = 2.0
-Delta_I_dimensional = 150 #  Delta_I_target * K * abs(V_R)**2
-I_ext_dimensional = 100
+Delta_I_dimensional = 25
+I_ext_dimensional = 500
 
 print("Dimensional Parameters (constructed to match dimensionless):")
 print(f"  V_R = {V_R} mV, V_T = {V_T} mV, V_peak = {V_peak} mV, V_reset = {V_reset} mV")
@@ -88,11 +86,11 @@ params_dimensionless = {
     'I_ext': {'value': dimless_params['I_ext'], 'trainable': False},
 }
 
-pop_dimensionless = IzhikevichMeanField(
-    n_units=1,
-    dt=DT,
-    params=params_dimensionless,
-)
+# pop_dimensionless = IzhikevichMeanField(
+#     n_units=1,
+#     dt=DT,
+#     params=params_dimensionless,
+# )
 
 pop_dimensional = IzhikevichMeanField(
     n_units=1,
@@ -110,39 +108,46 @@ pop_dimensional = IzhikevichMeanField(
     I_ext=I_ext_dimensional,
 )
 
-print("\nVerifying converted parameters match:")
-print(f"  tau_pop: dimensionless={pop_dimensionless.tau_pop.numpy()[0]:.6f}, dimensional={pop_dimensional.tau_pop.numpy()[0]:.6f}")
-print(f"  alpha: dimensionless={pop_dimensionless.alpha.numpy()[0]:.6f}, dimensional={pop_dimensional.alpha.numpy()[0]:.6f}")
-print(f"  a: dimensionless={pop_dimensionless.a.numpy()[0]:.6f}, dimensional={pop_dimensional.a.numpy()[0]:.6f}")
-print(f"  b: dimensionless={pop_dimensionless.b.numpy()[0]:.6f}, dimensional={pop_dimensional.b.numpy()[0]:.6f}")
-print(f"  w_jump: dimensionless={pop_dimensionless.w_jump.numpy()[0]:.6f}, dimensional={pop_dimensional.w_jump.numpy()[0]:.6f}")
-print(f"  Delta_I: dimensionless={pop_dimensionless.Delta_I.numpy()[0]:.6f}, dimensional={pop_dimensional.Delta_I.numpy()[0]:.6f}")
-print(f"  I_ext: dimensionless={pop_dimensionless.I_ext.numpy()[0]:.6f}, dimensional={pop_dimensional.I_ext.numpy()[0]:.6f}")
-
-state_dimless = pop_dimensionless.get_initial_state()
+# print("\nVerifying converted parameters match:")
+# print(f"  tau_pop: dimensionless={pop_dimensionless.tau_pop.numpy()[0]:.6f}, dimensional={pop_dimensional.tau_pop.numpy()[0]:.6f}")
+# print(f"  alpha: dimensionless={pop_dimensionless.alpha.numpy()[0]:.6f}, dimensional={pop_dimensional.alpha.numpy()[0]:.6f}")
+# print(f"  a: dimensionless={pop_dimensionless.a.numpy()[0]:.6f}, dimensional={pop_dimensional.a.numpy()[0]:.6f}")
+# print(f"  b: dimensionless={pop_dimensionless.b.numpy()[0]:.6f}, dimensional={pop_dimensional.b.numpy()[0]:.6f}")
+# print(f"  w_jump: dimensionless={pop_dimensionless.w_jump.numpy()[0]:.6f}, dimensional={pop_dimensional.w_jump.numpy()[0]:.6f}")
+# print(f"  Delta_I: dimensionless={pop_dimensionless.Delta_I.numpy()[0]:.6f}, dimensional={pop_dimensional.Delta_I.numpy()[0]:.6f}")
+# print(f"  I_ext: dimensionless={pop_dimensionless.I_ext.numpy()[0]:.6f}, dimensional={pop_dimensional.I_ext.numpy()[0]:.6f}")
+#
+# state_dimless = pop_dimensionless.get_initial_state()
 state_dim = pop_dimensional.get_initial_state()
 
 fr_dimless_hist = []
 fr_dim_hist = []
+v_dim_hist = []
+w_dim_hist = []
 
 for step in range(n_steps):
-    fr_dimless_hist.append(pop_dimensionless.get_firing_rate(state_dimless)[0].numpy())
+    # fr_dimless_hist.append(pop_dimensionless.get_firing_rate(state_dimless)[0].numpy())
     fr_dim_hist.append(pop_dimensional.get_firing_rate(state_dim)[0].numpy())
-    
-    state_dimless, _ = integrator.step(pop_dimensionless, state_dimless, zero_syn)
+    v_dim_hist.append(state_dim[1].numpy().ravel())
+    w_dim_hist.append(state_dim[2].numpy().ravel())
+
+    # state_dimless, _ = integrator.step(pop_dimensionless, state_dimless, zero_syn)
     state_dim, _ = integrator.step(pop_dimensional, state_dim, zero_syn)
 
 fr_dimless_hist = np.array(fr_dimless_hist)
 fr_dim_hist = np.array(fr_dim_hist)
 
-max_diff = np.max(np.abs(fr_dimless_hist - fr_dim_hist))
-print(f"\nSimulation results comparison:")
-print(f"  Max difference in firing rates: {max_diff:.10f}")
-print(f"  Results are identical: {max_diff < 1e-9}")
+# max_diff = np.max(np.abs(fr_dimless_hist - fr_dim_hist))
+# print(f"\nSimulation results comparison:")
+# print(f"  Max difference in firing rates: {max_diff:.10f}")
+# print(f"  Results are identical: {max_diff < 1e-9}")
 
 
-plt.plot(t_values, fr_dimless_hist, linewidth=5)
-plt.plot(t_values, fr_dim_hist, linewidth=2)
+#plt.plot(t_values, fr_dimless_hist, linewidth=5)
+fig, axes = plt.subplots(nrows=3)
+axes[0].plot(t_values, fr_dim_hist, linewidth=2)
+axes[1].plot(t_values, v_dim_hist, linewidth=2)
+axes[2].plot(t_values, w_dim_hist, linewidth=2)
 
 plt.show()
 

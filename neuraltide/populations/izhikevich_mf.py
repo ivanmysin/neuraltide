@@ -8,8 +8,14 @@ Implements the Montbrio-Pazo-Roxin (next-generation mean-field) model:
 
 State: [r, v, w], each shape [1, n_units].
 r corresponds to nu (dimensionless firing rate),
-v corresponds to <v> (dimensionless mean membrane potential),
+v corresponds to <v> (dimensionless mean membrane potential, relative to V_R),
 w corresponds to <w> (dimensionless mean adaptation current).
+
+Note on dimensionless variables:
+    All state variables (r, v, w) and parameters (tau_pop, alpha, etc.) are
+    dimensionless. The membrane potential <v> is measured relative to V_R:
+        <v>_dimensionless = (<v>_mV - V_R) / |V_R|
+    Therefore, the dimensionless rest state is v=0 (not v=1).
 """
 import tensorflow as tf
 from typing import Any, Dict, List, Optional, Union
@@ -42,6 +48,18 @@ class IzhikevichMeanField(PopulationModel):
         w_jump: Adaptation jump [dimensionless]. Typical: [0.1, ...]
         Delta_I: Lorentzian current spread [dimensionless]. Typical: [0.5, ...]
         I_ext: External current [dimensionless]. Typical: [1.0, ...]
+
+    State variables:
+        The state variables (r, v, w) are all dimensionless:
+        - r: dimensionless firing rate
+        - v: dimensionless mean membrane potential, measured relative to V_R.
+             In dimensional terms: v_dim = (<v>_mV - V_R) / |V_R|
+             Therefore, the rest state corresponds to v = 0 (not v = 1).
+        - w: dimensionless mean adaptation current
+
+    Initial state:
+        get_initial_state() returns [r=0, v=0, w=0], corresponding to the
+        rest state where <v> = V_R in dimensional units.
 
     Example (dimensionless, recommended):
         pop = IzhikevichMeanField(
@@ -238,9 +256,15 @@ class IzhikevichMeanField(PopulationModel):
             )
 
     def get_initial_state(self, batch_size: int = 1) -> StateList:
-        """Return initial state: r=0, v=1 (rest), w=0."""
+        """
+        Return initial state: r=0, v=0 (rest), w=0.
+
+        The rest state is v=0 because <v> is dimensionless and measured
+        relative to V_R. In dimensional terms, v=0 corresponds to
+        <v> = V_R (the resting potential).
+        """
         dtype = neuraltide.config.get_dtype()
-        v0 = tf.ones([1, self.n_units], dtype=dtype)
+        v0 = tf.zeros([1, self.n_units], dtype=dtype)
         return [
             tf.zeros([1, self.n_units], dtype=dtype),
             v0,
