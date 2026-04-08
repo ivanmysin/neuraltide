@@ -47,7 +47,7 @@ print("dimensional and dimensionless parameters gives identical results.\n")
 
 V_R = -57.63
 K = 1.19
-C = 114
+Cm = 114
 V_T = -35.53
 A = 0.005
 B = 0.22
@@ -59,32 +59,32 @@ I_ext_dimensional = 500
 
 print("Dimensional Parameters (constructed to match dimensionless):")
 print(f"  V_R = {V_R} mV, V_T = {V_T} mV, V_peak = {V_peak} mV, V_reset = {V_reset} mV")
-print(f"  C = {C:.4f} pF, K = {K} nS/mV")
+print(f"  Cm = {Cm:.4f} pF, K = {K} nS/mV")
 print(f"  A = {A:.6f} ms^-1, B = {B:.4f} nS")
 print(f"  W_jump = {W_jump:.4f} pA, Delta_I = {Delta_I_dimensional:.4f} pA, I_ext = {I_ext_dimensional:.4f} pA")
 
-dimless_params = IzhikevichMeanField.dimensional_to_dimensionless(
-    V_R, V_T, V_peak, V_reset, C, K, A, B, W_jump, Delta_I_dimensional, I_ext_dimensional
-)
+# dimless_params = IzhikevichMeanField.dimensional_to_dimensionless(
+#     V_R, V_T, V_peak, V_reset, C, K, A, B, W_jump, Delta_I_dimensional, I_ext_dimensional
+# )
+#
+# print("\nConverted Dimensionless Parameters:")
+# print(f"  tau_pop = {dimless_params['tau_pop']:.6f}")
+# print(f"  alpha = {dimless_params['alpha']:.6f}")
+# print(f"  a = {dimless_params['a']:.6f}")
+# print(f"  b = {dimless_params['b']:.6f}")
+# print(f"  w_jump = {dimless_params['w_jump']:.6f}")
+# print(f"  Delta_I = {dimless_params['Delta_I']:.6f}")
+# print(f"  I_ext = {dimless_params['I_ext']:.6f}")
 
-print("\nConverted Dimensionless Parameters:")
-print(f"  tau_pop = {dimless_params['tau_pop']:.6f}")
-print(f"  alpha = {dimless_params['alpha']:.6f}")
-print(f"  a = {dimless_params['a']:.6f}")
-print(f"  b = {dimless_params['b']:.6f}")
-print(f"  w_jump = {dimless_params['w_jump']:.6f}")
-print(f"  Delta_I = {dimless_params['Delta_I']:.6f}")
-print(f"  I_ext = {dimless_params['I_ext']:.6f}")
-
-params_dimensionless = {
-    'tau_pop': {'value': dimless_params['tau_pop'], 'trainable': False},
-    'alpha': {'value': dimless_params['alpha'], 'trainable': False},
-    'a': {'value': dimless_params['a'], 'trainable': False},
-    'b': {'value': dimless_params['b'], 'trainable': False},
-    'w_jump': {'value': dimless_params['w_jump'], 'trainable': False},
-    'Delta_I': {'value': dimless_params['Delta_I'], 'trainable': False},
-    'I_ext': {'value': dimless_params['I_ext'], 'trainable': False},
-}
+# params_dimensionless = {
+#     'tau_pop': {'value': dimless_params['tau_pop'], 'trainable': False},
+#     'alpha': {'value': dimless_params['alpha'], 'trainable': False},
+#     'a': {'value': dimless_params['a'], 'trainable': False},
+#     'b': {'value': dimless_params['b'], 'trainable': False},
+#     'w_jump': {'value': dimless_params['w_jump'], 'trainable': False},
+#     'Delta_I': {'value': dimless_params['Delta_I'], 'trainable': False},
+#     'I_ext': {'value': dimless_params['I_ext'], 'trainable': False},
+# }
 
 # pop_dimensionless = IzhikevichMeanField(
 #     n_units=1,
@@ -92,14 +92,12 @@ params_dimensionless = {
 #     params=params_dimensionless,
 # )
 
-pop_dimensional = IzhikevichMeanField(
-    n_units=1,
-    dt=DT,
+dim_params = dict(
     V_R=V_R,
     V_T=V_T,
     V_peak=V_peak,
     V_reset=V_reset,
-    C=C,
+    Cm=Cm,
     K=K,
     A=A,
     B=B,
@@ -107,6 +105,10 @@ pop_dimensional = IzhikevichMeanField(
     Delta_I=Delta_I_dimensional,
     I_ext=I_ext_dimensional,
 )
+
+pop_dimensional = IzhikevichMeanField(
+    n_units=1, dt=DT, params=dim_params)
+
 
 # print("\nVerifying converted parameters match:")
 # print(f"  tau_pop: dimensionless={pop_dimensionless.tau_pop.numpy()[0]:.6f}, dimensional={pop_dimensional.tau_pop.numpy()[0]:.6f}")

@@ -90,17 +90,6 @@ class IzhikevichMeanField(PopulationModel):
         n_units: int,
         dt: float,
         params: Optional[Dict[str, Any]] = None,
-        V_R: Optional[Union[float, List[float]]] = None,
-        V_T: Optional[Union[float, List[float]]] = None,
-        V_peak: Optional[Union[float, List[float]]] = None,
-        V_reset: Optional[Union[float, List[float]]] = None,
-        C: Optional[Union[float, List[float]]] = None,
-        K: Optional[Union[float, List[float]]] = None,
-        A: Optional[Union[float, List[float]]] = None,
-        B: Optional[Union[float, List[float]]] = None,
-        W_jump: Optional[Union[float, List[float]]] = None,
-        Delta_I: Optional[Union[float, List[float]]] = None,
-        I_ext: Optional[Union[float, List[float]]] = None,
         name: str = "izhikevich_mf",
         **kwargs,
     ):
@@ -121,14 +110,15 @@ class IzhikevichMeanField(PopulationModel):
         """
         super().__init__(n_units=n_units, dt=dt, name=name, **kwargs)
 
-        if params is not None:
+        if not 'Cm' in params.keys():
             self._use_dimensional = False
             self._params = params
         else:
             self._use_dimensional = True
             self._params = self._build_params_from_dimensional(
-                V_R, V_T, V_peak, V_reset, C, K, A, B, W_jump, Delta_I, I_ext
+                params
             )
+
 
         self._validate_params()
         self.tau_pop = self._make_param(self._params, 'tau_pop')
@@ -167,33 +157,39 @@ class IzhikevichMeanField(PopulationModel):
                 )
 
     def _build_params_from_dimensional(
-        self,
-        V_R: Optional[Union[float, List[float]]],
-        V_T: Optional[Union[float, List[float]]],
-        V_peak: Optional[Union[float, List[float]]],
-        V_reset: Optional[Union[float, List[float]]],
-        C: Optional[Union[float, List[float]]],
-        K: Optional[Union[float, List[float]]],
-        A: Optional[Union[float, List[float]]],
-        B: Optional[Union[float, List[float]]],
-        W_jump: Optional[Union[float, List[float]]],
-        Delta_I: Optional[Union[float, List[float]]],
-        I_ext: Optional[Union[float, List[float]]],
+        self, params,
     ) -> Dict[str, Any]:
         """Convert dimensional parameters to dimensionless."""
-        if None in [V_R, V_T, V_peak, V_reset, C, K, A, B, W_jump, Delta_I, I_ext]:
+        missing_keys = [key for key in ['V_R', 'V_T', 'Cm', 'K', 'A', 'B', 'W_jump', 'Delta_I', 'I_ext'] if key not in params.keys()]
+        if missing_keys:
             raise ValueError(
-                f"IzhikevichMeanField '{self.name}': when using dimensional parameters, "
-                f"all of V_R, V_T, V_peak, V_reset, C, K, A, B, W_jump, Delta_I, I_ext "
-                f"must be provided."
+                f"IzhikevichMeanField '{self.name}': missing required dimensional parameters: {missing_keys}"
             )
 
         dtype = neuraltide.config.get_dtype()
 
+        V_R = params['V_R']
+        V_T = params['V_T']
+        C = params['Cm']
+        K = params['K']
+        A = params['A']
+        B = params['B']
+        W_jump = params['W_jump']
+        Delta_I = params['Delta_I']
+        I_ext = params['I_ext']
+
+        V_peak = params.get('V_peak', None)
+        V_reset = params.get('V_reset', None)
+
+
         V_R_arr = self._to_array(V_R)
         V_T_arr = self._to_array(V_T)
-        V_peak_arr = self._to_array(V_peak)
-        V_reset_arr = self._to_array(V_reset)
+
+        if V_peak:
+            V_peak_arr = self._to_array(V_peak)
+        if V_reset:
+            V_reset_arr = self._to_array(V_reset)
+
         C_arr = self._to_array(C)
         K_arr = self._to_array(K)
         A_arr = self._to_array(A)
@@ -204,8 +200,14 @@ class IzhikevichMeanField(PopulationModel):
 
         V_R_arr = tf.cast(V_R_arr, dtype)
         V_T_arr = tf.cast(V_T_arr, dtype)
-        V_peak_arr = tf.cast(V_peak_arr, dtype)
-        V_reset_arr = tf.cast(V_reset_arr, dtype)
+
+        if V_peak:
+            V_peak_arr = tf.cast(V_peak_arr, dtype)
+
+        if V_reset:
+            V_reset_arr = tf.cast(V_reset_arr, dtype)
+
+
         C_arr = tf.cast(C_arr, dtype)
         K_arr = tf.cast(K_arr, dtype)
         A_arr = tf.cast(A_arr, dtype)
@@ -405,7 +407,7 @@ class IzhikevichMeanField(PopulationModel):
             V_T: Threshold potential [mV]
             V_peak: Peak potential [mV]
             V_reset: Reset potential [mV]
-            C: Membrane capacitance [pF]
+            Cm: Membrane capacitance [pF]
             K: Scaling parameter [nS/mV]
             A: Adaptation rate [1/ms]
             B: Adaptation coupling [nS]
