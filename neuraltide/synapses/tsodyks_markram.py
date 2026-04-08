@@ -34,6 +34,15 @@ class TsodyksMarkramSynapse(SynapseModel):
         self.pconn = self._make_param(params, 'pconn')
         self.e_r = self._make_param(params, 'e_r')
 
+        dtype = neuraltide.config.get_dtype()
+        self.gsyn_max = tf.cast(self.gsyn_max, dtype)
+        self.tau_f = tf.cast(self.tau_f, dtype)
+        self.tau_d = tf.cast(self.tau_d, dtype)
+        self.tau_r = tf.cast(self.tau_r, dtype)
+        self.Uinc = tf.cast(self.Uinc, dtype)
+        self.pconn = tf.cast(self.pconn, dtype)
+        self.e_r = tf.cast(self.e_r, dtype)
+
         self.state_size = [
             tf.TensorShape([n_pre, n_post]),
             tf.TensorShape([n_pre, n_post]),
@@ -57,28 +66,21 @@ class TsodyksMarkramSynapse(SynapseModel):
     ) -> Tuple[Dict[str, TensorType], StateList]:
         R, U, A = state
 
-        dtype = neuraltide.config.get_dtype()
-        gsyn_max = tf.cast(self.gsyn_max, dtype)
-        tau_f = tf.cast(self.tau_f, dtype)
-        tau_d = tf.cast(self.tau_d, dtype)
-        tau_r = tf.cast(self.tau_r, dtype)
-        Uinc = tf.cast(self.Uinc, dtype)
-        pconn = tf.cast(self.pconn, dtype)
-        e_r = tf.cast(self.e_r, dtype)
+
 
         firing_probs = dt * pre_firing_rate / 1000.0
         firing_probs_T = tf.transpose(firing_probs)
-        FRpre_normed = pconn * firing_probs_T
+        FRpre_normed = self.pconn * firing_probs_T
 
         tau1r = tf.where(
-            tf.math.abs(tau_d - tau_r) > 1e-13,
-            tau_d / (tau_d - tau_r),
-            tf.constant(1e-13, dtype=dtype)
-        )
+            tf.math.abs(self.tau_d - self.tau_r) > 1e-13,
+            self.tau_d / (self.tau_d - self.tau_r),
+            1e-13)
 
-        exp_d = tf.exp(-dt / tau_d)
-        exp_f = tf.exp(-dt / tau_f)
-        exp_r = tf.exp(-dt / tau_r)
+
+        exp_d = tf.exp(-dt / self.tau_d)
+        exp_f = tf.exp(-dt / self.tau_f)
+        exp_r = tf.exp(-dt / self.tau_r)
 
         a_ = A * exp_d
         r_ = 1.0 + (R - 1.0 + tau1r * A) * exp_r - tau1r * A
@@ -86,13 +88,13 @@ class TsodyksMarkramSynapse(SynapseModel):
 
         released = U * r_ * FRpre_normed
 
-        U_new = u_ + Uinc * (1.0 - u_) * FRpre_normed
+        U_new = u_ + self.Uinc * (1.0 - u_) * FRpre_normed
         A_new = a_ + released
         R_new = r_ - released
 
-        g_eff = gsyn_max * A_new
+        g_eff = self.gsyn_max * A_new
         post_v_flat = tf.reshape(post_voltage, [self.n_post])
-        I_pair = g_eff * (e_r - post_v_flat)
+        I_pair = g_eff * (self.e_r - post_v_flat)
         I_syn = tf.reduce_sum(I_pair, axis=0, keepdims=True)
         g_syn = tf.reduce_sum(g_eff, axis=0, keepdims=True)
 
