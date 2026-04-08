@@ -28,7 +28,7 @@ import neuraltide.config
 seed_everything(42)
 
 DT = 0.05
-T = 150
+T = 200
 
 integrator = RK4Integrator()
 dtype = neuraltide.config.get_dtype()
@@ -63,10 +63,8 @@ print(f"  Cm = {Cm:.4f} pF, K = {K} nS/mV")
 print(f"  A = {A:.6f} ms^-1, B = {B:.4f} nS")
 print(f"  W_jump = {W_jump:.4f} pA, Delta_I = {Delta_I_dimensional:.4f} pA, I_ext = {I_ext_dimensional:.4f} pA")
 
-# dimless_params = IzhikevichMeanField.dimensional_to_dimensionless(
-#     V_R, V_T, V_peak, V_reset, C, K, A, B, W_jump, Delta_I_dimensional, I_ext_dimensional
-# )
-#
+
+
 # print("\nConverted Dimensionless Parameters:")
 # print(f"  tau_pop = {dimless_params['tau_pop']:.6f}")
 # print(f"  alpha = {dimless_params['alpha']:.6f}")
@@ -109,6 +107,12 @@ dim_params = dict(
 pop_dimensional = IzhikevichMeanField(
     n_units=1, dt=DT, params=dim_params)
 
+
+dimless_params = pop_dimensional._build_params_from_dimensional( dim_params )
+
+from pprint import pprint
+
+pprint(dimless_params)
 
 # print("\nVerifying converted parameters match:")
 # print(f"  tau_pop: dimensionless={pop_dimensionless.tau_pop.numpy()[0]:.6f}, dimensional={pop_dimensional.tau_pop.numpy()[0]:.6f}")
@@ -153,6 +157,14 @@ axes[2].plot(t_values, w_dim_hist, linewidth=2)
 
 plt.show()
 
+import h5py
+
+# Сохранение данных в HDF5 файл
+with h5py.File('izhikevich_simulation_data.h5', 'w') as f:
+    f.create_dataset('t_values', data=t_values)
+    f.create_dataset('fr_dim_hist', data=fr_dim_hist)
+    f.create_dataset('v_dim_hist', data=v_dim_hist)
+    f.create_dataset('w_dim_hist', data=w_dim_hist)
 
 #
 # print("\n" + "=" * 60)
