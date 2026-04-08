@@ -87,6 +87,12 @@ class PopulationModel(tf.keras.layers.Layer):
         lo = spec.get('min', None)
         hi = spec.get('max', None)
 
+        if train:
+            from neuraltide.constraints import MinMaxConstraint
+            constraint = MinMaxConstraint(min_val=lo, max_val=hi) if (lo is not None or hi is not None) else None
+        else:
+            constraint = None
+
         value = tf.constant(raw, dtype=neuraltide.config.get_dtype())
         if value.shape.rank == 0:
             value = tf.fill([self.n_units], value)
@@ -101,7 +107,7 @@ class PopulationModel(tf.keras.layers.Layer):
             shape=(self.n_units,),
             initializer=tf.keras.initializers.Constant(value.numpy()),
             trainable=train,
-            constraint=None,
+            constraint=constraint,
             dtype=neuraltide.config.get_dtype(),
             name=name,
         )

@@ -59,13 +59,13 @@ composite = CompositeSynapse(
     components=[('AMPA', ampa_syn), ('NMDA', nmda_syn)]
 )
 
-pop = IzhikevichMeanField(n_units=2, dt=dt, params={
+pop = IzhikevichMeanField(dt=dt, params={
+    'tau_pop':   {'value': [1.0, 1.0],   'trainable': False},
     'alpha':     {'value': [0.5, 0.5],   'trainable': False},
     'a':         {'value': [0.02, 0.02], 'trainable': False},
     'b':         {'value': [0.2, 0.2],   'trainable': False},
     'w_jump':    {'value': [0.1, 0.1],   'trainable': False},
-    'dt_nondim': {'value': [0.01, 0.01], 'trainable': False},
-    'Delta_eta': {'value': [0.5, 0.5],   'trainable': False},
+    'Delta_I':   {'value': [0.5, 0.5],   'trainable': False},
     'I_ext':     {'value': [1.5, 1.5],   'trainable': False},
 })
 

@@ -21,16 +21,16 @@ dt = 0.5
 T = 20
 
 exc_params = {
+    'tau_pop':   {'value': [1.0]*4,   'trainable': False},
     'alpha':     {'value': [0.5]*4,   'trainable': False},
     'a':         {'value': [0.02]*4, 'trainable': False},
     'b':         {'value': [0.2]*4,   'trainable': False},
     'w_jump':    {'value': [0.1]*4,   'trainable': False},
-    'dt_nondim': {'value': [0.01]*4, 'trainable': False},
-    'Delta_eta': {'value': [0.5]*4,  'trainable': True, 'min': 0.01, 'max': 2.0},
+    'Delta_I':   {'value': [0.5]*4,  'trainable': True, 'min': 0.01, 'max': 2.0},
     'I_ext':     {'value': [1.0]*4,  'trainable': True},
 }
 
-pop = IzhikevichMeanField(n_units=4, dt=dt, params=exc_params, name='exc')
+pop = IzhikevichMeanField(dt=dt, params=exc_params, name='exc')
 
 gen = SinusoidalGenerator(amplitude=10.0, freq=8.0, phase=0.0, offset=10.0)
 

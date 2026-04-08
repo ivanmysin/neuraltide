@@ -25,27 +25,27 @@ dt = 0.5
 T = 20
 
 exc_params = {
+    'tau_pop':   {'value': [1.0]*4,   'trainable': False},
     'alpha':     {'value': [0.5]*4,   'trainable': False},
     'a':         {'value': [0.02]*4, 'trainable': False},
     'b':         {'value': [0.2]*4,   'trainable': False},
     'w_jump':    {'value': [0.1]*4,   'trainable': False},
-    'dt_nondim': {'value': [0.01]*4, 'trainable': False},
-    'Delta_eta': {'value': [0.5]*4,  'trainable': True, 'min': 0.01, 'max': 2.0},
+    'Delta_I':   {'value': [0.5]*4,  'trainable': True, 'min': 0.01, 'max': 2.0},
     'I_ext':     {'value': [1.0]*4,  'trainable': True},
 }
 
 inh_params = {
+    'tau_pop':   {'value': [1.0]*2,   'trainable': False},
     'alpha':     {'value': [0.5]*2,   'trainable': False},
     'a':         {'value': [0.02]*2, 'trainable': False},
     'b':         {'value': [0.2]*2,   'trainable': False},
     'w_jump':    {'value': [0.1]*2,   'trainable': False},
-    'dt_nondim': {'value': [0.01]*2, 'trainable': False},
-    'Delta_eta': {'value': [0.6]*2,  'trainable': True, 'min': 0.01, 'max': 2.0},
+    'Delta_I':   {'value': [0.6]*2,  'trainable': True, 'min': 0.01, 'max': 2.0},
     'I_ext':     {'value': [0.8]*2,  'trainable': True},
 }
 
-exc = IzhikevichMeanField(n_units=4, dt=dt, params=exc_params, name='exc')
-inh = IzhikevichMeanField(n_units=2, dt=dt, params=inh_params, name='inh')
+exc = IzhikevichMeanField(dt=dt, params=exc_params, name='exc')
+inh = IzhikevichMeanField(dt=dt, params=inh_params, name='inh')
 
 gen = VonMisesGenerator(params=[
     {'MeanFiringRate': 20.0, 'R': 0.5, 'ThetaFreq': 8.0, 'ThetaPhase': 0.0},

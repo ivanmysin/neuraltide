@@ -21,13 +21,13 @@ seed_everything(42)
 dt = 0.5
 T = 20
 
-pop = IzhikevichMeanField(n_units=2, dt=dt, params={
+pop = IzhikevichMeanField(dt=dt, params={
+    'tau_pop':   {'value': [1.0, 1.0],   'trainable': False},
     'alpha':     {'value': [0.5, 0.5],   'trainable': False},
     'a':         {'value': [0.02, 0.02], 'trainable': False},
     'b':         {'value': [0.2, 0.2],   'trainable': False},
     'w_jump':    {'value': [0.1, 0.1],   'trainable': False},
-    'dt_nondim': {'value': [0.01, 0.01], 'trainable': False},
-    'Delta_eta': {'value': [0.5, 0.6],   'trainable': True,
+    'Delta_I':   {'value': [0.5, 0.6],   'trainable': True,
                   'min': 0.01, 'max': 2.0},
     'I_ext':     {'value': [1.0, 1.2],   'trainable': True},
 })

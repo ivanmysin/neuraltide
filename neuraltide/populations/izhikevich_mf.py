@@ -8,15 +8,16 @@ Implements the Montbrio-Pazo-Roxin (next-generation mean-field) model:
 
 State: [r, v, w], each shape [1, n_units].
 r corresponds to nu (dimensionless firing rate),
-v corresponds to <v> (dimensionless mean membrane potential, relative to V_R),
+v corresponds to <v> (dimensionless mean membrane potential, relative to V_rest),
 w corresponds to <w> (dimensionless mean adaptation current).
 
 Note on dimensionless variables:
     All state variables (r, v, w) and parameters (tau_pop, alpha, etc.) are
-    dimensionless. The membrane potential <v> is measured relative to V_R:
-        <v>_dimensionless = (<v>_mV - V_R) / |V_R|
+    dimensionless. The membrane potential <v> is measured relative to V_rest:
+        <v>_dimensionless = (<v>_mV - V_rest) / |V_rest|
     Therefore, the dimensionless rest state is v=0 (not v=1).
 """
+import numpy as np
 import tensorflow as tf
 from typing import Any, Dict, List, Optional, Union
 
@@ -34,8 +35,9 @@ class IzhikevichMeanField(PopulationModel):
     1. Dimensionless params: pass a `params` dict with dimensionless parameters.
        All values are per-unit (list of n_units) or scalar (broadcasts to n_units).
        All parameters non-trainable by default; user can mark any as trainable.
+       n_units is inferred from the length of parameter arrays (must be consistent).
 
-    2. Dimensional params: pass dimensional neuron parameters (V_R, V_T, etc.).
+    2. Dimensional params: pass dimensional neuron parameters (V_rest, V_T, etc.).
        They are converted to dimensionless internally using the formulas
        from Chen & Campbell 2022. Dimensional parameters can be scalars
        (broadcasts to n_units) or vectors (one per unit).
@@ -52,18 +54,18 @@ class IzhikevichMeanField(PopulationModel):
     State variables:
         The state variables (r, v, w) are all dimensionless:
         - r: dimensionless firing rate
-        - v: dimensionless mean membrane potential, measured relative to V_R.
-             In dimensional terms: v_dim = (<v>_mV - V_R) / |V_R|
+        - v: dimensionless mean membrane potential, measured relative to V_rest.
+             In dimensional terms: v_dim = (<v>_mV - V_rest) / |V_rest|
              Therefore, the rest state corresponds to v = 0 (not v = 1).
         - w: dimensionless mean adaptation current
 
     Initial state:
         get_initial_state() returns [r=0, v=0, w=0], corresponding to the
-        rest state where <v> = V_R in dimensional units.
+        rest state where <v> = V_rest in dimensional units.
 
     Example (dimensionless, recommended):
         pop = IzhikevichMeanField(
-            n_units=4, dt=0.5,
+            dt=0.5,
             params={
                 'tau_pop':   {'value': [1.0, 1.0, 1.0, 1.0], 'trainable': False},
                 'alpha':     {'value': [0.5, 0.5, 0.5, 0.5], 'trainable': False},
@@ -78,16 +80,17 @@ class IzhikevichMeanField(PopulationModel):
 
     Example (dimensional, for backward compatibility):
         pop = IzhikevichMeanField(
-            n_units=1, dt=0.5,
-            V_R=-57.6, V_T=-35.5, V_peak=21.7, V_reset=-48.7,
-            C=114.0, K=1.194, A=0.0046, B=0.2157, W_jump=2.0,
-            Delta_I=20.0, I_ext=120.0
+            dt=0.5,
+            params={
+                'V_rest': -57.6, 'V_T': -35.5, 'V_peak': 21.7, 'V_reset': -48.7,
+                'Cm': 114.0, 'K': 1.194, 'A': 0.0046, 'B': 0.2157, 'W_jump': 2.0,
+                'Delta_I': 20.0, 'I_ext': 120.0
+            }
         )
     """
 
     def __init__(
         self,
-        n_units: int,
         dt: float,
         params: Optional[Dict[str, Any]] = None,
         name: str = "izhikevich_mf",
@@ -95,32 +98,34 @@ class IzhikevichMeanField(PopulationModel):
     ):
         """
         Args:
-            n_units: Number of independent populations.
             dt: Integration time step [ms].
-            params: Dictionary of dimensionless parameters. Each parameter can be:
+            params: Dictionary of parameters. Each parameter can be:
                 - A scalar (broadcasts to n_units)
                 - A list of n_units values (one per unit)
                 - A dict with 'value', optional 'trainable' (default False),
                   and optional 'min'/'max' constraints.
-            V_R, V_T, V_peak, V_reset, C, K, A, B, W_jump, Delta_I, I_ext:
-                Dimensional neuron parameters (see convert_dimensional_to_dimensionless).
-                Can be scalars (broadcasts to n_units) or vectors (one per unit).
-                Used only if params is None. For backward compatibility.
+                All parameters must have consistent dimensions: either 1 or n_units.
+                n_units is inferred from the maximum dimension of all parameters.
             name: Layer name.
         """
-        super().__init__(n_units=n_units, dt=dt, name=name, **kwargs)
+        if params is None:
+            raise ValueError("params cannot be None")
 
-        if not 'Cm' in params.keys():
-            self._use_dimensional = False
-            self._params = params
+        self.name = name
+        self._use_dimensional = 'Cm' in params
+
+        self._infer_n_units_from_raw_params(params)
+
+        if self._use_dimensional:
+            self._params = self._build_params_from_dimensional(params)
         else:
-            self._use_dimensional = True
-            self._params = self._build_params_from_dimensional(
-                params
-            )
-
+            self._params = params
 
         self._validate_params()
+        self._validate_param_dimensions()
+
+        super().__init__(n_units=self.n_units, dt=dt, name=name, **kwargs)
+
         self.tau_pop = self._make_param(self._params, 'tau_pop')
         self.alpha = self._make_param(self._params, 'alpha')
         self.a = self._make_param(self._params, 'a')
@@ -130,21 +135,77 @@ class IzhikevichMeanField(PopulationModel):
         self.I_ext = self._make_param(self._params, 'I_ext')
 
         dtype = neuraltide.config.get_dtype()
-        self.PI = tf.constant(3.141592653589793, dtype=self.dtype)
-
-        self.tau_pop = tf.cast(self.tau_pop, dtype)
-        self.alpha = tf.cast(self.alpha, dtype)
-        self.Delta_I = tf.cast(self.Delta_I, dtype)
-        self.a = tf.cast(self.a, dtype)
-        self.b = tf.cast(self.b, dtype)
-        self.w_jump = tf.cast(self.w_jump, dtype)
-        self.I_ext = tf.cast(self.I_ext, dtype)
+        self.PI = tf.constant(3.141592653589793, dtype=dtype)
 
         self.state_size = [
-            tf.TensorShape([1, n_units]),
-            tf.TensorShape([1, n_units]),
-            tf.TensorShape([1, n_units]),
+            tf.TensorShape([1, self.n_units]),
+            tf.TensorShape([1, self.n_units]),
+            tf.TensorShape([1, self.n_units]),
         ]
+
+    def _infer_n_units_from_raw_params(self, params: Dict[str, Any]) -> None:
+        """Infer n_units from raw input params before any conversion."""
+        max_len = 1
+        for key, spec in params.items():
+            if isinstance(spec, dict):
+                value = spec.get('value', None)
+            else:
+                value = spec
+
+            if value is None:
+                continue
+
+            if isinstance(value, (list, tuple)):
+                max_len = max(max_len, len(value))
+            elif isinstance(value, np.ndarray):
+                if value.ndim == 1:
+                    max_len = max(max_len, len(value))
+
+        self.n_units = max_len
+
+    def _infer_n_units(self) -> None:
+        """Infer n_units from the dimensions of parameters."""
+        max_len = 1
+        for key, spec in self._params.items():
+            if isinstance(spec, dict):
+                value = spec.get('value', None)
+            else:
+                value = spec
+
+            if value is None:
+                continue
+
+            if isinstance(value, (list, tuple)):
+                max_len = max(max_len, len(value))
+            elif isinstance(value, np.ndarray):
+                if value.ndim == 1:
+                    max_len = max(max_len, len(value))
+
+        self.n_units = max_len
+
+    def _validate_param_dimensions(self) -> None:
+        """Validate that all parameters have consistent dimensions (1 or n_units)."""
+        for key, spec in self._params.items():
+            if isinstance(spec, dict):
+                value = spec.get('value', None)
+            else:
+                value = spec
+
+            if value is None:
+                continue
+
+            if isinstance(value, (list, tuple)):
+                if len(value) != 1 and len(value) != self.n_units:
+                    raise ValueError(
+                        f"IzhikevichMeanField '{self.name}': parameter '{key}' "
+                        f"has length {len(value)}, expected 1 or {self.n_units}."
+                    )
+            elif isinstance(value, np.ndarray):
+                if value.ndim == 1 and len(value) != 1 and len(value) != self.n_units:
+                    raise ValueError(
+                        f"IzhikevichMeanField '{self.name}': parameter '{key}' "
+                        f"has length {len(value)}, expected 1 or {self.n_units}."
+                    )
 
     def _validate_params(self) -> None:
         """Validate that all required parameters are present."""
@@ -156,74 +217,69 @@ class IzhikevichMeanField(PopulationModel):
                     f"required parameter '{name}' not found in params."
                 )
 
-    def _build_params_from_dimensional(
-        self, params,
-    ) -> Dict[str, Any]:
-        """Convert dimensional parameters to dimensionless."""
-        missing_keys = [key for key in ['V_R', 'V_T', 'Cm', 'K', 'A', 'B', 'W_jump', 'Delta_I', 'I_ext'] if key not in params.keys()]
-        if missing_keys:
-            raise ValueError(
-                f"IzhikevichMeanField '{self.name}': missing required dimensional parameters: {missing_keys}"
-            )
+    @staticmethod
+    def _compute_dimensionless_from_dimensional(
+        params: Dict[str, Any],
+        n_units: int,
+    ) -> Dict[str, List[float]]:
+        """
+        Compute dimensionless parameters from dimensional ones (pure Python).
 
-        dtype = neuraltide.config.get_dtype()
+        Handles scalar/vector forms with broadcasting to n_units.
+        V_peak and V_reset are accepted but ignored (not used in mean-field model).
 
-        V_R = params['V_R']
-        V_T = params['V_T']
-        C = params['Cm']
-        K = params['K']
-        A = params['A']
-        B = params['B']
-        W_jump = params['W_jump']
-        Delta_I = params['Delta_I']
-        I_ext = params['I_ext']
+        Args:
+            params: dict with keys V_rest, V_T, Cm, K, A, B, W_jump, Delta_I, I_ext
+            n_units: number of units for broadcasting
 
-        V_peak = params.get('V_peak', None)
-        V_reset = params.get('V_reset', None)
+        Returns:
+            dict with keys tau_pop, alpha, a, b, w_jump, Delta_I, I_ext
+            Each value is a list of length n_units.
+        """
+        def process_param(value, param_name):
+            """Convert scalar/list/np.ndarray to list of length n_units."""
+            if isinstance(value, (list, tuple)):
+                if len(value) == n_units:
+                    return [float(v) for v in value]
+                elif len(value) == 1:
+                    return [float(value[0]) for _ in range(n_units)]
+                else:
+                    raise ValueError(
+                        f"Parameter '{param_name}' has length {len(value)}, "
+                        f"expected 1 or {n_units}"
+                    )
+            elif isinstance(value, np.ndarray):
+                if value.ndim == 0:
+                    return [float(value.item()) for _ in range(n_units)]
+                elif len(value) == n_units:
+                    return [float(v) for v in value]
+                elif len(value) == 1:
+                    return [float(value[0]) for _ in range(n_units)]
+                else:
+                    raise ValueError(
+                        f"Parameter '{param_name}' has length {len(value)}, "
+                        f"expected 1 or {n_units}"
+                    )
+            else:
+                return [float(value) for _ in range(n_units)]
 
+        V_rest = process_param(params['V_rest'], 'V_rest')
+        V_T = process_param(params['V_T'], 'V_T')
+        Cm = process_param(params['Cm'], 'Cm')
+        K = process_param(params['K'], 'K')
+        A = process_param(params['A'], 'A')
+        B = process_param(params['B'], 'B')
+        W_jump = process_param(params['W_jump'], 'W_jump')
+        Delta_I = process_param(params['Delta_I'], 'Delta_I')
+        I_ext = process_param(params['I_ext'], 'I_ext')
 
-        V_R_arr = self._to_array(V_R)
-        V_T_arr = self._to_array(V_T)
-
-        if V_peak:
-            V_peak_arr = self._to_array(V_peak)
-        if V_reset:
-            V_reset_arr = self._to_array(V_reset)
-
-        C_arr = self._to_array(C)
-        K_arr = self._to_array(K)
-        A_arr = self._to_array(A)
-        B_arr = self._to_array(B)
-        W_jump_arr = self._to_array(W_jump)
-        Delta_I_arr = self._to_array(Delta_I)
-        I_ext_arr = self._to_array(I_ext)
-
-        V_R_arr = tf.cast(V_R_arr, dtype)
-        V_T_arr = tf.cast(V_T_arr, dtype)
-
-        if V_peak:
-            V_peak_arr = tf.cast(V_peak_arr, dtype)
-
-        if V_reset:
-            V_reset_arr = tf.cast(V_reset_arr, dtype)
-
-
-        C_arr = tf.cast(C_arr, dtype)
-        K_arr = tf.cast(K_arr, dtype)
-        A_arr = tf.cast(A_arr, dtype)
-        B_arr = tf.cast(B_arr, dtype)
-        W_jump_arr = tf.cast(W_jump_arr, dtype)
-        Delta_I_arr = tf.cast(Delta_I_arr, dtype)
-        I_ext_arr = tf.cast(I_ext_arr, dtype)
-
-        V_R_abs = tf.abs(V_R_arr)
-        tau_pop = C_arr / (K_arr * V_R_abs)
-        alpha = 1.0 + V_T_arr / V_R_abs
-        a = C_arr * A_arr / (K_arr * V_R_abs)
-        b = B_arr / (K_arr * V_R_abs)
-        w_jump = W_jump_arr / (K_arr * V_R_abs**2)
-        Delta_I_dimless = Delta_I_arr / (K_arr * V_R_abs**2)
-        I_ext_dimless = I_ext_arr / (K_arr * V_R_abs**2)
+        tau_pop = [Cm[i] / (K[i] * abs(V_rest[i])) for i in range(n_units)]
+        alpha = [1.0 + V_T[i] / abs(V_rest[i]) for i in range(n_units)]
+        a = [Cm[i] * A[i] / (K[i] * abs(V_rest[i])) for i in range(n_units)]
+        b = [B[i] / (K[i] * abs(V_rest[i])) for i in range(n_units)]
+        w_jump = [W_jump[i] / (K[i] * abs(V_rest[i])**2) for i in range(n_units)]
+        Delta_I_dimless = [Delta_I[i] / (K[i] * abs(V_rest[i])**2) for i in range(n_units)]
+        I_ext_dimless = [I_ext[i] / (K[i] * abs(V_rest[i])**2) for i in range(n_units)]
 
         return {
             'tau_pop': tau_pop,
@@ -234,6 +290,25 @@ class IzhikevichMeanField(PopulationModel):
             'Delta_I': Delta_I_dimless,
             'I_ext': I_ext_dimless,
         }
+
+    def _build_params_from_dimensional(
+        self, params,
+    ) -> Dict[str, Any]:
+        """Convert dimensional parameters to dimensionless."""
+        missing_keys = [key for key in ['V_rest', 'V_T', 'Cm', 'K', 'A', 'B', 'W_jump', 'Delta_I', 'I_ext'] if key not in params.keys()]
+        if missing_keys:
+            raise ValueError(
+                f"IzhikevichMeanField '{self.name}': missing required dimensional parameters: {missing_keys}"
+            )
+
+        dimless = self._compute_dimensionless_from_dimensional(params, self.n_units)
+
+        dtype = neuraltide.config.get_dtype()
+        result = {}
+        for key, value in dimless.items():
+            result[key] = tf.constant(value, dtype=dtype)
+
+        return result
 
     def _to_array(self, value: Union[float, List[float]]) -> tf.Tensor:
         """Convert scalar or list to tf.Tensor, broadcasting to n_units."""
@@ -251,6 +326,18 @@ class IzhikevichMeanField(PopulationModel):
                     f"IzhikevichMeanField '{self.name}': parameter length {int(arr.shape[0])} "
                     f"does not match n_units={self.n_units}."
                 )
+        elif isinstance(value, np.ndarray):
+            if value.ndim == 0:
+                return tf.fill([self.n_units], tf.constant(float(value), dtype=dtype))
+            elif int(value.shape[0]) == self.n_units:
+                return tf.constant(value, dtype=dtype)
+            elif int(value.shape[0]) == 1:
+                return tf.broadcast_to(tf.constant(value, dtype=dtype), [self.n_units])
+            else:
+                raise ValueError(
+                    f"IzhikevichMeanField '{self.name}': parameter length {int(value.shape[0])} "
+                    f"does not match n_units={self.n_units}."
+                )
         else:
             raise TypeError(
                 f"IzhikevichMeanField '{self.name}': expected scalar or list, "
@@ -262,8 +349,8 @@ class IzhikevichMeanField(PopulationModel):
         Return initial state: r=0, v=0 (rest), w=0.
 
         The rest state is v=0 because <v> is dimensionless and measured
-        relative to V_R. In dimensional terms, v=0 corresponds to
-        <v> = V_R (the resting potential).
+        relative to V_rest. In dimensional terms, v=0 corresponds to
+        <v> = V_rest (the resting potential).
         """
         dtype = neuraltide.config.get_dtype()
         v0 = tf.zeros([1, self.n_units], dtype=dtype)
@@ -377,106 +464,6 @@ class IzhikevichMeanField(PopulationModel):
         return None
 
     @staticmethod
-    def dimensional_to_dimensionless(
-        V_R: Union[float, List[float]],
-        V_T: Union[float, List[float]],
-        V_peak: Union[float, List[float]],
-        V_reset: Union[float, List[float]],
-        C: Union[float, List[float]],
-        K: Union[float, List[float]],
-        A: Union[float, List[float]],
-        B: Union[float, List[float]],
-        W_jump: Union[float, List[float]],
-        Delta_I: Union[float, List[float]],
-        I_ext: Union[float, List[float]],
-    ) -> Dict[str, Union[float, List[float]]]:
-        """
-        Convert dimensional neuron parameters to dimensionless.
-
-        Formulas from Chen & Campbell 2022:
-            tau_pop = C / (K * |V_R|)
-            alpha = 1 + V_T / |V_R|
-            a = C * A / (K * |V_R|)
-            b = B / (K * |V_R|)
-            w_jump = W_jump / (K * |V_R|^2)
-            Delta_I_dimless = Delta_I / (K * |V_R|^2)
-            I_ext_dimless = I_ext / (K * |V_R|^2)
-
-        Args:
-            V_R: Resting potential [mV]
-            V_T: Threshold potential [mV]
-            V_peak: Peak potential [mV]
-            V_reset: Reset potential [mV]
-            Cm: Membrane capacitance [pF]
-            K: Scaling parameter [nS/mV]
-            A: Adaptation rate [1/ms]
-            B: Adaptation coupling [nS]
-            W_jump: Adaptation jump [pA]
-            Delta_I: Lorentzian current spread [pA]
-            I_ext: External current [pA]
-
-        Returns:
-            Dictionary with dimensionless parameters:
-            tau_pop, alpha, a, b, w_jump, Delta_I, I_ext
-        """
-        def to_float(x):
-            return float(x) if not isinstance(x, list) else x
-
-        V_R = to_float(V_R)
-        V_T = to_float(V_T)
-        V_peak = to_float(V_peak)
-        V_reset = to_float(V_reset)
-        C = to_float(C)
-        K = to_float(K)
-        A = to_float(A)
-        B = to_float(B)
-        W_jump = to_float(W_jump)
-        Delta_I = to_float(Delta_I)
-        I_ext = to_float(I_ext)
-
-        is_vector = isinstance(V_R, list)
-
-        if is_vector:
-            V_R_arr = V_R
-            V_T_arr = V_T
-            V_peak_arr = V_peak
-            V_reset_arr = V_reset
-            C_arr = C
-            K_arr = K
-            A_arr = A
-            B_arr = B
-            W_jump_arr = W_jump
-            Delta_I_arr = Delta_I
-            I_ext_arr = I_ext
-
-            tau_pop = [C_arr[i] / (K_arr[i] * abs(V_R_arr[i])) for i in range(len(V_R_arr))]
-            alpha = [1.0 + V_T_arr[i] / abs(V_R_arr[i]) for i in range(len(V_R_arr))]
-            a = [C_arr[i] * A_arr[i] / (K_arr[i] * abs(V_R_arr[i])) for i in range(len(V_R_arr))]
-            b = [B_arr[i] / (K_arr[i] * abs(V_R_arr[i])) for i in range(len(V_R_arr))]
-            w_jump = [W_jump_arr[i] / (K_arr[i] * abs(V_R_arr[i])**2) for i in range(len(V_R_arr))]
-            Delta_I_dimless = [Delta_I_arr[i] / (K_arr[i] * abs(V_R_arr[i])**2) for i in range(len(V_R_arr))]
-            I_ext_dimless = [I_ext_arr[i] / (K_arr[i] * abs(V_R_arr[i])**2) for i in range(len(V_R_arr))]
-        else:
-            V_R_abs = abs(V_R)
-            tau_pop = C / (K * V_R_abs)
-            alpha = 1.0 + V_T / V_R_abs
-            a = C * A / (K * V_R_abs)
-            b = B / (K * V_R_abs)
-            w_jump = W_jump / (K * V_R_abs**2)
-            Delta_I_dimless = Delta_I / (K * V_R_abs**2)
-            I_ext_dimless = I_ext / (K * V_R_abs**2)
-
-        return {
-            'tau_pop': tau_pop,
-            'alpha': alpha,
-            'a': a,
-            'b': b,
-            'w_jump': w_jump,
-            'Delta_I': Delta_I_dimless,
-            'I_ext': I_ext_dimless,
-        }
-
-    @staticmethod
     def dimensionless_to_dimensional(
         tau_pop: float,
         alpha: float,
@@ -485,20 +472,20 @@ class IzhikevichMeanField(PopulationModel):
         w_jump: float,
         Delta_I: float,
         I_ext: float,
-        V_R: float,
+        V_rest: float,
         K: float,
     ) -> Dict[str, float]:
         """
         Convert dimensionless parameters back to dimensional.
 
         Inverse formulas:
-            C = tau_pop * K * |V_R|
-            V_T = (alpha - 1) * |V_R|
-            A = a * K * |V_R| / C
-            B = b * K * |V_R|
-            W_jump = w_jump * K * |V_R|^2
-            Delta_I = Delta_I * K * |V_R|^2
-            I_ext = I_ext * K * |V_R|^2
+            Cm = tau_pop * K * |V_rest|
+            V_T = (alpha - 1) * |V_rest|
+            A = a * K * |V_rest| / Cm
+            B = b * K * |V_rest|
+            W_jump = w_jump * K * |V_rest|^2
+            Delta_I = Delta_I * K * |V_rest|^2
+            I_ext = I_ext * K * |V_rest|^2
 
         Args:
             tau_pop: Population time constant [ms]
@@ -508,21 +495,21 @@ class IzhikevichMeanField(PopulationModel):
             w_jump: Adaptation jump [dimensionless]
             Delta_I: Lorentzian spread [dimensionless]
             I_ext: External current [dimensionless]
-            V_R: Resting potential [mV]
+            V_rest: Resting potential [mV]
             K: Scaling parameter [nS/mV]
 
         Returns:
             Dictionary with dimensional parameters:
-            V_T, C, A, B, W_jump, Delta_I, I_ext
+            V_T, Cm, A, B, W_jump, Delta_I, I_ext
         """
-        V_R_abs = abs(V_R)
-        C = tau_pop * K * V_R_abs
+        V_rest_abs = abs(V_rest)
+        Cm = tau_pop * K * V_rest_abs
         return {
-            'V_T': (alpha - 1.0) * V_R_abs,
-            'C': C,
-            'A': a * K * V_R_abs / C,
-            'B': b * K * V_R_abs,
-            'W_jump': w_jump * K * V_R_abs**2,
-            'Delta_I': Delta_I * K * V_R_abs**2,
-            'I_ext': I_ext * K * V_R_abs**2,
+            'V_T': (alpha - 1.0) * V_rest_abs,
+            'Cm': Cm,
+            'A': a * K * V_rest_abs / Cm,
+            'B': b * K * V_rest_abs,
+            'W_jump': w_jump * K * V_rest_abs**2,
+            'Delta_I': Delta_I * K * V_rest_abs**2,
+            'I_ext': I_ext * K * V_rest_abs**2,
         }
