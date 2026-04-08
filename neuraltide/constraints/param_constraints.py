@@ -1,7 +1,7 @@
 import tensorflow as tf
 from typing import Optional
 
-class MinMaxConstraint:
+class MinMaxConstraint(tf.keras.constraints.Constraint):
     """Ограничение параметра на отрезок [min_val, max_val]."""
 
     def __init__(self, min_val: Optional[float], max_val: Optional[float]):
@@ -28,7 +28,7 @@ class MinMaxConstraint:
         return cls(config['min_val'], config['max_val'])
 
 
-class NonNegConstraint:
+class NonNegConstraint(tf.keras.constraints.Constraint):
     """Ограничение: неотрицательные значения через ReLU."""
 
     def __call__(self, w: tf.Tensor) -> tf.Tensor:
@@ -42,7 +42,7 @@ class NonNegConstraint:
         return cls()
 
 
-class UnitIntervalConstraint:
+class UnitIntervalConstraint(tf.keras.constraints.Constraint):
     """Ограничение на отрезок [0, 1]. Эквивалентна MinMaxConstraint(0, 1)."""
 
     def __init__(self):

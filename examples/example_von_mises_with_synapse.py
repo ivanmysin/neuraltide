@@ -47,8 +47,8 @@ pop = IzhikevichMeanField(dt=dt, params={
     'a':         {'value': 0.02,  'trainable': False},
     'b':         {'value': 0.2,   'trainable': False},
     'w_jump':    {'value': 0.1,   'trainable': False},
-    'Delta_I':   {'value': 0.5,   'trainable': False},
-    'I_ext':     {'value': 1.0,   'trainable': False},
+    'Delta_I':   {'value': 0.05,   'trainable': False},
+    'I_ext':     {'value': 0.0,   'trainable': False},
 })
 
 syn = TsodyksMarkramSynapse(n_pre=1, n_post=1, dt=dt, params={

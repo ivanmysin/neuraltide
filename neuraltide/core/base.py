@@ -88,7 +88,6 @@ class PopulationModel(tf.keras.layers.Layer):
         hi = spec.get('max', None)
 
         if train:
-            from neuraltide.constraints import MinMaxConstraint
             constraint = MinMaxConstraint(min_val=lo, max_val=hi) if (lo is not None or hi is not None) else None
         else:
             constraint = None

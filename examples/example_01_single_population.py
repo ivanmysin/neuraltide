@@ -18,7 +18,7 @@ from neuraltide.utils import seed_everything, print_summary
 
 seed_everything(42)
 
-dt = 0.5
+dt = 0.05
 T = 20
 
 pop = IzhikevichMeanField(dt=dt, params={
@@ -29,7 +29,8 @@ pop = IzhikevichMeanField(dt=dt, params={
     'w_jump':    {'value': [0.1, 0.1],   'trainable': False},
     'Delta_I':   {'value': [0.5, 0.6],   'trainable': True,
                   'min': 0.01, 'max': 2.0},
-    'I_ext':     {'value': [1.0, 1.2],   'trainable': True},
+    'I_ext':     {'value': [0.1, 0.2],   'trainable': True,
+                  'min': -2.0, 'max': 2.0},
 })
 
 gen = VonMisesGenerator(
