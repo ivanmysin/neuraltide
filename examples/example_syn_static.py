@@ -27,9 +27,16 @@ seed_everything(42)
 dt = 0.5
 T = 200
 
-gen = VonMisesGenerator(params=[
-    {'MeanFiringRate': 40.0, 'R': 0.9, 'ThetaFreq': 8.0, 'ThetaPhase': 0.0},
-], name='theta_gen')
+gen = VonMisesGenerator(
+    dt=dt,
+    params={
+        'mean_rate': 40.0,
+        'R': 0.9,
+        'freq': 8.0,
+        'phase': 0.0,
+    },
+    name='theta_gen'
+)
 
 syn = StaticSynapse(n_pre=1, n_post=2, dt=dt, params={
     'gsyn_max': {'value': [[0.2, 0.15]], 'trainable': False},

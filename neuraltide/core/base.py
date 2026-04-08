@@ -374,24 +374,141 @@ class BaseInputGenerator(tf.keras.layers.Layer):
     Генератор оборачивается в InputPopulation и подключается к
     динамическим популяциям через полноценные синапсы (SynapseModel).
 
+    Семантика n_units:
+        n_units — число независимых входных каналов одного типа.
+        Например, VonMisesGenerator с n_units=4 описывает 4 независимых
+        входных сигнала с (потенциально) разными параметрами.
+        Все n_units каналов обрабатываются одной векторизованной операцией.
+
+    Параметры:
+        Все параметры регистрируются через self._make_param(params, name).
+        Формат аналогичен PopulationModel:
+            - скаляр (broadcast к n_units)
+            - список длины n_units
+            - словарь {'value': ..., 'trainable': bool, 'min':, 'max':}
+
     Args:
-        n_outputs (int): число генерируемых выходных каналов.
-            Должно совпадать с n_units соответствующей InputPopulation.
-        name (str): имя слоя Keras.
+        params: словарь параметров генератора.
+        dt: шаг интегрирования в мс.
+        name: имя слоя Keras.
     """
 
-    def __init__(self, n_outputs: int, name: str = "input_generator", **kwargs):
+    def __init__(self, params: Dict[str, Any], dt: float,
+                 name: str = "input_generator", **kwargs):
         super().__init__(name=name, **kwargs)
-        self.n_outputs = n_outputs
+        self.dt = dt
+        self._params = params
 
-    @abstractmethod
-    def call(self, t: TensorType) -> TensorType:
+        self._infer_n_units_from_params()
+        self._validate_param_dimensions()
+
+        self.n_units = self._n_units
+
+    def _infer_n_units_from_params(self) -> None:
+        """Определяет n_units из размерности параметров."""
+        import numpy as np
+        max_len = 1
+        for key, spec in self._params.items():
+            if isinstance(spec, dict):
+                value = spec.get('value', None)
+            else:
+                value = spec
+
+            if value is None:
+                continue
+
+            if isinstance(value, (list, tuple)):
+                max_len = max(max_len, len(value))
+            elif isinstance(value, np.ndarray):
+                if value.ndim == 1:
+                    max_len = max(max_len, len(value))
+
+        self._n_units = max_len
+
+    def _validate_param_dimensions(self) -> None:
+        """Проверяет согласованность размерностей параметров."""
+        import numpy as np
+        for key, spec in self._params.items():
+            if isinstance(spec, dict):
+                value = spec.get('value', None)
+            else:
+                value = spec
+
+            if value is None:
+                continue
+
+            if isinstance(value, (list, tuple)):
+                if len(value) != 1 and len(value) != self._n_units:
+                    raise ValueError(
+                        f"BaseInputGenerator '{self.name}': parameter '{key}' "
+                        f"has length {len(value)}, expected 1 or {self._n_units}."
+                    )
+            elif isinstance(value, np.ndarray):
+                if value.ndim == 1 and len(value) != 1 and len(value) != self._n_units:
+                    raise ValueError(
+                        f"BaseInputGenerator '{self.name}': parameter '{key}' "
+                        f"has length {len(value)}, expected 1 or {self._n_units}."
+                    )
+
+    def _make_param(self, params: dict, name: str) -> tf.Variable:
         """
-        Args:
-            t: текущее время в мс. shape = [batch, 1] или [1, 1].
+        Регистрирует параметр генератора через add_weight().
+
+        Форматы params[name]:
+            Без словаря (только значение, trainable=False):
+                params[name] = 0.5
+                params[name] = [0.5, 0.6, 0.4, 0.7]
+
+            Словарь с полным контролем:
+                params[name] = {
+                    'value':     0.5,
+                    'trainable': True,
+                    'min':       0.0,
+                    'max':       10.0,
+                }
 
         Returns:
-            tf.Tensor, shape = [1, n_outputs], в Гц.
-            Значения неотрицательны.
+            tf.Variable, зарегистрированная как вес слоя.
+        """
+        spec = params.get(name)
+        if spec is None:
+            raise ValueError(
+                f"BaseInputGenerator '{self.name}': "
+                f"parameter '{name}' not found in params."
+            )
+        if not isinstance(spec, dict):
+            spec = {'value': spec, 'trainable': False}
+
+        raw = spec['value']
+        train = spec.get('trainable', False)
+        lo = spec.get('min', None)
+        hi = spec.get('max', None)
+
+        from neuraltide.constraints import MinMaxConstraint
+        constraint = MinMaxConstraint(min_val=lo, max_val=hi) if (lo is not None or hi is not None) else None
+
+        value = tf.constant(raw, dtype=neuraltide.config.get_dtype())
+        if value.shape.rank == 0:
+            value = tf.fill([self._n_units], value)
+        else:
+            if int(value.shape[0]) != self._n_units:
+                raise ValueError(
+                    f"BaseInputGenerator '{self.name}': parameter '{name}' "
+                    f"has length {int(value.shape[0])}, expected {self._n_units}."
+                )
+
+        return self.add_weight(
+            shape=(self._n_units,),
+            initializer=tf.keras.initializers.Constant(value.numpy()),
+            trainable=train,
+            constraint=constraint,
+            dtype=neuraltide.config.get_dtype(),
+            name=name,
+        )
+
+    @property
+    def parameter_spec(self) -> Dict[str, Dict[str, Any]]:
+        """
+        Спецификация параметров генератора для summary и сериализации.
         """
         raise NotImplementedError

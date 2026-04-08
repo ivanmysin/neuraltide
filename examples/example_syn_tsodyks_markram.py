@@ -26,9 +26,16 @@ seed_everything(42)
 dt = 0.5
 T = 200
 
-gen = VonMisesGenerator(params=[
-    {'MeanFiringRate': 30.0, 'R': 0.8, 'ThetaFreq': 8.0, 'ThetaPhase': 0.0},
-], name='theta_gen')
+gen = VonMisesGenerator(
+    dt=dt,
+    params={
+        'mean_rate': 30.0,
+        'R': 0.8,
+        'freq': 8.0,
+        'phase': 0.0,
+    },
+    name='theta_gen'
+)
 
 syn = TsodyksMarkramSynapse(n_pre=1, n_post=2, dt=dt, params={
     'gsyn_max': {'value': [[0.15, 0.12]], 'trainable': False},

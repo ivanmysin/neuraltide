@@ -69,7 +69,10 @@ pop = MyRateModel(n_units=n_units, dt=dt, params={
     'I_ext': {'value': [0.5]*n_units, 'trainable': True},
 })
 
-gen = ConstantRateGenerator(constant_rate=20.0)
+gen = ConstantRateGenerator(
+    dt=dt,
+    params={'rate': 20.0}
+)
 
 syn = TsodyksMarkramSynapse(n_pre=1, n_post=n_units, dt=dt, params={
     'gsyn_max': {'value': [[0.1]*n_units], 'trainable': True},

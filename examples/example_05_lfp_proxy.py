@@ -32,7 +32,15 @@ exc_params = {
 
 pop = IzhikevichMeanField(dt=dt, params=exc_params, name='exc')
 
-gen = SinusoidalGenerator(amplitude=10.0, freq=8.0, phase=0.0, offset=10.0)
+gen = SinusoidalGenerator(
+    dt=dt,
+    params={
+        'amplitude': 10.0,
+        'freq': 8.0,
+        'phase': 0.0,
+        'offset': 10.0,
+    }
+)
 
 syn = TsodyksMarkramSynapse(n_pre=1, n_post=4, dt=dt, params={
     'gsyn_max': {'value': [[0.1]*4], 'trainable': True},

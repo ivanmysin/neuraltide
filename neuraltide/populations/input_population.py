@@ -24,10 +24,10 @@ class InputPopulation(PopulationModel):
         - Не может быть целью синапса (только источником).
     """
 
-    def __init__(self, generator: BaseInputGenerator, dt: float, **kwargs):
+    def __init__(self, generator: BaseInputGenerator, **kwargs):
         super().__init__(
-            n_units=generator.n_outputs,
-            dt=dt,
+            n_units=generator.n_units,
+            dt=generator.dt,
             **kwargs
         )
         self.generator = generator

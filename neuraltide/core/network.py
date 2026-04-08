@@ -49,7 +49,7 @@ class NetworkGraph:
         generator: BaseInputGenerator,
     ) -> None:
         """Регистрирует входной генератор как псевдо-популяцию."""
-        pop = InputPopulation(generator=generator, dt=self.dt, name=name + '_input_pop')
+        pop = InputPopulation(generator=generator, name=name + '_input_pop')
         self.add_population(name, pop)
 
     def add_synapse(

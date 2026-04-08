@@ -32,9 +32,16 @@ pop = IzhikevichMeanField(dt=dt, params={
     'I_ext':     {'value': [1.0, 1.2],   'trainable': True},
 })
 
-gen = VonMisesGenerator(params=[
-    {'MeanFiringRate': 20.0, 'R': 0.5, 'ThetaFreq': 8.0, 'ThetaPhase': 0.0},
-], name='theta_gen')
+gen = VonMisesGenerator(
+    dt=dt,
+    params={
+        'mean_rate': 20.0,
+        'R': 0.5,
+        'freq': 8.0,
+        'phase': 0.0,
+    },
+    name='theta_gen'
+)
 
 syn_in = TsodyksMarkramSynapse(n_pre=1, n_post=2, dt=dt, params={
     'gsyn_max': {'value': [[0.1, 0.1]], 'trainable': True},

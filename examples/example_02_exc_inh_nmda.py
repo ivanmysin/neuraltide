@@ -47,9 +47,16 @@ inh_params = {
 exc = IzhikevichMeanField(dt=dt, params=exc_params, name='exc')
 inh = IzhikevichMeanField(dt=dt, params=inh_params, name='inh')
 
-gen = VonMisesGenerator(params=[
-    {'MeanFiringRate': 20.0, 'R': 0.5, 'ThetaFreq': 8.0, 'ThetaPhase': 0.0},
-], name='theta_gen')
+gen = VonMisesGenerator(
+    dt=dt,
+    params={
+        'mean_rate': 20.0,
+        'R': 0.5,
+        'freq': 8.0,
+        'phase': 0.0,
+    },
+    name='theta_gen'
+)
 
 ampa_ee = TsodyksMarkramSynapse(n_pre=4, n_post=4, dt=dt, params={
     'gsyn_max': {'value': 0.05,  'trainable': True},
