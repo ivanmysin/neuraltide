@@ -195,6 +195,53 @@ class PopulationModel(tf.keras.layers.Layer):
         """
         raise NotImplementedError
 
+    def adjoint_derivatives(
+        self,
+        adjoint_state: StateList,
+        state: StateList,
+        total_synaptic_input: Dict[str, TensorType],
+    ) -> StateList:
+        """
+        Вычисляет производные сопряжённого состояния назад во времени.
+
+        Сопряжённая система ОДУ для adjoint state method:
+            dλ/dt = -J^T @ λ
+
+        где λ — сопряжённое состояние (adjoint_state),
+        J = ∂derivatives/∂state — якобиан производных по состоянию.
+
+        Args:
+            adjoint_state: текущее сопряжённое состояние — список тензоров.
+            state: текущее состояние популяции — список тензоров.
+            total_synaptic_input: {'I_syn': [...], 'g_syn': [...]}.
+
+        Returns:
+            list of tf.Tensor — производные сопряжённого состояния dλ/dt.
+        """
+        raise NotImplementedError
+
+    def parameter_jacobian(
+        self,
+        param_name: str,
+        state: StateList,
+        total_synaptic_input: Dict[str, TensorType],
+    ) -> TensorType:
+        """
+        Вычисляет ∂derivatives/∂param — якобиан производных по параметру.
+
+        Used in adjoint method for computing parameter gradients:
+            ∂L/∂param = ∫ adjoint_state^T @ (∂derivatives/∂param) dt
+
+        Args:
+            param_name: имя параметра.
+            state: текущее состояние популяции.
+            total_synaptic_input: {'I_syn': [...], 'g_syn': [...]}.
+
+        Returns:
+            Tensor той же формы что parameter.
+        """
+        raise NotImplementedError
+
 
 class SynapseModel(tf.keras.layers.Layer):
     """
@@ -363,6 +410,34 @@ class SynapseModel(tf.keras.layers.Layer):
     @abstractmethod
     def parameter_spec(self) -> Dict[str, Dict[str, Any]]:
         """Аналогично PopulationModel.parameter_spec."""
+        raise NotImplementedError
+
+    def adjoint_forward(
+        self,
+        adjoint_current: Dict[str, TensorType],
+        pre_firing_rate: TensorType,
+        post_voltage: TensorType,
+        state: StateList,
+    ) -> Tuple[Dict[str, TensorType], StateList]:
+        """
+        Вычисляет сопряжённое состояние синапса назад во времени.
+
+        Adjoint method для синапсов:
+            dλ_syn/dt = -J_syn^T @ λ_syn
+
+        где J_syn = ∂forward_output/∂syn_state.
+
+        Args:
+            adjoint_current: словарь {'I_syn': ..., 'g_syn': ...}.
+            pre_firing_rate: частота пресинаптических популяций.
+            post_voltage: средний потенциал постсинаптических популяций.
+            state: текущее состояние синапса.
+
+        Returns:
+            (new_adjoint_dict, new_adjoint_state):
+                new_adjoint_dict: {'I_syn': ..., 'g_syn': ...} для входа в популяцию.
+                new_adjoint_state: новое сопряжённое состояние синапса.
+        """
         raise NotImplementedError
 
 

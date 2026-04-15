@@ -42,14 +42,22 @@ class Trainer:
         network: NetworkRNN,
         loss_fn: CompositeLoss,
         optimizer: tf.keras.optimizers.Optimizer,
+        gradient_method: str = "autograd",
         grad_clip_norm: float = 1.0,
         run_eagerly: bool = False,
     ):
         self.network = network
         self.loss_fn = loss_fn
         self.optimizer = optimizer
+        self.gradient_method = gradient_method
         self.grad_clip_norm = grad_clip_norm
         self.run_eagerly = run_eagerly
+
+        if gradient_method == "adjoint":
+            from neuraltide.training.adjoint import AdjointGradientComputer
+            self._adjoint_computer = AdjointGradientComputer(
+                network, network._integrator
+            )
 
         if not run_eagerly:
             self._train_step = tf.function(self._train_step)
@@ -76,9 +84,40 @@ class Trainer:
         return {'loss': loss}
 
     def train_step(self, t_sequence: TensorType) -> Dict[str, float]:
+        if self.gradient_method == "adjoint":
+            if self.run_eagerly:
+                return self._train_step_adjoint(t_sequence)
+            return self._train_step_adjoint(t_sequence)
         if self.run_eagerly:
             return self._train_step_eager(t_sequence)
         return self._train_step(t_sequence)
+
+    def _train_step_adjoint(self, t_sequence: TensorType) -> Dict[str, float]:
+        with tf.GradientTape() as tape:
+            output = self.network(t_sequence, training=True)
+            loss = self.loss_fn(output, self.network)
+
+        grads = self._adjoint_computer.compute_gradients(loss, t_sequence)
+
+        trainable_vars = self.network.trainable_variables
+
+        grads_and_vars = []
+        for v in trainable_vars:
+            g = grads.get(v.name)
+            if g is not None:
+                grads_and_vars.append((g, v))
+
+        if not grads_and_vars:
+            return {'loss': loss}
+
+        if self.grad_clip_norm > 0:
+            grads_only = [g for g, v in grads_and_vars]
+            clipped_grads, _ = tf.clip_by_global_norm(grads_only, self.grad_clip_norm)
+            grads_and_vars = [(g, v) for g, (_, v) in zip(clipped_grads, grads_and_vars)]
+
+        self.optimizer.apply_gradients(grads_and_vars)
+
+        return {'loss': loss}
 
     def _train_step_eager(self, t_sequence: TensorType) -> Dict[str, float]:
         with tf.GradientTape() as tape:
