@@ -97,7 +97,9 @@ class Trainer:
             output = self.network(t_sequence, training=True)
             loss = self.loss_fn(output, self.network)
 
-        grads = self._adjoint_computer.compute_gradients(loss, t_sequence)
+        # Pass stability_loss if available
+        stability_loss = getattr(output, 'stability_loss', None)
+        grads = self._adjoint_computer.compute_gradients(loss, t_sequence, stability_loss)
 
         trainable_vars = self.network.trainable_variables
 

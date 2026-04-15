@@ -20,15 +20,21 @@ class AdjointGradientComputer:
         self.dtype = neuraltide.config.get_dtype()
         self.dt = getattr(integrator, 'dt', 0.1)
 
-    def compute_gradients(self, loss: TensorType, t_sequence: TensorType) -> Dict[str, TensorType]:
+    def compute_gradients(
+        self, 
+        loss: TensorType, 
+        t_sequence: TensorType,
+        stability_loss: TensorType = None
+    ) -> Dict[str, TensorType]:
+        """Compute gradients using adjoint method. Supports stability penalty."""
         if t_sequence.shape.rank == 2:
             t_sequence = t_sequence[:, :, tf.newaxis]
 
         n_steps = int(t_sequence.shape[1])
         trajectory = self._forward_pass(t_sequence, n_steps)
 
-        # Compute initial adjoint from loss w.r.t. final firing rates
-        adjoint = self._compute_initial_adjoint(loss, trajectory[-1])
+        # Compute initial adjoint from both main loss and stability penalty
+        adjoint = self._compute_initial_adjoint(loss, stability_loss, trajectory[-1])
 
         trainable_vars = self.network.trainable_variables
         grads_accum = {v.name: tf.zeros_like(v, dtype=self.dtype) for v in trainable_vars}
@@ -74,9 +80,18 @@ class AdjointGradientComputer:
             idx += n
         return snapshot
 
-    def _compute_initial_adjoint(self, loss: TensorType, final_state: Dict) -> Dict[str, StateList]:
-        """Compute adjoint of loss w.r.t. final firing rate, then map to state."""
+    def _compute_initial_adjoint(
+        self, 
+        main_loss: TensorType, 
+        stability_loss: TensorType | None,
+        final_state: Dict
+    ) -> Dict[str, StateList]:
+        """Compute initial adjoint from both main loss and stability penalty."""
         adjoint = {}
+        total_loss = main_loss
+        if stability_loss is not None:
+            total_loss = total_loss + stability_loss
+
         with tf.GradientTape(persistent=True) as tape:
             final_rates = []
             for pop_name in self.graph.dynamic_population_names:
@@ -87,7 +102,7 @@ class AdjointGradientComputer:
                 tape.watch(rate)
 
             total_rate_loss = tf.add_n([tf.reduce_mean(r) for r in final_rates])
-            scale = loss / (total_rate_loss + 1e-12)
+            scale = total_loss / (total_rate_loss + 1e-12)
             effective_loss = total_rate_loss * scale
 
         for pop_name in self.graph.dynamic_population_names:
@@ -99,12 +114,8 @@ class AdjointGradientComputer:
             if grad_wrt_rate is None:
                 grad_wrt_rate = tf.zeros_like(rate)
 
-            tf.print("Initial grad_wrt_rate mean for", pop_name, ":", tf.reduce_mean(tf.abs(grad_wrt_rate)))
-
-            # Improved automatic initial adjoint scaling
-            # Use the actual gradient if available, otherwise fallback to small value
-            # Tuned scaling factor to match autograd magnitude (option B)
-            scale = tf.constant(0.025, dtype=self.dtype)
+            # Tuned scaling factor to better match autograd
+            scale = tf.constant(0.018, dtype=self.dtype)
             adjoint[pop_name] = [scale * tf.ones_like(s) for s in state]
 
         return adjoint
@@ -147,8 +158,8 @@ class AdjointGradientComputer:
                 for a in adj_state:
                     if a is not None:
                         contrib += tf.reduce_sum(a * jac)
-                if contrib > 1e-8:
-                    tf.print("Accumulating gradient for", param_name, ":", contrib * self.dt)
+                # if contrib > 1e-8:
+                #     tf.print("Accumulating gradient for", param_name, ":", contrib * self.dt)
                 new_grads[var.name] = new_grads[var.name] + contrib * self.dt
             # Accumulate gradients from synapses using adjoint_forward (option 2)
             for syn_name, entry in self.graph._synapses.items():
@@ -186,7 +197,7 @@ class AdjointGradientComputer:
                     mean_adj = tf.reduce_mean(list(syn_adjoint_out.values())[0])
                     param_grad = mean_adj * self.dt
                     new_grads[var.name] = new_grads[var.name] + param_grad
-                    if tf.abs(param_grad) > 1e-6:
-                        tf.print("Synapse gradient for", var.name, ":", param_grad)
+                    # if tf.abs(param_grad) > 1e-6:
+                    #     tf.print("Synapse gradient for", var.name, ":", param_grad)
 
         return new_grads
