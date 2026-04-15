@@ -51,6 +51,19 @@ class StaticSynapse(SynapseModel):
 
         return ({'I_syn': I_syn, 'g_syn': g_syn}, [])
 
+    def adjoint_forward(
+        self,
+        adjoint_current: Dict[str, TensorType],
+        pre_firing_rate: TensorType,
+        post_voltage: TensorType,
+        state: StateList,
+    ) -> Tuple[Dict[str, TensorType], StateList]:
+        """Static synapse has no internal dynamics → adjoint flows directly."""
+        dtype = neuraltide.config.get_dtype()
+        zero_I = tf.zeros_like(adjoint_current.get('I_syn', tf.zeros([1, self.n_post], dtype=dtype)))
+        zero_g = tf.zeros_like(adjoint_current.get('g_syn', tf.zeros([1, self.n_post], dtype=dtype)))
+        return {'I_syn': zero_I, 'g_syn': zero_g}, []
+
     @property
     def parameter_spec(self) -> Dict[str, Dict[str, any]]:
         return {

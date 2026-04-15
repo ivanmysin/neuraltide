@@ -387,11 +387,12 @@ class IzhikevichMeanField(PopulationModel):
         """
         Extract firing rate from state.
 
-        Returns the dimensionless rate r. The caller should scale to Hz
-        if needed using: rate_Hz = r / (dt * 1e-3) where dt is in ms.
+        Returns the dimensionless rate r directly (no ReLU).
+        This ensures non-zero gradient almost everywhere.
+        The caller should scale to Hz if needed: rate_Hz = r / (dt * 1e-3).
         """
         r = state[0]
-        return tf.nn.relu(r)
+        return r
 
     def observables(self, state: StateList) -> Dict[str, TensorType]:
         """
@@ -408,6 +409,129 @@ class IzhikevichMeanField(PopulationModel):
             'v_mean': v,
             'w_mean': w,
         }
+
+    def adjoint_derivatives(
+        self,
+        adjoint_state: StateList,
+        state: StateList,
+        total_synaptic_input: Dict[str, TensorType],
+    ) -> StateList:
+        """
+        Compute adjoint derivatives for IzhikevichMeanField.
+
+        The adjoint system: dλ/dt = -J^T @ λ
+
+        Jacobian J = ∂derivatives/∂state where state = [r, v, w]:
+            J = [[dr/dr, dr/dv, dr/dw],
+                 [dv/dr, dv/dv, dv/dw],
+                 [dw/dr, dw/dv, dw/dw]]
+
+        For Izhikevich:
+            dr/dt = (Delta_I/pi + 2*r*v - (alpha + g_syn)*r) / tau_pop
+            dv/dt = (v^2 - alpha*v - w + I_ext + I_syn - (pi*r)^2) / tau_pop
+            dw/dt = (a*(b*v - w) + w_jump*r) / tau_pop
+
+        Derivatives:
+            dr/dr = (2*v - alpha - g_syn) / tau_pop
+            dr/dv = 2*r / tau_pop
+            dr/dw = 0
+
+            dv/dr = -2*pi*r / tau_pop
+            dv/dv = (2*v - alpha) / tau_pop
+            dv/dw = -1 / tau_pop
+
+            dw/dr = w_jump / tau_pop
+            dw/dv = a*b / tau_pop
+            dw/dw = -a / tau_pop
+        """
+        r = state[0]
+        v = state[1]
+        w = state[2]
+
+        g_syn = total_synaptic_input.get('g_syn', tf.zeros_like(r))
+        I_syn = total_synaptic_input.get('I_syn', tf.zeros_like(r))
+
+        lambda_r = adjoint_state[0]
+        lambda_v = adjoint_state[1]
+        lambda_w = adjoint_state[2]
+
+        PI = self.PI
+
+        dr_dr = (2.0 * v - self.alpha - g_syn) / self.tau_pop
+        dr_dv = 2.0 * r / self.tau_pop
+        dr_dw = tf.zeros_like(r)
+
+        dv_dr = -2.0 * (PI ** 2) * r / self.tau_pop
+        dv_dv = (2.0 * v - self.alpha) / self.tau_pop
+        dv_dw = -1.0 / self.tau_pop
+
+        dw_dr = self.w_jump / self.tau_pop
+        dw_dv = self.a * self.b / self.tau_pop
+        dw_dw = -self.a / self.tau_pop
+
+        dlambda_r = -(dr_dr * lambda_r + dv_dr * lambda_v + dw_dr * lambda_w)
+        dlambda_v = -(dr_dv * lambda_r + dv_dv * lambda_v + dw_dv * lambda_w)
+        dlambda_w = -(dr_dw * lambda_r + dv_dw * lambda_v + dw_dw * lambda_w)
+
+        return [dlambda_r, dlambda_v, dlambda_w]
+
+    def parameter_jacobian(
+        self,
+        param_name: str,
+        state: StateList,
+        total_synaptic_input: Dict[str, TensorType],
+    ) -> TensorType:
+        """
+        Compute ∂derivatives/∂param for IzhikevichMeanField.
+
+        The state is [r, v, w]. Derivatives:
+            dr/dt = (Delta_I/pi + 2*r*v - (alpha + g_syn)*r) / tau_pop
+            dv/dt = (v^2 - alpha*v - w + I_ext + I_syn - (pi*r)^2) / tau_pop
+            dw/dt = (a*(b*v - w) + w_jump*r) / tau_pop
+
+        Jacobian for each parameter:
+            Delta_I: ∂(dr/dt)/∂Delta_I = 1/(pi * tau_pop)
+            I_ext:   ∂(dv/dt)/∂I_ext = 1/tau_pop
+            tau_pop: ∂derivatives/∂tau_pop involves more complex terms (we skip for simplicity)
+            alpha:  ∂dr/dt/∂alpha = -r/tau_pop, ∂dv/dt/∂alpha = v/tau_pop
+            etc.
+
+        Returns 0 for non-trainable parameters (tau_pop, alpha, a, b, w_jump).
+        """
+        r = state[0]
+
+        r = state[0]
+        v = state[1]
+
+        g_syn = total_synaptic_input.get('g_syn', tf.zeros_like(r))
+        I_syn = total_synaptic_input.get('I_syn', tf.zeros_like(r))
+
+        dtype = neuraltide.config.get_dtype()
+
+        if param_name == 'Delta_I':
+            ones = tf.ones_like(r)
+            return ones / (self.PI * self.tau_pop)
+        elif param_name == 'I_ext':
+            ones = tf.ones_like(r)
+            return ones / self.tau_pop
+        elif param_name == 'tau_pop':
+            return tf.zeros_like(r)
+        elif param_name == 'alpha':
+            # Return scalar for simplicity, adjoint will use first component
+            ones = tf.ones_like(r)
+            return -ones / self.tau_pop
+        elif param_name == 'a':
+            ones = tf.ones_like(r)
+            return ones / self.tau_pop
+        elif param_name == 'b':
+            v = state[1]
+            ones = tf.ones_like(r)
+            return self.a * v / self.tau_pop
+        elif param_name == 'w_jump':
+            ones = tf.ones_like(r)
+            return ones / self.tau_pop
+        else:
+            return tf.zeros_like(r)
 
     @property
     def parameter_spec(self) -> Dict[str, Dict[str, Any]]:

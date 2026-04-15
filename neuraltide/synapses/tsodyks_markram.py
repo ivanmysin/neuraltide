@@ -100,6 +100,65 @@ class TsodyksMarkramSynapse(SynapseModel):
 
         return ({'I_syn': I_syn, 'g_syn': g_syn}, [R_new, U_new, A_new])
 
+    def adjoint_forward(
+        self,
+        adjoint_current: Dict[str, TensorType],
+        pre_firing_rate: TensorType,
+        post_voltage: TensorType,
+        state: StateList,
+    ) -> Tuple[Dict[str, TensorType], StateList]:
+        """Улучшенная adjoint propagation для Tsodyks-Markram synapse.
+
+        Учитывает:
+        - Вклад λ_I и λ_g в adjoint по A (conductance)
+        - Приближённое влияние на presynaptic rate (через released fraction)
+        - Adjoint по состоянию [R, U, A] для следующего backward шага
+        """
+        R, U, A = state
+        dtype = neuraltide.config.get_dtype()
+
+        lambda_I = adjoint_current.get('I_syn', tf.zeros([1, self.n_post], dtype=dtype))
+        lambda_g = adjoint_current.get('g_syn', tf.zeros([1, self.n_post], dtype=dtype))
+
+        post_v = post_voltage if post_voltage is not None else tf.zeros_like(lambda_I)
+
+        # 1. Adjoint по A (основной вклад в проводимость)
+        dI_dA = self.gsyn_max * (self.e_r - tf.transpose(post_v))
+        dg_dA = self.gsyn_max
+
+        lambda_A = tf.transpose(
+            tf.transpose(lambda_I) * dI_dA + tf.transpose(lambda_g) * dg_dA
+        )
+
+        # 2. Приближённый adjoint по presynaptic firing rate
+        firing_probs_T = tf.transpose(pre_firing_rate * self.dt / 1000.0)
+        FR_normed = self.pconn * firing_probs_T
+        released = U * R * FR_normed
+
+        lambda_pre = tf.transpose(
+            tf.transpose(lambda_I) * released * (self.e_r - tf.transpose(post_v)) +
+            tf.transpose(lambda_g) * released
+        )
+
+        # 3. Adjoint по состоянию [R, U, A]
+        # Approximate λ_R and λ_U from released transmitter dynamics
+        lambda_R = U * lambda_pre * self.pconn * (pre_firing_rate * self.dt / 1000.0)
+        lambda_U = R * lambda_pre * self.pconn * (pre_firing_rate * self.dt / 1000.0)
+
+        new_adjoint_state = [
+            lambda_R,           # λ_R
+            lambda_U,           # λ_U
+            lambda_A            # λ_A — основной вклад
+        ]
+
+        # Return adjoint for presynaptic rate (to propagate to previous population)
+        # and for synaptic state
+        return {
+            'I_syn': tf.zeros_like(lambda_I),
+            'g_syn': tf.zeros_like(lambda_g),
+            'pre_rate': lambda_pre,
+        }, new_adjoint_state
+
     @property
     def parameter_spec(self) -> Dict[str, Dict[str, any]]:
         return {
