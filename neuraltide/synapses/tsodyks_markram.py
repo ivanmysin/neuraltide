@@ -1,5 +1,5 @@
 import tensorflow as tf
-from typing import Dict, Tuple
+from typing import Dict, Tuple, List
 
 import neuraltide
 import neuraltide.config
@@ -99,6 +99,73 @@ class TsodyksMarkramSynapse(SynapseModel):
         g_syn = tf.reduce_sum(g_eff, axis=0, keepdims=True)
 
         return ({'I_syn': I_syn, 'g_syn': g_syn}, [R_new, U_new, A_new])
+
+    def derivatives(
+        self,
+        state: StateList,
+        pre_firing_rate: TensorType,
+        post_voltage: TensorType,
+    ) -> StateList:
+        """
+        Compute derivatives for the Tsodyks-Markram short-term plasticity dynamics.
+
+        Differential equations:
+            dA/dt = -A/tau_d + U * R * s_input
+            dU/dt = -U/tau_f + Uinc * (1 - U) * s_input
+            dR/dt = (1 - R)/tau_r - U * R * s_input
+
+        where s_input = pconn * firing_probability (converted to rate)
+        """
+        R, U, A = state
+
+        dtype = neuraltide.config.get_dtype()
+        pconn = tf.cast(self.pconn, dtype)
+        tau_d = tf.cast(self.tau_d, dtype)
+        tau_f = tf.cast(self.tau_f, dtype)
+        tau_r = tf.cast(self.tau_r, dtype)
+        Uinc = tf.cast(self.Uinc, dtype)
+
+        firing_probs_T = tf.transpose(pre_firing_rate / 1000.0)
+        s_input = pconn * firing_probs_T
+
+        dA_dt = -A / tau_d + U * R * s_input
+
+        dU_dt = -U / tau_f + Uinc * (1.0 - U) * s_input
+
+        dR_dt = (1.0 - R - A) / tau_r - U * R * s_input
+
+        return [dR_dt, dU_dt, dA_dt]
+
+    def compute_current(
+        self,
+        state: StateList,
+        pre_firing_rate: TensorType,
+        post_voltage: TensorType,
+    ) -> Dict[str, TensorType]:
+        """
+        Compute synaptic current and conductance from state.
+
+        Used after numerical integration to compute currents.
+        """
+        dtype = neuraltide.config.get_dtype()
+        gsyn_max = tf.cast(self.gsyn_max, dtype)
+        pconn = tf.cast(self.pconn, dtype)
+        e_r = tf.cast(self.e_r, dtype)
+
+        if len(state) > 0:
+            R_new, U_new, A_new = state
+            g_eff = gsyn_max * A_new
+        else:
+            firing_probs_T = tf.transpose(pre_firing_rate / 1000.0)
+            FRpre_normed = pconn * firing_probs_T
+            g_eff = gsyn_max * FRpre_normed
+
+        post_v_flat = tf.reshape(post_voltage, [-1])
+        I_pair = g_eff * (e_r - post_v_flat)
+        I_syn = tf.reduce_sum(I_pair, axis=0, keepdims=True)
+        g_syn = tf.reduce_sum(g_eff, axis=0, keepdims=True)
+
+        return {'I_syn': I_syn, 'g_syn': g_syn}
 
     @property
     def parameter_spec(self) -> Dict[str, Dict[str, any]]:
