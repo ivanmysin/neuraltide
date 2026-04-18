@@ -34,15 +34,6 @@ class TsodyksMarkramSynapse(SynapseModel):
         self.pconn = self._make_param(params, 'pconn')
         self.e_r = self._make_param(params, 'e_r')
 
-        dtype = neuraltide.config.get_dtype()
-        self.gsyn_max = tf.cast(self.gsyn_max, dtype)
-        self.tau_f = tf.cast(self.tau_f, dtype)
-        self.tau_d = tf.cast(self.tau_d, dtype)
-        self.tau_r = tf.cast(self.tau_r, dtype)
-        self.Uinc = tf.cast(self.Uinc, dtype)
-        self.pconn = tf.cast(self.pconn, dtype)
-        self.e_r = tf.cast(self.e_r, dtype)
-
         self.state_size = [
             tf.TensorShape([n_pre, n_post]),
             tf.TensorShape([n_pre, n_post]),

@@ -137,6 +137,87 @@ class NetworkGraph:
         ]
 
 
+def unpack_state(
+    graph: NetworkGraph,
+    flat_pop_states: StateList,
+    flat_syn_states: StateList,
+) -> Tuple[Dict[str, StateList], Dict[str, StateList]]:
+    """
+    Unpack flat state lists into dictionaries keyed by population/synapse name.
+    
+    Args:
+        graph: NetworkGraph
+        flat_pop_states: Flat list of population states
+        flat_syn_states: Flat list of synapse states
+    
+    Returns:
+        (pop_states_dict, syn_states_dict)
+    """
+    pop_states_dict = {}
+    idx = 0
+    for name in graph.population_names:
+        pop = graph._populations[name]
+        n = len(pop.state_size)
+        pop_states_dict[name] = flat_pop_states[idx:idx + n]
+        idx += n
+    
+    syn_states_dict = {}
+    idx = 0
+    for name in graph.synapse_names:
+        entry = graph._synapses[name]
+        n = len(entry.model.state_size)
+        syn_states_dict[name] = flat_syn_states[idx:idx + n]
+        idx += n
+    
+    return pop_states_dict, syn_states_dict
+
+
+def pack_state(
+    pop_states_dict: Dict[str, StateList],
+    syn_states_dict: Dict[str, StateList],
+) -> Tuple[StateList, StateList]:
+    """
+    Pack state dictionaries into flat lists.
+    
+    Args:
+        pop_states_dict: Dict of population states
+        syn_states_dict: Dict of synapse states
+    
+    Returns:
+        (flat_pop_states, flat_syn_states)
+    """
+    flat_pop = []
+    for name in pop_states_dict:
+        flat_pop.extend(pop_states_dict[name])
+    
+    flat_syn = []
+    for name in syn_states_dict:
+        flat_syn.extend(syn_states_dict[name])
+    
+    return flat_pop, flat_syn
+
+
+def get_firing_rates(
+    graph: NetworkGraph,
+    pop_states_dict: Dict[str, StateList],
+) -> Dict[str, TensorType]:
+    """
+    Get firing rates for all dynamic populations.
+    
+    Args:
+        graph: NetworkGraph
+        pop_states_dict: Dict of population states
+    
+    Returns:
+        Dict of firing rates keyed by population name
+    """
+    all_rates = {}
+    for name in graph.dynamic_population_names:
+        pop = graph._populations[name]
+        all_rates[name] = pop.get_firing_rate(pop_states_dict[name])
+    return all_rates
+
+
 def _step_fn(
     states: Tuple[StateList, StateList, TensorType],
     t: TensorType,
