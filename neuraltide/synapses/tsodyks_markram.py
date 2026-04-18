@@ -1,5 +1,5 @@
 import tensorflow as tf
-from typing import Dict, Tuple
+from typing import Dict, Tuple, List
 
 import neuraltide
 import neuraltide.config
@@ -33,15 +33,6 @@ class TsodyksMarkramSynapse(SynapseModel):
         self.Uinc = self._make_param(params, 'Uinc')
         self.pconn = self._make_param(params, 'pconn')
         self.e_r = self._make_param(params, 'e_r')
-
-        dtype = neuraltide.config.get_dtype()
-        self.gsyn_max = tf.cast(self.gsyn_max, dtype)
-        self.tau_f = tf.cast(self.tau_f, dtype)
-        self.tau_d = tf.cast(self.tau_d, dtype)
-        self.tau_r = tf.cast(self.tau_r, dtype)
-        self.Uinc = tf.cast(self.Uinc, dtype)
-        self.pconn = tf.cast(self.pconn, dtype)
-        self.e_r = tf.cast(self.e_r, dtype)
 
         self.state_size = [
             tf.TensorShape([n_pre, n_post]),
@@ -100,64 +91,72 @@ class TsodyksMarkramSynapse(SynapseModel):
 
         return ({'I_syn': I_syn, 'g_syn': g_syn}, [R_new, U_new, A_new])
 
-    def adjoint_forward(
+    def derivatives(
         self,
-        adjoint_current: Dict[str, TensorType],
+        state: StateList,
         pre_firing_rate: TensorType,
         post_voltage: TensorType,
-        state: StateList,
-    ) -> Tuple[Dict[str, TensorType], StateList]:
-        """Улучшенная adjoint propagation для Tsodyks-Markram synapse.
+    ) -> StateList:
+        """
+        Compute derivatives for the Tsodyks-Markram short-term plasticity dynamics.
 
-        Учитывает:
-        - Вклад λ_I и λ_g в adjoint по A (conductance)
-        - Приближённое влияние на presynaptic rate (через released fraction)
-        - Adjoint по состоянию [R, U, A] для следующего backward шага
+        Differential equations:
+            dA/dt = -A/tau_d + U * R * s_input
+            dU/dt = -U/tau_f + Uinc * (1 - U) * s_input
+            dR/dt = (1 - R)/tau_r - U * R * s_input
+
+        where s_input = pconn * firing_probability (converted to rate)
         """
         R, U, A = state
+
         dtype = neuraltide.config.get_dtype()
+        pconn = tf.cast(self.pconn, dtype)
+        tau_d = tf.cast(self.tau_d, dtype)
+        tau_f = tf.cast(self.tau_f, dtype)
+        tau_r = tf.cast(self.tau_r, dtype)
+        Uinc = tf.cast(self.Uinc, dtype)
 
-        lambda_I = adjoint_current.get('I_syn', tf.zeros([1, self.n_post], dtype=dtype))
-        lambda_g = adjoint_current.get('g_syn', tf.zeros([1, self.n_post], dtype=dtype))
+        firing_probs_T = tf.transpose(pre_firing_rate / 1000.0)
+        s_input = pconn * firing_probs_T
 
-        post_v = post_voltage if post_voltage is not None else tf.zeros_like(lambda_I)
+        dA_dt = -A / tau_d + U * R * s_input
 
-        # 1. Adjoint по A (основной вклад в проводимость)
-        dI_dA = self.gsyn_max * (self.e_r - tf.transpose(post_v))
-        dg_dA = self.gsyn_max
+        dU_dt = -U / tau_f + Uinc * (1.0 - U) * s_input
 
-        lambda_A = tf.transpose(
-            tf.transpose(lambda_I) * dI_dA + tf.transpose(lambda_g) * dg_dA
-        )
+        dR_dt = (1.0 - R - A) / tau_r - U * R * s_input
 
-        # 2. Приближённый adjoint по presynaptic firing rate
-        firing_probs_T = tf.transpose(pre_firing_rate * self.dt / 1000.0)
-        FR_normed = self.pconn * firing_probs_T
-        released = U * R * FR_normed
+        return [dR_dt, dU_dt, dA_dt]
 
-        lambda_pre = tf.transpose(
-            tf.transpose(lambda_I) * released * (self.e_r - tf.transpose(post_v)) +
-            tf.transpose(lambda_g) * released
-        )
+    def compute_current(
+        self,
+        state: StateList,
+        pre_firing_rate: TensorType,
+        post_voltage: TensorType,
+    ) -> Dict[str, TensorType]:
+        """
+        Compute synaptic current and conductance from state.
 
-        # 3. Adjoint по состоянию [R, U, A]
-        # Approximate λ_R and λ_U from released transmitter dynamics
-        lambda_R = U * lambda_pre * self.pconn * (pre_firing_rate * self.dt / 1000.0)
-        lambda_U = R * lambda_pre * self.pconn * (pre_firing_rate * self.dt / 1000.0)
+        Used after numerical integration to compute currents.
+        """
+        dtype = neuraltide.config.get_dtype()
+        gsyn_max = tf.cast(self.gsyn_max, dtype)
+        pconn = tf.cast(self.pconn, dtype)
+        e_r = tf.cast(self.e_r, dtype)
 
-        new_adjoint_state = [
-            lambda_R,           # λ_R
-            lambda_U,           # λ_U
-            lambda_A            # λ_A — основной вклад
-        ]
+        if len(state) > 0:
+            R_new, U_new, A_new = state
+            g_eff = gsyn_max * A_new
+        else:
+            firing_probs_T = tf.transpose(pre_firing_rate / 1000.0)
+            FRpre_normed = pconn * firing_probs_T
+            g_eff = gsyn_max * FRpre_normed
 
-        # Return adjoint for presynaptic rate (to propagate to previous population)
-        # and for synaptic state
-        return {
-            'I_syn': tf.zeros_like(lambda_I),
-            'g_syn': tf.zeros_like(lambda_g),
-            'pre_rate': lambda_pre,
-        }, new_adjoint_state
+        post_v_flat = tf.reshape(post_voltage, [-1])
+        I_pair = g_eff * (e_r - post_v_flat)
+        I_syn = tf.reduce_sum(I_pair, axis=0, keepdims=True)
+        g_syn = tf.reduce_sum(g_eff, axis=0, keepdims=True)
+
+        return {'I_syn': I_syn, 'g_syn': g_syn}
 
     @property
     def parameter_spec(self) -> Dict[str, Dict[str, any]]:

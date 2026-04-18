@@ -406,6 +406,48 @@ class SynapseModel(tf.keras.layers.Layer):
         """
         raise NotImplementedError
 
+    @abstractmethod
+    def derivatives(
+        self,
+        state: StateList,
+        pre_firing_rate: TensorType,
+        post_voltage: TensorType,
+    ) -> StateList:
+        """
+        Вычисляет производные состояния синапса.
+
+        Args:
+            state: текущее состояние синапса — список тензоров.
+            pre_firing_rate: частота пресинаптических популяций, shape = [1, n_pre], в Гц.
+            post_voltage: средний потенциал постсинаптических популяций, shape = [1, n_post].
+
+        Returns:
+            list of tf.Tensor — производные состояния, той же структуры что state.
+        """
+        raise NotImplementedError
+
+    def compute_current(
+        self,
+        state: StateList,
+        pre_firing_rate: TensorType,
+        post_voltage: TensorType,
+    ) -> Dict[str, TensorType]:
+        """
+        Вычисляет синаптический ток и проводимость по текущему состоянию.
+
+        Этот метод используется после численного интегрирования для получения
+        токов на основе обновлённого состояния.
+
+        Args:
+            state: текущее состояние синапса.
+            pre_firing_rate: частота пресинаптических популяций, shape = [1, n_pre], в Гц.
+            post_voltage: средний потенциал постсинаптических популяций, shape = [1, n_post].
+
+        Returns:
+            dict с ключами 'I_syn' и 'g_syn'.
+        """
+        raise NotImplementedError
+
     @property
     @abstractmethod
     def parameter_spec(self) -> Dict[str, Dict[str, Any]]:

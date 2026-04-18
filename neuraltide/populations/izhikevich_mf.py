@@ -133,6 +133,7 @@ class IzhikevichMeanField(PopulationModel):
         self.w_jump = self._make_param(self._params, 'w_jump')
         self.Delta_I = self._make_param(self._params, 'Delta_I')
         self.I_ext = self._make_param(self._params, 'I_ext')
+        self.v_max = tf.constant(10.0, dtype=neuraltide.config.get_dtype())
 
         dtype = neuraltide.config.get_dtype()
         self.PI = tf.constant(3.141592653589793, dtype=dtype)
@@ -378,7 +379,7 @@ class IzhikevichMeanField(PopulationModel):
         I_syn = total_synaptic_input['I_syn']
 
         drdt = (self.Delta_I / self.PI + 2.0 * r * v - (self.alpha + g_syn_tot) * r) / self.tau_pop
-        dvdt = (v ** 2 - self.alpha * v - w + self.I_ext + I_syn - (self.PI * r) ** 2) / self.tau_pop
+        dvdt = (v**2 / (1 + (v/self.v_max)**2) - self.alpha * v - w + self.I_ext + I_syn - (self.PI * r) ** 2) / self.tau_pop
         dwdt = (self.a * (self.b * v - w) + self.w_jump * r) / self.tau_pop
 
         return [drdt, dvdt, dwdt]

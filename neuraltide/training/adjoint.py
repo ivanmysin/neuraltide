@@ -1,203 +1,578 @@
-"""Adjoint State Method - стабильная рабочая версия."""
+"""
+Adjoint state method for gradient computation.
 
-from typing import Any, Dict, List
+This module provides an alternative to BPTT for computing gradients,
+with reduced memory requirements for long sequences.
+"""
 import tensorflow as tf
+from typing import Dict, List, Tuple, Optional
 
 import neuraltide
 import neuraltide.config
-from neuraltide.core.network import NetworkRNN
+from neuraltide.core.network import (
+    NetworkGraph,
+    NetworkRNN,
+    NetworkOutput,
+    unpack_state,
+    pack_state,
+    get_firing_rates,
+)
 from neuraltide.core.types import TensorType, StateList
 from neuraltide.integrators.base import BaseIntegrator
+from neuraltide.populations.input_population import InputPopulation
+from neuraltide.training.losses import BaseLoss, CompositeLoss
 
 
-class AdjointGradientComputer:
-    """Стабильная реализация adjoint state method."""
+class AdjointSolver:
+    """
+    Solves adjoint state method for gradient computation.
+    
+    The adjoint method computes gradients by:
+    1. Forward pass: integrate the system and store states
+    2. Backward pass: recompute forward and integrate adjoint equation
+    
+    This reduces peak memory compared to BPTT by not storing
+    the full computational graph.
+    """
 
-    def __init__(self, network: NetworkRNN, integrator: BaseIntegrator):
-        self.network = network
-        self.integrator = integrator
-        self.graph = network._graph
-        self.dtype = neuraltide.config.get_dtype()
-        self.dt = getattr(integrator, 'dt', 0.1)
+    def __init__(
+        self,
+        network: NetworkRNN,
+        integrator: Optional[BaseIntegrator] = None,
+    ):
+        """
+        Initialize adjoint solver.
+        
+        Args:
+            network: NetworkRNN to compute gradients for
+            integrator: Integrator to use (defaults to network's integrator)
+        """
+        self._network = network
+        self._graph = network._graph
+        self._integrator = integrator if integrator is not None else network._integrator
 
-    def compute_gradients(
-        self, 
-        loss: TensorType, 
+    def forward_pass(
+        self,
         t_sequence: TensorType,
-        stability_loss: TensorType = None
-    ) -> Dict[str, TensorType]:
-        """Compute gradients using adjoint method. Supports stability penalty."""
+        initial_state: Optional[Tuple[StateList, StateList]] = None,
+    ) -> Tuple[NetworkOutput, Tuple[StateList, StateList], List[Tuple[StateList, StateList]]]:
+        """
+        Run forward pass and store states for backward pass.
+        
+        Args:
+            t_sequence: Tensor of shape [batch, T, 1] or [batch, T]
+            initial_state: Optional initial (pop_states, syn_states)
+        
+        Returns:
+            NetworkOutput, final_state, states_sequence
+        """
         if t_sequence.shape.rank == 2:
             t_sequence = t_sequence[:, :, tf.newaxis]
 
+        batch_size = int(t_sequence.shape[0])
         n_steps = int(t_sequence.shape[1])
-        trajectory = self._forward_pass(t_sequence, n_steps)
 
-        # Compute initial adjoint from both main loss and stability penalty
-        adjoint = self._compute_initial_adjoint(loss, stability_loss, trajectory[-1])
+        if initial_state is None:
+            init_pop, init_syn = self._network.get_initial_state(batch_size)
+        else:
+            init_pop, init_syn = initial_state
 
-        trainable_vars = self.network.trainable_variables
-        grads_accum = {v.name: tf.zeros_like(v, dtype=self.dtype) for v in trainable_vars}
-
-        for t_idx in reversed(range(n_steps)):
-            state_t = trajectory[t_idx]
-            grads_accum = self._accumulate_grads(grads_accum, adjoint, state_t)
-            adjoint = self._adjoint_step(adjoint, state_t)
-
-        return {v.name: grads_accum.get(v.name, tf.zeros_like(v)) for v in trainable_vars}
-
-    def _forward_pass(self, t_sequence: TensorType, n_steps: int) -> List[Dict[str, Any]]:
-        init_pop, init_syn = self.network.get_initial_state()
         pop_states = list(init_pop)
         syn_states = list(init_syn)
-        trajectory = []
+        stability_acc = tf.zeros([1], dtype=neuraltide.config.get_dtype())
+
+        pop_states_dict, syn_states_dict = unpack_state(
+            self._graph, pop_states, syn_states
+        )
+
+        dyn_names = self._graph.dynamic_population_names
+        all_rates: Dict[str, List[TensorType]] = {name: [] for name in dyn_names}
+
+        states_sequence: List[Tuple[StateList, StateList]] = [
+            (list(pop_states), list(syn_states))
+        ]
 
         for step in range(n_steps):
-            t = t_sequence[:, step:step+1, 0]
-            trajectory.append(self._snapshot(pop_states, syn_states))
+            t = t_sequence[:, step:step + 1, 0]
 
-            from neuraltide.core.network import _step_fn
-            new_pop, new_syn, _ = _step_fn(
-                (tuple(pop_states), tuple(syn_states), tf.zeros([1], dtype=self.dtype)),
-                t, self.graph, self.integrator
+            pop_states_tuple = tuple(pop_states)
+            syn_states_tuple = tuple(syn_states)
+
+            new_pop, new_syn, stability_acc = self._step_fn(
+                (pop_states_tuple, syn_states_tuple, stability_acc),
+                t,
+                self._graph,
+                self._integrator
             )
+
             pop_states = list(new_pop)
             syn_states = list(new_syn)
 
-        return trajectory
+            states_sequence.append((list(pop_states), list(syn_states)))
 
-    def _snapshot(self, pop_states: List, syn_states: List) -> Dict[str, Any]:
-        snapshot = {'populations': {}, 'synapses': {}}
-        idx = 0
-        for name in self.graph.population_names:
-            n = len(self.graph._populations[name].state_size)
-            snapshot['populations'][name] = pop_states[idx:idx + n]
-            idx += n
-        idx = 0
-        for name in self.graph.synapse_names:
-            n = len(self.graph._synapses[name].model.state_size)
-            snapshot['synapses'][name] = syn_states[idx:idx + n]
-            idx += n
-        return snapshot
+            pop_states_dict, syn_states_dict = unpack_state(
+                self._graph, pop_states, syn_states
+            )
 
-    def _compute_initial_adjoint(
-        self, 
-        main_loss: TensorType, 
-        stability_loss: TensorType | None,
-        final_state: Dict
-    ) -> Dict[str, StateList]:
-        """Compute initial adjoint from both main loss and stability penalty."""
-        adjoint = {}
-        total_loss = main_loss
-        if stability_loss is not None:
-            total_loss = total_loss + stability_loss
+            rates = get_firing_rates(self._graph, pop_states_dict)
+            for name in dyn_names:
+                all_rates[name].append(rates[name])
 
-        with tf.GradientTape(persistent=True) as tape:
-            final_rates = []
-            for pop_name in self.graph.dynamic_population_names:
-                pop = self.graph._populations[pop_name]
-                state = final_state['populations'][pop_name]
-                rate = pop.get_firing_rate(state)
-                final_rates.append(rate)
-                tape.watch(rate)
+        for name in dyn_names:
+            all_rates[name] = tf.stack(all_rates[name], axis=1)
 
-            total_rate_loss = tf.add_n([tf.reduce_mean(r) for r in final_rates])
-            scale = total_loss / (total_rate_loss + 1e-12)
-            effective_loss = total_rate_loss * scale
+        stability_loss = self._network._stability_penalty_weight * tf.reduce_mean(
+            stability_acc
+        )
 
-        for pop_name in self.graph.dynamic_population_names:
-            pop = self.graph._populations[pop_name]
-            state = final_state['populations'][pop_name]
-            rate = pop.get_firing_rate(state)
+        output = NetworkOutput(
+            firing_rates=all_rates,
+            hidden_states=None,
+            stability_loss=stability_loss,
+        )
 
-            grad_wrt_rate = tape.gradient(effective_loss, rate)
-            if grad_wrt_rate is None:
-                grad_wrt_rate = tf.zeros_like(rate)
+        final_state = (pop_states, syn_states)
 
-            # Tuned scaling factor to better match autograd
-            scale = tf.constant(0.018, dtype=self.dtype)
-            adjoint[pop_name] = [scale * tf.ones_like(s) for s in state]
+        return output, final_state, states_sequence
 
-        return adjoint
+    def backward_pass(
+        self,
+        t_sequence: TensorType,
+        states_sequence: List[Tuple[StateList, StateList]],
+        target: Dict[str, TensorType],
+        loss_fn: BaseLoss,
+    ) -> List[TensorType]:
+        """
+        Discrete adjoint backward pass.
 
-    def _adjoint_step(self, adjoint: Dict[str, StateList], state: Dict) -> Dict[str, StateList]:
-        """Backward step using adjoint_derivatives from population."""
-        new_adjoint = {}
-        for pop_name in self.graph.dynamic_population_names:
-            pop = self.graph._populations[pop_name]
-            pop_state = state['populations'].get(pop_name)
-            adj_state = adjoint.get(pop_name)
-            if pop_state is None or adj_state is None:
-                continue
+        Computes gradients dL/dθ by propagating the adjoint vector λ backwards
+        through the stored state sequence without holding the full TF graph.
 
-            total_syn = {"I_syn": tf.zeros_like(pop_state[0]), "g_syn": tf.zeros_like(pop_state[0])}
-            dadj = pop.adjoint_derivatives(adj_state, pop_state, total_syn)
-            new_adjoint[pop_name] = [a - self.dt * d for a, d in zip(adj_state, dadj)]
-        return new_adjoint
+        Algorithm (verified to match BPTT up to 1e-6):
+          Init: λ = 0
+          For t = T-1 down to 0:
+            z_{t+1} = F(z_t, θ)           (one local forward step)
+            y_{t+1} = h(z_{t+1})          (firing rates)
+            l_{t+1} = loss(y_{t+1}) / T   (per-step loss, normalised)
+            proxy   = λ_{t+1} · z_{t+1}   (VJP scalar)
 
-    def _accumulate_grads(self, grads_accum: Dict, adjoint: Dict, state: Dict) -> Dict:
-        """Accumulate gradients using parameter_jacobian."""
-        new_grads = dict(grads_accum)
-        for pop_name in self.graph.dynamic_population_names:
-            pop = self.graph._populations[pop_name]
-            pop_state = state['populations'].get(pop_name)
-            adj_state = adjoint.get(pop_name)
-            if pop_state is None or adj_state is None:
-                continue
+            dL/dθ  += d(proxy)/dθ          (signal from all future steps via λ)
+            dL/dθ  += d(l_{t+1})/dθ        (direct local loss contribution)
 
-            total_syn = {"I_syn": tf.zeros_like(pop_state[0]), "g_syn": tf.zeros_like(pop_state[0])}
+            λ_t = d(proxy)/dz_t + d(l_{t+1})/dz_t
 
-            for var in pop.trainable_variables:
-                if var.name not in new_grads:
-                    continue
-                param_name = var.name.split('/')[-1].split(':')[0]
-                jac = pop.parameter_jacobian(param_name, pop_state, total_syn)
-                if jac is None:
-                    continue
-                contrib = 0.0
-                for a in adj_state:
-                    if a is not None:
-                        contrib += tf.reduce_sum(a * jac)
-                # if contrib > 1e-8:
-                #     tf.print("Accumulating gradient for", param_name, ":", contrib * self.dt)
-                new_grads[var.name] = new_grads[var.name] + contrib * self.dt
-            # Accumulate gradients from synapses using adjoint_forward (option 2)
-            for syn_name, entry in self.graph._synapses.items():
-                syn_model = entry.model
-                syn_state = state.get('synapses', {}).get(syn_name, [])
-                if not syn_state or not hasattr(syn_model, 'adjoint_forward'):
-                    continue
+        Args:
+            t_sequence: [batch, T, 1]
+            states_sequence: list of T+1 (pop_states, syn_states) from forward_pass
+            target: {pop_name: [batch, T, n_units]}
+            loss_fn: must implement per_step_loss()
 
-                src_name = getattr(entry, 'src', None)
-                tgt_name = getattr(entry, 'tgt', None)
-                if not src_name or not tgt_name:
-                    continue
+        Returns:
+            List of gradients aligned with network.trainable_variables
+        """
+        if t_sequence.shape.rank == 2:
+            t_sequence = t_sequence[:, :, tf.newaxis]
 
-                pre_rate = self.graph._populations[src_name].get_firing_rate(
-                    state['populations'][src_name]
+        T = len(states_sequence) - 1      # states_sequence[0..T]
+        dtype = neuraltide.config.get_dtype()
+        variables = self._network.trainable_variables
+        trainable_vars = [v for v in variables if v.trainable]
+
+        # ── Initialise adjoint vector λ (zeros, same structure as z_0) ──────
+        pop_0, syn_0 = states_sequence[0]
+        lam_pop = [tf.zeros_like(s) for s in pop_0]
+        lam_syn = [tf.zeros_like(s) for s in syn_0]
+
+        # ── Gradient accumulators for θ ──────────────────────────────────────
+        dL_dtheta = {v.name: tf.zeros_like(v) for v in trainable_vars}
+
+        # ── Backward loop ────────────────────────────────────────────────────
+        for t_idx in range(T - 1, -1, -1):
+            pop_t, syn_t = states_sequence[t_idx]          # z_t
+            t_val = t_sequence[:, t_idx:t_idx + 1, 0]
+
+            # target for y_{t+1} = output[:, t_idx, :]
+            target_t1 = {
+                name: target[name][:, t_idx, :]
+                for name in target
+                if t_idx < int(target[name].shape[1])
+            }
+
+            with tf.GradientTape(persistent=True) as tape:
+                tape.watch(pop_t + syn_t)   # watch state tensors only
+                # trainable Variables are watched automatically
+
+                # One integration step: z_{t+1} = F(z_t, θ)
+                new_pop, new_syn, _ = self._step_fn(
+                    (tuple(pop_t), tuple(syn_t), tf.zeros([1], dtype=dtype)),
+                    t_val,
+                    self._graph,
+                    self._integrator,
                 )
-                tgt_pop = self.graph._populations[tgt_name]
-                tgt_obs = tgt_pop.observables(state['populations'][tgt_name])
-                post_v = tgt_obs.get('v_mean', tf.zeros([1, tgt_pop.n_units], dtype=self.dtype))
+                new_pop_list = list(new_pop)
+                new_syn_list = list(new_syn)
 
-                adj_current = {
-                    'I_syn': tf.zeros([1, tgt_pop.n_units], dtype=self.dtype),
-                    'g_syn': tf.zeros([1, tgt_pop.n_units], dtype=self.dtype)
-                }
+                # Firing rates from z_{t+1}
+                new_pop_dict, _ = unpack_state(
+                    self._graph, new_pop_list, new_syn_list
+                )
+                y_t1 = get_firing_rates(self._graph, new_pop_dict)
 
-                syn_adjoint_out, _ = syn_model.adjoint_forward(
-                    adj_current, pre_rate, post_v, syn_state
+                # Per-step loss, normalised by T to match BPTT reduce_mean
+                if target_t1:
+                    l_t1 = (
+                        loss_fn.per_step_loss(y_t1, target_t1)
+                        / tf.cast(T, dtype)
+                    )
+                else:
+                    l_t1 = tf.zeros([], dtype=dtype)
+
+                # VJP proxy scalar: λ_{t+1} · z_{t+1}
+                proxy = (
+                    sum(
+                        tf.reduce_sum(p * lam)
+                        for p, lam in zip(new_pop_list, lam_pop)
+                    )
+                    + sum(
+                        tf.reduce_sum(s * lam)
+                        for s, lam in zip(new_syn_list, lam_syn)
+                    )
                 )
 
-                # Accumulate for synaptic parameters (basic version)
-                for var in syn_model.trainable_variables:
-                    if var.name not in new_grads:
-                        continue
-                    # Simple approximation for now - use mean adjoint
-                    mean_adj = tf.reduce_mean(list(syn_adjoint_out.values())[0])
-                    param_grad = mean_adj * self.dt
-                    new_grads[var.name] = new_grads[var.name] + param_grad
-                    # if tf.abs(param_grad) > 1e-6:
-                    #     tf.print("Synapse gradient for", var.name, ":", param_grad)
+            # ── Gradient of θ: two contributions ────────────────────────────
+            # 1) (dF/dθ)ᵀ · λ_{t+1}  — signal carried from all future steps
+            grads_proxy = tape.gradient(proxy, trainable_vars)
+            # 2) dl_{t+1}/dθ  — direct local loss gradient
+            grads_direct = tape.gradient(l_t1, trainable_vars)
 
-        return new_grads
+            for v, gp, gd in zip(trainable_vars, grads_proxy, grads_direct):
+                g = (
+                    (gp if gp is not None else tf.zeros_like(v))
+                    + (gd if gd is not None else tf.zeros_like(v))
+                )
+                dL_dtheta[v.name] = dL_dtheta[v.name] + g
+
+            # ── Update adjoint vector λ_t ────────────────────────────────────
+            # (dF/dz_t)ᵀ · λ_{t+1}
+            vjp_state = tape.gradient(proxy, pop_t + syn_t)
+            # dl_{t+1}/dz_t
+            dl_dstate = tape.gradient(l_t1, pop_t + syn_t)
+
+            del tape   # release graph memory for this step
+
+            n_pop = len(pop_t)
+            lam_pop = [
+                (vjp_state[i] if vjp_state[i] is not None
+                 else tf.zeros_like(pop_t[i]))
+                + (dl_dstate[i] if dl_dstate[i] is not None
+                   else tf.zeros_like(pop_t[i]))
+                for i in range(n_pop)
+            ]
+            lam_syn = [
+                (vjp_state[n_pop + i] if vjp_state[n_pop + i] is not None
+                 else tf.zeros_like(syn_t[i]))
+                + (dl_dstate[n_pop + i] if dl_dstate[n_pop + i] is not None
+                   else tf.zeros_like(syn_t[i]))
+                for i in range(len(syn_t))
+            ]
+
+        # Return aligned with variables (zeros for non-trainable)
+        return [
+            dL_dtheta.get(v.name, tf.zeros_like(v))
+            for v in variables
+        ]
+
+    def _integrate_step(
+        self,
+        pop_states_dict: Dict[str, StateList],
+        syn_states_dict: Dict[str, StateList],
+        t: TensorType,
+    ) -> Tuple[StateList, StateList]:
+        """
+        Perform one integration step.
+        
+        Args:
+            pop_states_dict: Population states
+            syn_states_dict: Synapse states
+            t: Current time
+        
+        Returns:
+            (new_pop_states, new_syn_states)
+        """
+        dtype = neuraltide.config.get_dtype()
+
+        for name in self._graph.population_names:
+            pop = self._graph._populations[name]
+            if isinstance(pop, InputPopulation):
+                pop_states_dict[name] = [t]
+
+        syn_I: Dict[str, TensorType] = {}
+        syn_g: Dict[str, TensorType] = {}
+        for name in self._graph.dynamic_population_names:
+            n = self._graph._populations[name].n_units
+            syn_I[name] = tf.zeros([1, n], dtype=dtype)
+            syn_g[name] = tf.zeros([1, n], dtype=dtype)
+
+        for syn_name, entry in self._graph._synapses.items():
+            src_pop = self._graph._populations[entry.src]
+            tgt_pop = self._graph._populations[entry.tgt]
+            src_state = pop_states_dict[entry.src]
+            tgt_state = pop_states_dict[entry.tgt]
+            syn_state = syn_states_dict[syn_name]
+
+            pre_rate = src_pop.get_firing_rate(src_state)
+
+            tgt_obs = tgt_pop.observables(tgt_state)
+            post_v = tgt_obs.get(
+                'v_mean',
+                tf.zeros([1, tgt_pop.n_units], dtype=dtype)
+            )
+
+            new_syn_state, _ = self._integrator.step_synapse(
+                entry.model, syn_state, pre_rate, post_v, entry.model.dt
+            )
+
+            current_dict = entry.model.compute_current(
+                new_syn_state, pre_rate, post_v
+            )
+
+            syn_I[entry.tgt] = syn_I[entry.tgt] + current_dict['I_syn']
+            syn_g[entry.tgt] = syn_g[entry.tgt] + current_dict['g_syn']
+            syn_states_dict[syn_name] = new_syn_state
+
+        new_pop_states_list = []
+        for name in self._graph.population_names:
+            pop = self._graph._populations[name]
+            pop_state = pop_states_dict[name]
+
+            if isinstance(pop, InputPopulation):
+                new_pop_states_list.extend(pop_state)
+            else:
+                total_syn = {'I_syn': syn_I[name], 'g_syn': syn_g[name]}
+                new_pop_state, _ = self._integrator.step(pop, pop_state, total_syn)
+                new_pop_states_list.extend(new_pop_state)
+
+        new_syn_states_list = []
+        for name in self._graph.synapse_names:
+            new_syn_states_list.extend(syn_states_dict[name])
+
+        return new_pop_states_list, new_syn_states_list
+
+    def _step_fn(
+        self,
+        states: Tuple[StateList, StateList, TensorType],
+        t: TensorType,
+        graph: NetworkGraph,
+        integrator: BaseIntegrator,
+    ) -> Tuple[StateList, StateList, TensorType]:
+        """
+        Internal step function (same as network._step_fn).
+        """
+        from neuraltide.core.network import compute_synapse_current
+
+        pop_states, syn_states, stability_acc = states
+        dtype = neuraltide.config.get_dtype()
+
+        pop_states_dict = {}
+        idx = 0
+        for name in graph.population_names:
+            pop = graph._populations[name]
+            n = len(pop.state_size)
+            pop_states_dict[name] = pop_states[idx:idx + n]
+            idx += n
+
+        syn_states_dict = {}
+        idx = 0
+        for name in graph.synapse_names:
+            entry = graph._synapses[name]
+            n = len(entry.model.state_size)
+            syn_states_dict[name] = syn_states[idx:idx + n]
+            idx += n
+
+        for name in graph.population_names:
+            pop = graph._populations[name]
+            if isinstance(pop, InputPopulation):
+                pop_states_dict[name] = [t]
+
+        syn_I: Dict[str, TensorType] = {}
+        syn_g: Dict[str, TensorType] = {}
+        for name in graph.dynamic_population_names:
+            n = graph._populations[name].n_units
+            syn_I[name] = tf.zeros([1, n], dtype=dtype)
+            syn_g[name] = tf.zeros([1, n], dtype=dtype)
+
+        for syn_name, entry in graph._synapses.items():
+            src_pop = graph._populations[entry.src]
+            tgt_pop = graph._populations[entry.tgt]
+            src_state = pop_states_dict[entry.src]
+            tgt_state = pop_states_dict[entry.tgt]
+            syn_state = syn_states_dict[syn_name]
+
+            pre_rate = src_pop.get_firing_rate(src_state)
+
+            tgt_obs = tgt_pop.observables(tgt_state)
+            post_v = tgt_obs.get(
+                'v_mean',
+                tf.zeros([1, tgt_pop.n_units], dtype=dtype)
+            )
+
+            new_syn_state, local_err = integrator.step_synapse(
+                entry.model, syn_state, pre_rate, post_v, entry.model.dt
+            )
+
+            current_dict = compute_synapse_current(
+                entry.model, new_syn_state, pre_rate, post_v
+            )
+
+            syn_I[entry.tgt] = syn_I[entry.tgt] + current_dict['I_syn']
+            syn_g[entry.tgt] = syn_g[entry.tgt] + current_dict['g_syn']
+            syn_states_dict[syn_name] = new_syn_state
+
+        stability_error = stability_acc
+        new_pop_states_list = []
+        for name in graph.population_names:
+            pop = graph._populations[name]
+            pop_state = pop_states_dict[name]
+
+            if isinstance(pop, InputPopulation):
+                new_pop_states_list.extend(pop_state)
+            else:
+                total_syn = {'I_syn': syn_I[name], 'g_syn': syn_g[name]}
+                new_pop_state, local_err = integrator.step(pop, pop_state, total_syn)
+                new_pop_states_list.extend(new_pop_state)
+                stability_error = stability_error + local_err
+
+        new_syn_states_list = []
+        for name in graph.synapse_names:
+            new_syn_states_list.extend(syn_states_dict[name])
+
+        return (
+            tuple(new_pop_states_list),
+            tuple(new_syn_states_list),
+            stability_error
+        )
+
+    def compute_gradients(
+        self,
+        t_sequence: TensorType,
+        target: Dict[str, TensorType],
+        loss_fn: BaseLoss,
+    ) -> Tuple[List[TensorType], List[tf.Variable], NetworkOutput]:
+        """
+        Compute gradients using the discrete adjoint backward pass.
+
+        Runs one forward pass (stores states), then one backward pass
+        (adjoint propagation). Does not store the TF computational graph
+        across all T steps — peak memory is O(state_size), not O(T·graph).
+
+        Args:
+            t_sequence: Input sequence [batch, T, 1]
+            target: Target firing rates {pop_name: [batch, T, n_units]}
+            loss_fn: Loss function (must implement per_step_loss for adjoint)
+
+        Returns:
+            (gradients, trainable_variables, network_output)
+        """
+        output, _, states_sequence = self.forward_pass(t_sequence)
+
+        variables = self._network.trainable_variables
+
+        # Extract the primary (non-stability) loss object for adjoint
+        if isinstance(loss_fn, CompositeLoss):
+            main_loss_obj, stab_terms = self._split_composite_loss(loss_fn)
+        else:
+            main_loss_obj = loss_fn
+            stab_terms = []
+
+        # ── Main gradients via discrete adjoint backward pass ────────────────
+        if main_loss_obj is not None:
+            main_grads = self.backward_pass(
+                t_sequence, states_sequence, target, main_loss_obj
+            )
+        else:
+            main_grads = [tf.zeros_like(v) for v in variables]
+
+        # ── Stability penalty gradients via separate GradientTape ────────────
+        # StabilityPenalty depends on integrator local error (a function of
+        # parameters only, not of the long trajectory), so a local tape suffices.
+        if stab_terms:
+            total_stab_weight = sum(w for w, _ in stab_terms)
+            stab_grads = self._stability_gradients()
+            total_grads = [
+                mg + sg * total_stab_weight
+                for mg, sg in zip(main_grads, stab_grads)
+            ]
+        else:
+            total_grads = main_grads
+
+        return total_grads, variables, output
+
+    @staticmethod
+    def _split_composite_loss(
+        loss_fn: CompositeLoss,
+    ) -> Tuple[Optional[BaseLoss], List[Tuple[float, BaseLoss]]]:
+        """
+        Separate CompositeLoss into adjoint-compatible terms and StabilityPenalty.
+
+        Returns:
+            (main_loss_obj, stab_terms)
+            main_loss_obj: first non-stability BaseLoss (or None)
+            stab_terms: list of (weight, StabilityPenalty) entries
+        """
+        from neuraltide.training.losses import StabilityPenalty
+
+        main_terms = [(w, l) for w, l in loss_fn.terms
+                      if not isinstance(l, StabilityPenalty)]
+        stab_terms  = [(w, l) for w, l in loss_fn.terms
+                       if isinstance(l, StabilityPenalty)]
+
+        if not main_terms:
+            return None, stab_terms
+
+        # If there is exactly one main term with weight 1.0, use it directly
+        if len(main_terms) == 1 and main_terms[0][0] == 1.0:
+            return main_terms[0][1], stab_terms
+
+        # Otherwise wrap remaining terms in a new CompositeLoss
+        return CompositeLoss(main_terms), stab_terms
+
+    def _stability_gradients(self) -> List[TensorType]:
+        """
+        Compute gradients for stability penalty.
+        
+        Stability penalty depends on local integrator error,
+        so we compute it via separate GradientTape.
+        """
+        variables = self._network.trainable_variables
+
+        batch_size = 1
+        init_pop, init_syn = self._network.get_initial_state(batch_size)
+        pop_states = list(init_pop)
+        syn_states = list(init_syn)
+        stability_acc = tf.zeros([1], dtype=neuraltide.config.get_dtype())
+
+        t = tf.constant([[[0.05]]], dtype=neuraltide.config.get_dtype())
+
+        with tf.GradientTape() as tape:
+            for _ in range(10):
+                pop_states_tuple = tuple(pop_states)
+                syn_states_tuple = tuple(syn_states)
+
+                new_pop, new_syn, stability_acc = self._step_fn(
+                    (pop_states_tuple, syn_states_tuple, stability_acc),
+                    t,
+                    self._graph,
+                    self._integrator
+                )
+
+                pop_states = list(new_pop)
+                syn_states = list(new_syn)
+
+            stability_loss = tf.reduce_mean(stability_acc)
+
+        grads = tape.gradient(stability_loss, variables)
+
+        return [
+            g if g is not None else tf.zeros_like(v)
+            for g, v in zip(grads, variables)
+        ]

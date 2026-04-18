@@ -1,5 +1,5 @@
 import tensorflow as tf
-from typing import Dict, Tuple
+from typing import Dict, Tuple, List
 
 import neuraltide
 import neuraltide.config
@@ -51,18 +51,44 @@ class StaticSynapse(SynapseModel):
 
         return ({'I_syn': I_syn, 'g_syn': g_syn}, [])
 
-    def adjoint_forward(
+    def derivatives(
         self,
-        adjoint_current: Dict[str, TensorType],
+        state: StateList,
         pre_firing_rate: TensorType,
         post_voltage: TensorType,
+    ) -> StateList:
+        """
+        Compute derivatives for the static synapse.
+
+        Static synapse has no state dynamics, so derivatives is empty.
+        """
+        return []
+
+    def compute_current(
+        self,
         state: StateList,
-    ) -> Tuple[Dict[str, TensorType], StateList]:
-        """Static synapse has no internal dynamics → adjoint flows directly."""
+        pre_firing_rate: TensorType,
+        post_voltage: TensorType,
+    ) -> Dict[str, TensorType]:
+        """
+        Compute synaptic current and conductance.
+
+        Used after numerical integration to compute currents.
+        """
         dtype = neuraltide.config.get_dtype()
-        zero_I = tf.zeros_like(adjoint_current.get('I_syn', tf.zeros([1, self.n_post], dtype=dtype)))
-        zero_g = tf.zeros_like(adjoint_current.get('g_syn', tf.zeros([1, self.n_post], dtype=dtype)))
-        return {'I_syn': zero_I, 'g_syn': zero_g}, []
+        gsyn_max = tf.cast(self.gsyn_max, dtype)
+        pconn = tf.cast(self.pconn, dtype)
+        e_r = tf.cast(self.e_r, dtype)
+
+        firing_probs_T = tf.transpose(pre_firing_rate / 1000.0)
+        FRpre_normed = pconn * firing_probs_T
+
+        post_v_T = tf.transpose(post_voltage)
+        I_pair = gsyn_max * FRpre_normed * (e_r - post_v_T)
+        I_syn = tf.reduce_sum(I_pair, axis=0, keepdims=True)
+        g_syn = tf.reduce_sum(gsyn_max * FRpre_normed, axis=0, keepdims=True)
+
+        return {'I_syn': I_syn, 'g_syn': g_syn}
 
     @property
     def parameter_spec(self) -> Dict[str, Dict[str, any]]:

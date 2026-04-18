@@ -1,5 +1,5 @@
 import tensorflow as tf
-from typing import Dict, Tuple
+from typing import Dict, Tuple, List
 
 import neuraltide
 import neuraltide.config
@@ -80,6 +80,68 @@ class NMDASynapse(SynapseModel):
         g_syn = tf.reduce_sum(g_eff, axis=0, keepdims=True)
 
         return ({'I_syn': I_syn, 'g_syn': g_syn}, [gnmda_new, dgnmda_new])
+
+    def derivatives(
+        self,
+        state: StateList,
+        pre_firing_rate: TensorType,
+        post_voltage: TensorType,
+    ) -> StateList:
+        """
+        Compute derivatives for the NMDA synapse dynamics.
+
+        Differential equations:
+            d(gnmda)/dt = dgnmda
+            d(dgnmda)/dt = (s_input - gnmda - (tau1 + tau2)*dgnmda) / (tau1*tau2)
+
+        where s_input = pconn * firing_probability (converted to rate)
+        """
+        gnmda, dgnmda = state
+
+        dtype = neuraltide.config.get_dtype()
+        pconn = tf.cast(self.pconn_nmda, dtype)
+        tau1 = tf.cast(self.tau1_nmda, dtype)
+        tau2 = tf.cast(self.tau2_nmda, dtype)
+
+        firing_probs_T = tf.transpose(pre_firing_rate / 1000.0)
+        s_input = pconn * firing_probs_T
+
+        d_gnmda_dt = dgnmda
+
+        d_dgnmda_dt = (s_input - gnmda - (tau1 + tau2) * dgnmda) / (tau1 * tau2)
+
+        return [d_gnmda_dt, d_dgnmda_dt]
+
+    def compute_current(
+        self,
+        state: StateList,
+        pre_firing_rate: TensorType,
+        post_voltage: TensorType,
+    ) -> Dict[str, TensorType]:
+        """
+        Compute synaptic current and conductance from state.
+
+        Used after numerical integration to compute currents.
+        Includes magnesium block.
+        """
+        dtype = neuraltide.config.get_dtype()
+        gsyn_max_nmda = tf.cast(self.gsyn_max_nmda, dtype)
+        Mgb = tf.cast(self.Mgb, dtype)
+        av_nmda = tf.cast(self.av_nmda, dtype)
+        e_r_nmda = tf.cast(self.e_r_nmda, dtype)
+        v_ref = tf.cast(self.v_ref, dtype)
+
+        gnmda = state[0]
+
+        post_v_flat = tf.reshape(post_voltage, [-1])
+        mg_block = 1.0 / (1.0 + Mgb * tf.exp(-av_nmda * (post_v_flat - v_ref)))
+
+        g_eff = gsyn_max_nmda * gnmda * mg_block
+        I_pair = g_eff * (e_r_nmda - post_v_flat)
+        I_syn = tf.reduce_sum(I_pair, axis=0, keepdims=True)
+        g_syn = tf.reduce_sum(g_eff, axis=0, keepdims=True)
+
+        return {'I_syn': I_syn, 'g_syn': g_syn}
 
     @property
     def parameter_spec(self) -> Dict[str, Dict[str, any]]:
