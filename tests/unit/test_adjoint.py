@@ -116,7 +116,7 @@ class TestAdjointBasics:
         t_seq = tf.constant(np.arange(10, dtype=np.float32)[None, :, None] * 0.05)
         solver = AdjointSolver(network, network._integrator)
 
-        output, states_final = solver.forward_pass(t_seq)
+        output, states_final, states_seq = solver.forward_pass(t_seq)
 
         assert output is not None, "forward_pass should return output"
         assert hasattr(output, 'firing_rates'), "output should have firing_rates"
@@ -196,13 +196,160 @@ class TestAdjointGradientCorrectness:
         loss_fn = CompositeLoss([
             (1.0, MSELoss(target)),
         ])
-        adj_output, _ = solver.forward_pass(t_seq)
+        adj_output, _, _ = solver.forward_pass(t_seq)
 
         bptt_stability = float(bptt_output.stability_loss)
         adj_stability = float(adj_output.stability_loss)
 
         assert abs(bptt_stability - adj_stability) < 1e-6, \
             f"Stability loss mismatch: BPTT={bptt_stability}, Adj={adj_stability}"
+
+
+class TestAdjointBackwardPass:
+    """Tests for the true discrete adjoint backward_pass."""
+
+    def _make_network(self, dt=0.1, n_units=1):
+        from neuraltide.synapses import TsodyksMarkramSynapse
+        pop = IzhikevichMeanField(dt=dt, params={
+            'tau_pop': {'value': 1.0,  'trainable': False},
+            'alpha':   {'value': 0.5,  'trainable': False},
+            'a':       {'value': 0.02, 'trainable': False},
+            'b':       {'value': 0.2,  'trainable': False},
+            'w_jump':  {'value': 0.1,  'trainable': False},
+            'Delta_I': {'value': 0.5,  'trainable': True},
+            'I_ext':   {'value': 0.1,  'trainable': True},
+        })
+        gen = VonMisesGenerator(
+            dt=dt,
+            params={'mean_rate': 20.0, 'R': 0.5, 'freq': 8.0, 'phase': 0.0},
+            name='theta_gen'
+        )
+        syn = TsodyksMarkramSynapse(n_pre=1, n_post=1, dt=dt, params={
+            'gsyn_max': {'value': [[0.1]], 'trainable': True},
+            'tau_f':    {'value': 20.0,  'trainable': False},
+            'tau_d':    {'value': 5.0,   'trainable': False},
+            'tau_r':    {'value': 200.0, 'trainable': False},
+            'Uinc':     {'value': 0.2,   'trainable': False},
+            'pconn':    {'value': [[1.0]], 'trainable': False},
+            'e_r':      {'value': 0.0,   'trainable': False},
+        })
+        graph = NetworkGraph(dt=dt)
+        graph.add_input_population('theta', gen)
+        graph.add_population('exc', pop)
+        graph.add_synapse('theta->exc', syn, src='theta', tgt='exc')
+        return NetworkRNN(graph, integrator=RK4Integrator())
+
+    def test_backward_pass_matches_bptt(self):
+        """backward_pass gradients must match BPTT within rtol=1e-3."""
+        from neuraltide.training.adjoint import AdjointSolver
+
+        dt = 0.1
+        T = 3.0
+        n_steps = int(T / dt)
+        network = self._make_network(dt=dt)
+
+        t_values = np.arange(n_steps, dtype=np.float32) * dt
+        t_seq = tf.constant(t_values[None, :, None])
+
+        target_arr = (10.0 + 5.0 * np.sin(2 * np.pi * 8.0 * t_values / 1000.0))[None, :, None]
+        target = {'exc': tf.constant(target_arr, dtype=tf.float32)}
+        loss_fn = MSELoss(target)
+
+        # BPTT baseline
+        with tf.GradientTape() as bptt_tape:
+            bptt_out = network(t_seq, training=False)
+            bptt_loss = loss_fn(bptt_out, network)
+        bptt_grads = bptt_tape.gradient(bptt_loss, network.trainable_variables)
+
+        # Adjoint backward_pass
+        solver = AdjointSolver(network, network._integrator)
+        _, _, states_seq = solver.forward_pass(t_seq)
+        adj_grads = solver.backward_pass(t_seq, states_seq, target, loss_fn)
+
+        assert len(bptt_grads) == len(adj_grads), "Should have same number of gradients"
+
+        for v, bptt_g, adj_g in zip(
+            network.trainable_variables, bptt_grads, adj_grads
+        ):
+            if bptt_g is None:
+                continue
+            assert adj_g is not None, f"{v.name}: adjoint gradient should not be None"
+            diff = float(tf.reduce_mean(tf.abs(bptt_g - adj_g)))
+            assert diff < 1e-3, (
+                f"{v.name}: backward_pass diff={diff:.6f} should be < 1e-3"
+            )
+
+    def test_backward_pass_longer_sequence(self):
+        """backward_pass gradients match BPTT for a longer T."""
+        from neuraltide.training.adjoint import AdjointSolver
+
+        dt = 0.1
+        T = 10.0
+        n_steps = int(T / dt)
+        network = self._make_network(dt=dt)
+
+        t_values = np.arange(n_steps, dtype=np.float32) * dt
+        t_seq = tf.constant(t_values[None, :, None])
+
+        target_arr = (10.0 + 5.0 * np.sin(2 * np.pi * 8.0 * t_values / 1000.0))[None, :, None]
+        target = {'exc': tf.constant(target_arr, dtype=tf.float32)}
+        loss_fn = MSELoss(target)
+
+        with tf.GradientTape() as bptt_tape:
+            bptt_out = network(t_seq, training=False)
+            bptt_loss = loss_fn(bptt_out, network)
+        bptt_grads = bptt_tape.gradient(bptt_loss, network.trainable_variables)
+
+        solver = AdjointSolver(network, network._integrator)
+        _, _, states_seq = solver.forward_pass(t_seq)
+        adj_grads = solver.backward_pass(t_seq, states_seq, target, loss_fn)
+
+        for v, bptt_g, adj_g in zip(
+            network.trainable_variables, bptt_grads, adj_grads
+        ):
+            if bptt_g is None:
+                continue
+            diff = float(tf.reduce_mean(tf.abs(bptt_g - adj_g)))
+            assert diff < 1e-3, (
+                f"{v.name}: T={T} diff={diff:.6f} should be < 1e-3"
+            )
+
+    def test_backward_pass_gradient_direction(self):
+        """backward_pass gradients should point in the same direction as BPTT."""
+        from neuraltide.training.adjoint import AdjointSolver
+
+        dt = 0.1
+        T = 5.0
+        n_steps = int(T / dt)
+        network = self._make_network(dt=dt)
+
+        t_values = np.arange(n_steps, dtype=np.float32) * dt
+        t_seq = tf.constant(t_values[None, :, None])
+
+        target_arr = (5.0 * np.ones(n_steps))[None, :, None]
+        target = {'exc': tf.constant(target_arr, dtype=tf.float32)}
+        loss_fn = MSELoss(target)
+
+        with tf.GradientTape() as bptt_tape:
+            bptt_out = network(t_seq, training=False)
+            bptt_loss = loss_fn(bptt_out, network)
+        bptt_grads = bptt_tape.gradient(bptt_loss, network.trainable_variables)
+
+        solver = AdjointSolver(network, network._integrator)
+        _, _, states_seq = solver.forward_pass(t_seq)
+        adj_grads = solver.backward_pass(t_seq, states_seq, target, loss_fn)
+
+        for v, bptt_g, adj_g in zip(
+            network.trainable_variables, bptt_grads, adj_grads
+        ):
+            if bptt_g is None:
+                continue
+            if tf.reduce_sum(tf.abs(bptt_g)) < 1e-8:
+                continue  # skip near-zero gradients
+            dot = float(tf.reduce_sum(bptt_g * adj_g))
+            assert dot > 0, (
+                f"{v.name}: adjoint gradient should point in same direction as BPTT"
+            )
 
 
 class TestAdjointWithStabilityPenalty:

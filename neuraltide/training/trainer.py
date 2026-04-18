@@ -1,7 +1,7 @@
 import json
 import os
 from dataclasses import dataclass, asdict
-from typing import Dict, List, Optional, Callable
+from typing import Dict, List, Optional, Callable, Literal
 
 import tensorflow as tf
 
@@ -10,6 +10,11 @@ import neuraltide.config
 from neuraltide.core.network import NetworkRNN, NetworkOutput
 from neuraltide.training.losses import CompositeLoss
 from neuraltide.core.types import TensorType
+
+try:
+    from neuraltide.training.adjoint import compute_gradients as adjoint_compute_gradients
+except ImportError:
+    adjoint_compute_gradients = None
 
 
 @dataclass
@@ -33,6 +38,7 @@ class Trainer:
         network: сеть.
         loss_fn: функция потерь.
         optimizer: оптимизатор.
+        grad_method: метод вычисления градиентов: "bptt" (по умолчанию) или "adjoint".
         grad_clip_norm: максимальная норма градиента (0.0 — без клиппинга).
         run_eagerly: отключить tf.function для отладки.
     """
@@ -42,14 +48,19 @@ class Trainer:
         network: NetworkRNN,
         loss_fn: CompositeLoss,
         optimizer: tf.keras.optimizers.Optimizer,
+        grad_method: Literal["bptt", "adjoint"] = "bptt",
         grad_clip_norm: float = 1.0,
         run_eagerly: bool = False,
     ):
         self.network = network
         self.loss_fn = loss_fn
         self.optimizer = optimizer
+        self.grad_method = grad_method
         self.grad_clip_norm = grad_clip_norm
         self.run_eagerly = run_eagerly
+
+        if grad_method == "adjoint" and adjoint_compute_gradients is None:
+            raise ImportError("adjoint method not available")
 
         if not run_eagerly:
             self._train_step = tf.function(self._train_step)
@@ -59,7 +70,10 @@ class Trainer:
             output = self.network(t_sequence, training=True)
             loss = self.loss_fn(output, self.network)
 
-        grads = tape.gradient(loss, self.network.trainable_variables)
+        if self.grad_method == "adjoint":
+            grads = adjoint_compute_gradients(self.network, t_sequence, self.loss_fn)
+        else:
+            grads = tape.gradient(loss, self.network.trainable_variables)
 
         grads_and_vars = [(g, v) for g, v in zip(grads, self.network.trainable_variables) if g is not None]
         
@@ -85,7 +99,10 @@ class Trainer:
             output = self.network(t_sequence, training=True)
             loss = self.loss_fn(output, self.network)
 
-        grads = tape.gradient(loss, self.network.trainable_variables)
+        if self.grad_method == "adjoint":
+            grads = adjoint_compute_gradients(self.network, t_sequence, self.loss_fn)
+        else:
+            grads = tape.gradient(loss, self.network.trainable_variables)
 
         grads_and_vars = [(g, v) for g, v in zip(grads, self.network.trainable_variables) if g is not None]
         
