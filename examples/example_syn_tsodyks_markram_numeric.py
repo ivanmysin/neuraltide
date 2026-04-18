@@ -16,13 +16,12 @@ from neuraltide.populations.izhikevich_mf import IzhikevichMeanField
 from neuraltide.synapses.tsodyks_markram import TsodyksMarkramSynapse
 from neuraltide.inputs.von_mises import VonMisesGenerator
 from neuraltide.integrators import RK4Integrator
-from neuraltide.utils import seed_everything
 from neuraltide.core.network import _step_fn
 
-seed_everything(42)
 
-dt = 0.05
-T = 200
+
+dt = 0.1
+T = 150
 
 gen = VonMisesGenerator(
     dt=dt,
@@ -36,13 +35,13 @@ gen = VonMisesGenerator(
 )
 
 syn = TsodyksMarkramSynapse(n_pre=1, n_post=2, dt=dt, params={
-    'gsyn_max': [[0.15, 0.12]],
+    'gsyn_max': [[100.15, 100.12]],
     'tau_f': 30.0,
     'tau_d': 8.0,
     'tau_r': 300.0,
     'Uinc': 0.3,
     'pconn': [[1.0, 1.0]],
-    'e_r': 0.0,
+    'e_r': 1.0,
 })
 
 pop = IzhikevichMeanField(dt=dt, params={
@@ -51,8 +50,8 @@ pop = IzhikevichMeanField(dt=dt, params={
     'a': [0.02, 0.02],
     'b': [0.2, 0.2],
     'w_jump': [0.1, 0.1],
-    'Delta_I': [0.5, 0.5],
-    'I_ext': [1.5, 1.5],
+    'Delta_I': [0.01, 0.01],
+    'I_ext': [0.0, 0.0],
 })
 
 graph = NetworkGraph(dt=dt)

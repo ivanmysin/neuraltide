@@ -17,11 +17,9 @@ from neuraltide.populations.izhikevich_mf import IzhikevichMeanField
 from neuraltide.synapses.tsodyks_markram import TsodyksMarkramSynapse
 from neuraltide.inputs.von_mises import VonMisesGenerator
 from neuraltide.integrators import RK4Integrator
-from neuraltide.utils import seed_everything
 
-seed_everything(42)
 
-dt = 0.5
+dt = 0.1
 T = 200
 
 gen = VonMisesGenerator(
@@ -36,13 +34,13 @@ gen = VonMisesGenerator(
 )
 
 syn = TsodyksMarkramSynapse(n_pre=1, n_post=2, dt=dt, params={
-    'gsyn_max': {'value': [[0.15, 0.12]], 'trainable': False},
+    'gsyn_max': {'value': [[100.15, 100.12]], 'trainable': False},
     'tau_f':    {'value': 30.0,  'trainable': False},
     'tau_d':    {'value': 8.0,   'trainable': False},
     'tau_r':    {'value': 300.0, 'trainable': False},
     'Uinc':     {'value': 0.3,   'trainable': False},
     'pconn':    {'value': [[1.0, 1.0]], 'trainable': False},
-    'e_r':      {'value': 0.0,   'trainable': False},
+    'e_r':      {'value': 1.0,   'trainable': False},
 })
 
 pop = IzhikevichMeanField(dt=dt, params={
@@ -51,8 +49,8 @@ pop = IzhikevichMeanField(dt=dt, params={
     'a':         {'value': [0.02, 0.02], 'trainable': False},
     'b':         {'value': [0.2, 0.2],   'trainable': False},
     'w_jump':    {'value': [0.1, 0.1],   'trainable': False},
-    'Delta_I':   {'value': [0.5, 0.5],   'trainable': False},
-    'I_ext':     {'value': [1.5, 1.5],   'trainable': False},
+    'Delta_I':   {'value': [0.01, 0.01],   'trainable': False},
+    'I_ext':     {'value': [0.0, 0.0],   'trainable': False},
 })
 
 graph = NetworkGraph(dt=dt)
