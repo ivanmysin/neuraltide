@@ -23,7 +23,7 @@ from neuraltide.utils import seed_everything, print_summary
 
 
 dt = 0.1
-T = 5
+T = 500
 n_steps = int(T / dt)
 
 pop = IzhikevichMeanField(dt=dt, params={
@@ -32,7 +32,7 @@ pop = IzhikevichMeanField(dt=dt, params={
     'a':         {'value': [0.02, 0.02], 'trainable': False},
     'b':         {'value': [0.2, 0.2],   'trainable': False},
     'w_jump':    {'value': [0.1, 0.1],   'trainable': False},
-    'Delta_I':   {'value': [0.5, 0.5],   'trainable': True,
+    'Delta_I':   {'value': [0.05, 0.05],   'trainable': True,
                   'min': 0.01, 'max': 2.0},
     'I_ext':     {'value': [0.1, 0.1],   'trainable': True,
                   'min': -2.0, 'max': 2.0},
