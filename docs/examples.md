@@ -551,3 +551,49 @@ t_seq = tf.constant(np.arange(0, 1000, 0.5)[None, :, None])
 output = network(t_seq)
 print(output.firing_rates['exc'].shape)
 ```
+
+---
+
+## Пример: Управление начальным состоянием и Stateful режим
+
+NeuralTide позволяет:
+1. Устанавливать пользовательские начальные условия
+2. Сохранять состояние между батчами (stateful режим)
+3. Сбрасывать состояние для нового эксперимента
+
+### Пользовательские начальные условия
+
+```python
+network = NetworkRNN(graph, integrator=RK4Integrator())
+
+# Получение начального состояния
+init_pop, init_syn = network.get_initial_state(batch_size=1)
+
+# Модификация: r=0.5, v=-1.0, w=0.0 (для IzhikevichMeanField)
+init_pop[0] = tf.constant([[0.5]])  # r
+init_pop[1] = tf.constant([[-1.0]])  # v (относительно rest=0)
+init_pop[2] = tf.constant([[0.0]])  # w
+
+# Установка состояния
+network.set_initial_state((init_pop, init_syn))
+
+# Запуск симуляции
+output = network(t_seq, initial_state=(init_pop, init_syn))
+```
+
+### Stateful режим
+
+```python
+# Создание сети с stateful=True
+network = NetworkRNN(graph, integrator=RK4Integrator(), stateful=True)
+
+# Первый батч
+output1 = network(t_seq)
+final_state = network.get_state()
+
+# Второй батч продолжает с финального состояния первого
+output2 = network(t_seq)
+
+# Сброс для нового эксперимента
+network.reset_state()
+```

@@ -348,6 +348,7 @@ class NetworkRNN(tf.keras.layers.Layer):
         return_sequences: bool = True,
         return_hidden_states: bool = False,
         stability_penalty_weight: float = 0.0,
+        stateful: bool = False,
         **kwargs,
     ):
         super().__init__(**kwargs)
@@ -356,6 +357,8 @@ class NetworkRNN(tf.keras.layers.Layer):
         self._integrator = integrator
         self._return_hidden_states = return_hidden_states
         self._stability_penalty_weight = stability_penalty_weight
+        self._stateful = stateful
+        self._current_state: Optional[Tuple[StateList, StateList]] = None
         
         self._build()
 
@@ -391,6 +394,7 @@ class NetworkRNN(tf.keras.layers.Layer):
         t_sequence: TensorType,
         initial_state: Optional[Tuple[StateList, StateList]] = None,
         training: bool = False,
+        reset_state: bool = False,
     ) -> NetworkOutput:
         """
         Симулирует сеть на протяжении временной последовательности.
@@ -399,7 +403,11 @@ class NetworkRNN(tf.keras.layers.Layer):
             t_sequence: tf.Tensor shape [batch, T, 1] или [batch, T]
                 Временная последовательность в мс.
             initial_state: Optional[Tuple[pop_states, syn_states]]
-                Начальное состояние. Если None, используется нулевое.
+                Начальное состояние. Если None, используется нулевое
+                (или _current_state если stateful=True).
+            training: bool — режим обучения.
+            reset_state: bool — сбросить состояние перед прогоном.
+                Полезно для batch-симуляций без stateful mode.
         
         Returns:
             NetworkOutput с firing_rates для каждой динамической популяции.
@@ -409,11 +417,16 @@ class NetworkRNN(tf.keras.layers.Layer):
         
         n_steps = int(t_sequence.shape[1])
         
-        if initial_state is None:
+        if reset_state:
+            self._current_state = None
+        
+        if initial_state is not None:
+            init_pop, init_syn = initial_state
+        elif self._stateful and self._current_state is not None:
+            init_pop, init_syn = self._current_state
+        else:
             init_pop = list(self._init_pop_states)
             init_syn = list(self._init_syn_states)
-        else:
-            init_pop, init_syn = initial_state
         
         pop_states = list(init_pop)
         syn_states = list(init_syn)
@@ -463,6 +476,9 @@ class NetworkRNN(tf.keras.layers.Layer):
         
         stability_loss = self._stability_penalty_weight * tf.reduce_mean(stability_acc)
         
+        if self._stateful:
+            self._current_state = (pop_states, syn_states)
+        
         return NetworkOutput(
             firing_rates=all_rates,
             hidden_states=None,
@@ -480,7 +496,7 @@ class NetworkRNN(tf.keras.layers.Layer):
         return vars_
 
     def get_initial_state(self, batch_size: int = 1) -> Tuple[StateList, StateList]:
-        """Возвращает начальное состояние сети."""
+        """Возвращает начальное состояние сети (по умолчанию нулевое)."""
         init_pop = []
         for pop in self._graph._populations.values():
             init_pop.extend(pop.get_initial_state(batch_size))
@@ -490,3 +506,32 @@ class NetworkRNN(tf.keras.layers.Layer):
             init_syn.extend(entry.model.get_initial_state(batch_size))
         
         return init_pop, init_syn
+
+    def get_state(self) -> Tuple[StateList, StateList]:
+        """
+        Возвращает текущее сохранённое состояние.
+
+        В stateful режиме после вызова call() возвращает состояние
+        на конец последнего прогона. Если stateful=False или
+        состояние не установлено, возвращает None.
+
+        Returns:
+            Tuple[pop_states, syn_states] или None.
+        """
+        return self._current_state
+
+    def set_initial_state(self, state: Tuple[StateList, StateList]) -> None:
+        """
+        Устанавливает внутреннее состояние сети.
+
+        Позволяет продолжить симуляцию с заданного состояния
+        вместо нулевого начального состояния.
+
+        Args:
+            state: Tuple[pop_states, syn_states] — состояние популяций и синапсов.
+        """
+        self._current_state = state
+
+    def reset_state(self) -> None:
+        """Сбрасывает внутреннее состояние в нулевое."""
+        self._current_state = None

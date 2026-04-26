@@ -1,6 +1,6 @@
 import tensorflow as tf
 from abc import ABC, abstractmethod
-from typing import Dict, List, Tuple, Any
+from typing import Dict, List, Tuple, Any, Optional
 
 import neuraltide.config
 from neuraltide.constraints import MinMaxConstraint
@@ -42,6 +42,7 @@ class PopulationModel(tf.keras.layers.Layer):
         super().__init__(name=name, **kwargs)
         self.n_units = n_units
         self.dt = dt
+        self._cached_state: Optional[StateList] = None
 
     def _make_param(self, params: dict, name: str) -> tf.Variable:
         """
@@ -124,6 +125,25 @@ class PopulationModel(tf.keras.layers.Layer):
                 [tf.zeros([1, n_units]), ...]  — по одному тензору на переменную состояния.
         """
         raise NotImplementedError
+
+    def set_initial_state(self, state: StateList) -> None:
+        """
+        Устанавливает внутреннее состояние популяции.
+
+        Позволяет задать начальное состояние для симуляции
+        с ненулевыми начальными условиями.
+
+        Args:
+            state: list of tf.Tensor — должно совпадать по структуре
+                с возвращаемым значением get_initial_state().
+
+        Note:
+            Подклассы должны переопределить этот метод для
+            поддержки stateful режима, если требуется сохранять
+            состояние между батчами. По умолчанию просто
+            сохраняет состояние в self._cached_state.
+        """
+        self._cached_state = state
 
     @abstractmethod
     def derivatives(
@@ -272,6 +292,7 @@ class SynapseModel(tf.keras.layers.Layer):
         self.n_pre = n_pre
         self.n_post = n_post
         self.dt = dt
+        self._cached_state: Optional[StateList] = None
 
     def _make_param(self, params: dict, name: str) -> tf.Variable:
         """
@@ -378,6 +399,19 @@ class SynapseModel(tf.keras.layers.Layer):
     def get_initial_state(self, batch_size: int = 1) -> StateList:
         """Возвращает список тензоров начального состояния синапса."""
         raise NotImplementedError
+
+    def set_initial_state(self, state: StateList) -> None:
+        """
+        Устанавливает внутреннее состояние синапса.
+
+        Позволяет задать начальное состояние для симуляции
+        с ненулевыми начальными условиями.
+
+        Args:
+            state: list of tf.Tensor — должно совпадать по структуре
+                с возвращаемым значением get_initial_state().
+        """
+        self._cached_state = state
 
     @abstractmethod
     def forward(

@@ -1,7 +1,7 @@
 import json
 import os
 from dataclasses import dataclass, asdict
-from typing import Dict, List, Optional, Callable, Literal
+from typing import Dict, List, Optional, Callable, Literal, Tuple
 
 import tensorflow as tf
 
@@ -9,7 +9,7 @@ import neuraltide
 import neuraltide.config
 from neuraltide.core.network import NetworkRNN, NetworkOutput
 from neuraltide.training.losses import CompositeLoss
-from neuraltide.core.types import TensorType
+from neuraltide.core.types import TensorType, StateList
 
 try:
     from neuraltide.training.adjoint import compute_gradients as adjoint_compute_gradients
@@ -180,6 +180,68 @@ class Trainer:
     def predict(self, t_sequence: TensorType) -> NetworkOutput:
         """Предсказание без обучения."""
         return self.network(t_sequence, training=False)
+
+    def predict_with_state(
+        self,
+        t_sequence: TensorType,
+        initial_state: Optional[Tuple[StateList, StateList]] = None,
+        return_final_state: bool = False,
+    ) -> NetworkOutput:
+        """
+        Предсказание с заданным начальным состоянием.
+
+        Args:
+            t_sequence: tf.Tensor shape [batch, T, 1] — временная последовательность.
+            initial_state: начальное состояние (pop_states, syn_states).
+            return_final_state: вернуть финальное состояние в output.hidden_states.
+
+        Returns:
+            NetworkOutput с firing_rates.
+        """
+        return self.network(
+            t_sequence,
+            initial_state=initial_state,
+            training=False,
+            reset_state=False,
+        )
+
+    def train_step_with_state(
+        self,
+        t_sequence: TensorType,
+        initial_state: Optional[Tuple[StateList, StateList]] = None,
+    ) -> Dict[str, any]:
+        """
+        Один шаг обучения с заданным начальным состоянием.
+
+        Args:
+            t_sequence: tf.Tensor shape [batch, T, 1].
+            initial_state: начальное состояние (pop_states, syn_states).
+
+        Returns:
+            dict с 'loss' и опционально 'final_state'.
+        """
+        with tf.GradientTape() as tape:
+            output = self.network(t_sequence, initial_state=initial_state, training=True)
+            loss = self.loss_fn(output, self.network)
+
+        if self.grad_method == "adjoint":
+            grads = adjoint_compute_gradients(self.network, t_sequence, self.loss_fn)
+        else:
+            grads = tape.gradient(loss, self.network.trainable_variables)
+
+        grads_and_vars = [(g, v) for g, v in zip(grads, self.network.trainable_variables) if g is not None]
+        
+        if not grads_and_vars:
+            return {'loss': loss}
+
+        if self.grad_clip_norm > 0:
+            grads_only = [g for g, v in grads_and_vars]
+            clipped_grads, _ = tf.clip_by_global_norm(grads_only, self.grad_clip_norm)
+            grads_and_vars = [(g, v) for g, (_, v) in zip(clipped_grads, grads_and_vars)]
+
+        self.optimizer.apply_gradients(grads_and_vars)
+
+        return {'loss': loss}
 
     def save_experiment(self, path: str) -> None:
         """Сохранение состояния эксперимента."""

@@ -218,6 +218,7 @@ NetworkRNN(
     return_sequences: bool = True,
     return_hidden_states: bool = False,
     stability_penalty_weight: float = 0.0,
+    stateful: bool = False,
     **kwargs
 )
 ```
@@ -229,6 +230,7 @@ NetworkRNN(
 | `return_sequences` | bool | Возвращать последовательности | True |
 | `return_hidden_states` | bool | Возвращать скрытые состояния | False |
 | `stability_penalty_weight` | float | Вес штрафа за стабильность | 0.0 |
+| `stateful` | bool | Сохранять состояние между батчами | False |
 
 ### Вызов сети
 
@@ -240,6 +242,7 @@ output = network(t_sequence, initial_state=None, training=False)
 - `t_sequence`: tf.Tensor shape `[batch, T, 1]` или `[batch, T]` — временная последовательность в мс
 - `initial_state`: Optional[Tuple[pop_states, syn_states]] — начальное состояние. Если None, используется нулевое.
 - `training`: bool — режим (влияет на dropout и т.д.)
+- `reset_state`: bool — сбросить состояние перед прогоном (полезно для не-stateful режима)
 
 **Возвращает**: `NetworkOutput`
 
@@ -275,6 +278,38 @@ init_pop, init_syn = network.get_initial_state(batch_size=2)
 ```
 
 **Возвращает**: `Tuple[StateList, StateList]`
+
+#### `set_initial_state(state)`
+
+Устанавливает начальное состояние сети.
+
+```python
+init_pop, init_syn = network.get_initial_state()
+init_pop[0] = tf.constant([[0.5, 0.5]])  # r = 0.5
+network.set_initial_state((init_pop, init_syn))
+```
+
+**Args**:
+- `state`: Tuple[pop_states, syn_states]
+
+#### `get_state()`
+
+Возвращает текущее сохранённое состояние (после прогона в stateful режиме).
+
+```python
+output = network(t_seq)
+current_state = network.get_state()
+```
+
+**Возвращает**: `Tuple[StateList, StateList]` или `None`
+
+#### `reset_state()`
+
+Сбрасывает состояние в нулевое.
+
+```python
+network.reset_state()
+```
 
 ---
 
