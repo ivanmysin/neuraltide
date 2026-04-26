@@ -91,7 +91,7 @@ class Trainer:
         return {'loss': loss}
 
     def train_step(self, t_sequence: TensorType) -> Dict[str, float]:
-        if self.gradient_method == "adjoint":
+        if self.grad_method == "adjoint":
             if self.run_eagerly:
                 return self._train_step_adjoint(t_sequence)
             return self._train_step_adjoint(t_sequence)

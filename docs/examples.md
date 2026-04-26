@@ -597,3 +597,39 @@ output2 = network(t_seq)
 # Сброс для нового эксперимента
 network.reset_state()
 ```
+
+---
+
+## Пример 9: Взаимное ингибирование двух популяций
+
+Две популяции fast-spiking нейронов с взаимным ингибированием через синапсыshort-term depression (Tsodyks-Markram). Оптимизируются синаптические проводимости и внешние токи.
+
+```python
+from neuraltide.examples.example_mutual_inhibition import *
+```
+
+Полное описание примера в файле [`examples/example_mutual_inhibition.py`](examples/example_mutual_inhibition.py).
+
+### Архитектура
+
+- Две популяции `IzhikevichMeanField` (pop1, pop2) с dimensionalными параметрами
+- Каждая популяция получает вход от `VonMisesGenerator` со сдвигом фазы 150° (2.61 рад)
+- Взаимное ингибирование через `TsodyksMarkramSynapse` (short-term depression)
+
+### Оптимизируемые параметры
+
+| Параметр | Начальное | Диапазон |
+|----------|-----------|----------|
+| `gsyn_max` (syn_1to2, syn_2to1) | 3000 пСм | 100–5000 |
+| `I_ext` (pop1, pop2) | 200 пА | 50–500 |
+| `tau_d` | 6.02 мс | 2–15 |
+| `tau_r` | 359.8 мс | 91–1300 |
+| `tau_f` | 21.0 мс | 6–240 |
+| `U_inc` | 0.25 | 0.04–0.7 |
+
+### Экспорт результатов
+
+```python
+trainer.export_results('results.json')
+trainer.export_results('results.csv', format='csv')
+```

@@ -238,7 +238,10 @@ class IzhikevichMeanField(PopulationModel):
             Each value is a list of length n_units.
         """
         def process_param(value, param_name):
-            """Convert scalar/list/np.ndarray to list of length n_units."""
+            """Convert scalar/list/np.ndarray/dict to list of length n_units."""
+            if isinstance(value, dict):
+                value = value.get('value', value)
+            
             if isinstance(value, (list, tuple)):
                 if len(value) == n_units:
                     return [float(v) for v in value]
