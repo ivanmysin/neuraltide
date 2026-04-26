@@ -1,7 +1,8 @@
+import csv
 import json
 import os
 from dataclasses import dataclass, asdict
-from typing import Dict, List, Optional, Callable, Literal, Tuple
+from typing import Dict, List, Optional, Callable, Literal, Tuple, Union
 
 import tensorflow as tf
 
@@ -175,6 +176,7 @@ class Trainer:
                     if hasattr(callback, 'on_epoch_end'):
                         callback.on_epoch_end(epoch, {'loss': loss_val})
 
+        self._last_history = history
         return history
 
     def predict(self, t_sequence: TensorType) -> NetworkOutput:
@@ -293,3 +295,86 @@ class Trainer:
         )
 
         return trainer
+
+    def export_results(
+        self,
+        path_or_fd: Union[str, os.PathLike],
+        format: Literal["json", "csv"] = "json",
+        include_config: bool = True,
+    ) -> None:
+        """
+        Экспорт результатов оптимизации в файл.
+
+        Args:
+            path_or_fd: путь к файлу или файловый дескриптор.
+            format: формат вывода — "json" или "csv".
+            include_config: включить конфигурацию сети.
+        """
+        if format == "json":
+            self._export_json(path_or_fd, include_config)
+        elif format == "csv":
+            self._export_csv(path_or_fd)
+        else:
+            raise ValueError(f"Unknown format: {format}")
+
+    def _export_json(self, path_or_fd: Union[str, os.PathLike], include_config: bool) -> None:
+        results = {
+            'trainable_variables': [],
+            'loss_history': [],
+        }
+
+        for v in self.network.trainable_variables:
+            results['trainable_variables'].append({
+                'name': v.name,
+                'value': float(v.numpy()),
+            })
+
+        if hasattr(self, '_last_history'):
+            results['loss_history'] = self._last_history.loss_history
+
+        if include_config:
+            results['config'] = self._get_config()
+
+        if isinstance(path_or_fd, (str, os.PathLike)):
+            with open(path_or_fd, 'w') as f:
+                json.dump(results, f, indent=2)
+        else:
+            json.dump(results, path_or_fd, indent=2)
+
+    def _export_csv(self, path_or_fd: Union[str, os.PathLike]) -> None:
+        rows = []
+
+        rows.append(['name', 'value'])
+
+        for v in self.network.trainable_variables:
+            rows.append([v.name, float(v.numpy())])
+
+        if isinstance(path_or_fd, (str, os.PathLike)):
+            with open(path_or_fd, 'w', newline='') as f:
+                writer = csv.writer(f)
+                writer.writerows(rows)
+        else:
+            writer = csv.writer(path_or_fd)
+            writer.writerows(rows)
+
+    def _get_config(self) -> dict:
+        config = {}
+
+        for name, pop in self.network.populations.items():
+            config[f'pop_{name}'] = {}
+            for param_name, param_spec in pop.params.items():
+                value = param_spec['value']
+                if hasattr(value, 'numpy'):
+                    value = float(value.numpy())
+                config[f'pop_{name}'][param_name] = value
+
+        for name in self.network.synapses:
+            config[f'syn_{name}'] = {}
+            syn = self.network.synapses[name].model
+            for param_name, param_spec in syn.params.items():
+                value = param_spec['value']
+                if hasattr(value, 'numpy'):
+                    value = float(value.numpy())
+                config[f'syn_{name}'][param_name] = value
+
+        return config

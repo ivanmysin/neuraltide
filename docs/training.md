@@ -37,6 +37,32 @@ history = trainer.fit(t_seq, epochs=epochs, verbose=1)
 
 - `fit(t_seq, epochs, verbose)` — обучение сети
 - `evaluate(t_seq)` — вычисление loss без обновления весов
+- `export_results(path, format="json")` — экспорт результатов в JSON или CSV
+
+### Экспорт результатов
+
+Результаты оптимизации можно экспортировать в JSON или CSV:
+
+```python
+# После обучения
+history = trainer.fit(t_seq, epochs=100)
+
+# Экспорт в JSON (по умолчанию)
+trainer.export_results('results.json')
+
+# Экспорт в CSV
+trainer.export_results('results.csv', format='csv')
+
+# Без конфигурации сети
+trainer.export_results('results.json', include_config=False)
+```
+
+**JSON** — содержит:
+- `trainable_variables` — список {name, value} для каждого обучаемого параметра
+- `loss_history` — история loss по эпохам
+- `config` — параметры всех популяций и синапсов
+
+**CSV** — таблица с колонками name, value
 
 ---
 
