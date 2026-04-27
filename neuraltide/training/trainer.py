@@ -326,7 +326,7 @@ class Trainer:
         for v in self.network.trainable_variables:
             results['trainable_variables'].append({
                 'name': v.name,
-                'value': float(v.numpy()),
+                'value': v.numpy().tolist(),
             })
 
         if hasattr(self, '_last_history'):
@@ -347,7 +347,7 @@ class Trainer:
         rows.append(['name', 'value'])
 
         for v in self.network.trainable_variables:
-            rows.append([v.name, float(v.numpy())])
+            rows.append([v.name, v.numpy().tolist()])
 
         if isinstance(path_or_fd, (str, os.PathLike)):
             with open(path_or_fd, 'w', newline='') as f:
@@ -360,21 +360,23 @@ class Trainer:
     def _get_config(self) -> dict:
         config = {}
 
-        for name, pop in self.network.populations.items():
+        for name, pop in self.network._graph._populations.items():
             config[f'pop_{name}'] = {}
-            for param_name, param_spec in pop.params.items():
-                value = param_spec['value']
-                if hasattr(value, 'numpy'):
-                    value = float(value.numpy())
-                config[f'pop_{name}'][param_name] = value
+            spec = pop.parameter_spec
+            for param_name in spec:
+                if hasattr(pop, param_name):
+                    param = getattr(pop, param_name)
+                    value = param.numpy().tolist()
+                    config[f'pop_{name}'][param_name] = value
 
-        for name in self.network.synapses:
+        for name, entry in self.network._graph._synapses.items():
             config[f'syn_{name}'] = {}
-            syn = self.network.synapses[name].model
-            for param_name, param_spec in syn.params.items():
-                value = param_spec['value']
-                if hasattr(value, 'numpy'):
-                    value = float(value.numpy())
-                config[f'syn_{name}'][param_name] = value
+            syn = entry.model
+            spec = syn.parameter_spec
+            for param_name in spec:
+                if hasattr(syn, param_name):
+                    param = getattr(syn, param_name)
+                    value = param.numpy().tolist()
+                    config[f'syn_{name}'][param_name] = value
 
         return config
