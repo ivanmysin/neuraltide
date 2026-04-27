@@ -476,6 +476,8 @@ class NetworkRNN(tf.keras.layers.Layer):
         
         stability_loss = self._stability_penalty_weight * tf.reduce_mean(stability_acc)
         
+        self._last_final_state = (pop_states, syn_states)
+        
         if self._stateful:
             self._current_state = (pop_states, syn_states)
         
@@ -507,7 +509,7 @@ class NetworkRNN(tf.keras.layers.Layer):
         
         return init_pop, init_syn
 
-    def get_state(self) -> Tuple[StateList, StateList]:
+    def get_state(self, force_compute: bool = False) -> Tuple[StateList, StateList]:
         """
         Возвращает текущее сохранённое состояние.
 
@@ -515,10 +517,21 @@ class NetworkRNN(tf.keras.layers.Layer):
         на конец последнего прогона. Если stateful=False или
         состояние не установлено, возвращает None.
 
+        Args:
+            force_compute: если True и состояние не сохранено,
+                          вычислить из последнего прогона (требует
+                          сохранения состояний в call).
+
         Returns:
             Tuple[pop_states, syn_states] или None.
         """
-        return self._current_state
+        if self._current_state is not None:
+            return self._current_state
+        
+        if force_compute and hasattr(self, '_last_final_state'):
+            return self._last_final_state
+        
+        return None
 
     def set_initial_state(self, state: Tuple[StateList, StateList]) -> None:
         """

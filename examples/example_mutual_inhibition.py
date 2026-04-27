@@ -23,9 +23,10 @@ from neuraltide.training import Trainer, CompositeLoss, MSELoss, StabilityPenalt
 from neuraltide.training.callbacks import DivergenceDetector
 
 dt = 0.1
-T = 10.0
-transient = 200
+T = 30
+transient = 10
 t = np.arange(0, T, dt)
+print(f"Total steps: {len(t)}, transient after step {int(transient/dt)}")
 t_seq = tf.constant(t[None, :, None], dtype=tf.float32)
 
 pop_params = {
@@ -38,28 +39,28 @@ pop_params = {
     'B': 0.22,
     'W_jump': 2.0,
     'Delta_I': 20.0,
-    'I_ext': {'value': 200.0, 'trainable': True, 'min': 50.0, 'max': 1500.0},
+    'I_ext': {'value': 400.0, 'trainable': True, 'min': 100.0, 'max': 1000.0},
 }
 
 pop1 = IzhikevichMeanField(dt=dt, params=pop_params.copy(), name='pop1')
 pop2 = IzhikevichMeanField(dt=dt, params=pop_params.copy(), name='pop2')
 
 syn_1to2 = TsodyksMarkramSynapse(n_pre=1, n_post=1, dt=dt, params={
-    'gsyn_max': {'value': 3000.0, 'trainable': True, 'min': 100.0, 'max': 5000.0},
+    'gsyn_max': {'value': 100.0, 'trainable': True, 'min': 10.0, 'max': 500.0},
     'tau_d': {'value': 6.02, 'trainable': True, 'min': 2.0, 'max': 15.0},
-    'tau_r': {'value': 359.8, 'trainable': True, 'min': 91.0, 'max': 1300.0},
-    'tau_f': {'value': 21.0, 'trainable': True, 'min': 6.0, 'max': 240.0},
-    'Uinc': {'value': 0.25, 'trainable': True, 'min': 0.04, 'max': 0.7},
+    'tau_r': {'value': 200.0, 'trainable': True, 'min': 50.0, 'max': 500.0},
+    'tau_f': {'value': 20.0, 'trainable': True, 'min': 5.0, 'max': 100.0},
+    'Uinc': {'value': 0.3, 'trainable': True, 'min': 0.1, 'max': 0.6},
     'pconn': {'value': 1.0, 'trainable': False},
     'e_r': {'value': -75.0, 'trainable': False},
 }, name='syn_1to2')
 
 syn_2to1 = TsodyksMarkramSynapse(n_pre=1, n_post=1, dt=dt, params={
-    'gsyn_max': {'value': 3000.0, 'trainable': True, 'min': 100.0, 'max': 5000.0},
+    'gsyn_max': {'value': 100.0, 'trainable': True, 'min': 10.0, 'max': 500.0},
     'tau_d': {'value': 6.02, 'trainable': True, 'min': 2.0, 'max': 15.0},
-    'tau_r': {'value': 359.8, 'trainable': True, 'min': 91.0, 'max': 1300.0},
-    'tau_f': {'value': 21.0, 'trainable': True, 'min': 6.0, 'max': 240.0},
-    'Uinc': {'value': 0.25, 'trainable': True, 'min': 0.04, 'max': 0.7},
+    'tau_r': {'value': 200.0, 'trainable': True, 'min': 50.0, 'max': 500.0},
+    'tau_f': {'value': 20.0, 'trainable': True, 'min': 5.0, 'max': 100.0},
+    'Uinc': {'value': 0.3, 'trainable': True, 'min': 0.1, 'max': 0.6},
     'pconn': {'value': 1.0, 'trainable': False},
     'e_r': {'value': -75.0, 'trainable': False},
 }, name='syn_2to1')
@@ -113,10 +114,26 @@ loss_fn = CompositeLoss([
 optimizer = tf.keras.optimizers.Adam(1e-3)
 trainer = Trainer(network, loss_fn, optimizer, grad_method='bptt', grad_clip_norm=1.0)
 
+transient_idx = int(transient / dt)
+t_transient = t[:transient_idx]
+t_seq_transient = tf.constant(t_transient[None, :, None], dtype=tf.float32)
+
+print("Running transient simulation...")
+_ = network(t_seq_transient, training=False)
+print("Transient done")
+
+final_pop_state, final_syn_state = network.get_state(force_compute=True)
+print(f"Got state")
+
+print(f"Transient final state: pop1 r={final_pop_state[0][0,0]:.4f}")
+print("Resetting state...")
+network.reset_state()
+print("Reset done")
+print("\nStarting optimization with state from transient...")
+
 callbacks = [DivergenceDetector()]
 
-print("Training...")
-history = trainer.fit(t_seq, epochs=20, callbacks=callbacks, verbose=2)
+history = trainer.fit(t_seq, epochs=20, callbacks=callbacks, verbose=2, initial_state=(final_pop_state, final_syn_state))
 
 print(f"\nInitial loss: {history.loss_history[0]:.4f}")
 print(f"Final loss: {history.loss_history[-1]:.4f}")

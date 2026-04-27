@@ -66,9 +66,13 @@ class Trainer:
         if not run_eagerly:
             self._train_step = tf.function(self._train_step)
 
-    def _train_step(self, t_sequence: TensorType) -> Dict[str, float]:
+    def _train_step(
+        self,
+        t_sequence: TensorType,
+        initial_state: Optional[Tuple[StateList, StateList]] = None,
+    ) -> Dict[str, float]:
         with tf.GradientTape() as tape:
-            output = self.network(t_sequence, training=True)
+            output = self.network(t_sequence, training=True, initial_state=initial_state)
             loss = self.loss_fn(output, self.network)
 
         if self.grad_method == "adjoint":
@@ -90,18 +94,26 @@ class Trainer:
 
         return {'loss': loss}
 
-    def train_step(self, t_sequence: TensorType) -> Dict[str, float]:
+    def train_step(
+        self,
+        t_sequence: TensorType,
+        initial_state: Optional[Tuple[StateList, StateList]] = None,
+    ) -> Dict[str, float]:
         if self.grad_method == "adjoint":
             if self.run_eagerly:
-                return self._train_step_adjoint(t_sequence)
-            return self._train_step_adjoint(t_sequence)
+                return self._train_step_adjoint(t_sequence, initial_state)
+            return self._train_step_adjoint(t_sequence, initial_state)
         if self.run_eagerly:
-            return self._train_step_eager(t_sequence)
-        return self._train_step(t_sequence)
+            return self._train_step_eager(t_sequence, initial_state)
+        return self._train_step(t_sequence, initial_state)
 
-    def _train_step_adjoint(self, t_sequence: TensorType) -> Dict[str, float]:
+    def _train_step_adjoint(
+        self,
+        t_sequence: TensorType,
+        initial_state: Optional[Tuple[StateList, StateList]] = None,
+    ) -> Dict[str, float]:
         with tf.GradientTape() as tape:
-            output = self.network(t_sequence, training=True)
+            output = self.network(t_sequence, training=True, initial_state=initial_state)
             loss = self.loss_fn(output, self.network)
 
         # Pass stability_loss if available
@@ -128,9 +140,13 @@ class Trainer:
 
         return {'loss': loss}
 
-    def _train_step_eager(self, t_sequence: TensorType) -> Dict[str, float]:
+    def _train_step_eager(
+        self,
+        t_sequence: TensorType,
+        initial_state: Optional[Tuple[StateList, StateList]] = None,
+    ) -> Dict[str, float]:
         with tf.GradientTape() as tape:
-            output = self.network(t_sequence, training=True)
+            output = self.network(t_sequence, training=True, initial_state=initial_state)
             loss = self.loss_fn(output, self.network)
 
         if self.grad_method == "adjoint":
@@ -158,12 +174,13 @@ class Trainer:
         epochs: int,
         callbacks: Optional[List] = None,
         verbose: int = 1,
+        initial_state: Optional[Tuple[StateList, StateList]] = None,
     ) -> TrainingHistory:
         """Обучение на заданное число эпох."""
         history = TrainingHistory(loss_history=[], epochs=epochs)
 
         for epoch in range(epochs):
-            step_result = self.train_step(t_sequence)
+            step_result = self.train_step(t_sequence, initial_state=initial_state)
             loss_val = float(step_result['loss'])
 
             if verbose > 0:
