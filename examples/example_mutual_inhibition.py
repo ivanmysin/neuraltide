@@ -20,14 +20,14 @@ from neuraltide.synapses import TsodyksMarkramSynapse
 from neuraltide.inputs import VonMisesGenerator
 from neuraltide.integrators import RK4Integrator
 from neuraltide.training import Trainer, CompositeLoss, MSELoss, MSLELoss, StabilityPenalty
-from neuraltide.training.callbacks import DivergenceDetector
+
 
 dt = 0.1
 T_total = 1000  # ms - total simulation time
 batch_size = 25   # ms per batch
 transient = 20     # ms transient to skip
-nbatches = 2       # number of batches to optimize (reduced for test)
-nepochs = 2
+nbatches = 20       # number of batches to optimize (reduced for test)
+nepochs = 200
 
 n_batches = T_total // batch_size
 print(f"Total: T={T_total}ms, batch={batch_size}ms ({n_batches} batches), transient={transient}ms")
@@ -48,14 +48,14 @@ pop_params = {
     'B': 0.22,
     'W_jump': 2.0,
     'Delta_I': 20.0,
-    'I_ext': {'value': 400.0, 'trainable': True, 'min': 100.0, 'max': 1000.0},
+    'I_ext': {'value': 400.0, 'trainable': True, 'min': 0.0, 'max': 1000.0},
 }
 
 pop1 = IzhikevichMeanField(dt=dt, params=pop_params.copy(), name='pop1')
 pop2 = IzhikevichMeanField(dt=dt, params=pop_params.copy(), name='pop2')
 
 syn_1to2 = TsodyksMarkramSynapse(n_pre=1, n_post=1, dt=dt, params={
-    'gsyn_max': {'value': 100.0, 'trainable': True, 'min': 10.0, 'max': 500.0},
+    'gsyn_max': {'value': 100.0, 'trainable': True, 'min': 0.0, 'max': 5000.0},
     'tau_d': {'value': 6.02, 'trainable': True, 'min': 2.0, 'max': 15.0},
     'tau_r': {'value': 200.0, 'trainable': True, 'min': 50.0, 'max': 500.0},
     'tau_f': {'value': 20.0, 'trainable': True, 'min': 5.0, 'max': 100.0},
@@ -277,3 +277,150 @@ except ImportError as e:
 trainer.export_results('optimization_results.json')
 trainer.export_results('optimization_results.csv', format='csv')
 print("\nResults exported to optimization_results.json and optimization_results.csv")
+
+print("\n=== Full simulation with optimal parameters ===")
+
+network.reset_state()
+t_seq_full = tf.constant(t_all[None, :, None], dtype=tf.float32)
+
+pop_hist = {
+    'pop1': {'r': [], 'v': [], 'w': []},
+    'pop2': {'r': [], 'v': [], 'w': []},
+}
+syn_hist = {
+    'syn_1to2': {'R': [], 'U': [], 'A': []},
+    'syn_2to1': {'R': [], 'U': [], 'A': []},
+}
+
+pop_states, syn_states = None, None
+
+for step in range(t_all.shape[0]):
+    t = tf.constant([[t_all[step]]], dtype=tf.float32)
+    
+    if step == 0:
+        output = network(t, training=False, initial_state=(initial_pop_state, initial_syn_state))
+    else:
+        output = network(t, training=False, initial_state=(pop_states, syn_states))
+    
+    pop_states, syn_states = network.get_state(force_compute=True)
+    
+    pop_hist['pop1']['r'].append(pop_states[0][0].numpy())
+    pop_hist['pop1']['v'].append(pop_states[1][0].numpy())
+    pop_hist['pop1']['w'].append(pop_states[2][0].numpy())
+    pop_hist['pop2']['r'].append(pop_states[3][0].numpy())
+    pop_hist['pop2']['v'].append(pop_states[4][0].numpy())
+    pop_hist['pop2']['w'].append(pop_states[5][0].numpy())
+    
+    syn_hist['syn_1to2']['R'].append(syn_states[0][0].numpy())
+    syn_hist['syn_1to2']['U'].append(syn_states[1][0].numpy())
+    syn_hist['syn_1to2']['A'].append(syn_states[2][0].numpy())
+    syn_hist['syn_2to1']['R'].append(syn_states[3][0].numpy())
+    syn_hist['syn_2to1']['U'].append(syn_states[4][0].numpy())
+    syn_hist['syn_2to1']['A'].append(syn_states[5][0].numpy())
+
+print(f"Simulation completed: {t_all.shape[0]} steps")
+
+print("\n=== Optimal Dynamics Visualization ===")
+try:
+    import matplotlib
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
+
+    fig, axes = plt.subplots(4, 2, figsize=(14, 12))
+
+    ax = axes[0, 0]
+    r_pop1 = np.squeeze(np.array(pop_hist['pop1']['r']))
+    r_pop2 = np.squeeze(np.array(pop_hist['pop2']['r']))
+    ax.plot(t_all, r_pop1, 'b-', linewidth=1.5, label='pop1')
+    ax.plot(t_all, r_pop2, 'r-', linewidth=1.5, label='pop2')
+    ax.set_xlabel('Time (ms)')
+    ax.set_ylabel('r (dimensionless)')
+    ax.set_title('Firing Rate r (dimensionless)')
+    ax.legend()
+    ax.grid(True, alpha=0.3)
+
+    ax = axes[0, 1]
+    rates_pop1_hz = r_pop1 / (dt * 1e-3)
+    rates_pop2_hz = r_pop2 / (dt * 1e-3)
+    ax.plot(t_all, target_full[:, 0], 'b--', linewidth=2, label='Target pop1')
+    ax.plot(t_all, rates_pop1_hz, 'b-', linewidth=1.5, alpha=0.8, label='pop1')
+    ax.plot(t_all, target_full[:, 1], 'r--', linewidth=2, label='Target pop2')
+    ax.plot(t_all, rates_pop2_hz, 'r-', linewidth=1.5, alpha=0.8, label='pop2')
+    ax.set_xlabel('Time (ms)')
+    ax.set_ylabel('Firing Rate (Hz)')
+    ax.set_title('Firing Rate (Hz) with Target')
+    ax.legend()
+    ax.grid(True, alpha=0.3)
+
+    ax = axes[1, 0]
+    v_pop1 = np.squeeze(np.array(pop_hist['pop1']['v']))
+    v_pop2 = np.squeeze(np.array(pop_hist['pop2']['v']))
+    ax.plot(t_all, v_pop1, 'b-', linewidth=1.5, label='v pop1')
+    ax.plot(t_all, v_pop2, 'r-', linewidth=1.5, label='v pop2')
+    ax.set_xlabel('Time (ms)')
+    ax.set_ylabel('v (dimensionless)')
+    ax.set_title('Mean Membrane Potential v')
+    ax.legend()
+    ax.grid(True, alpha=0.3)
+
+    ax = axes[1, 1]
+    w_pop1 = np.squeeze(np.array(pop_hist['pop1']['w']))
+    w_pop2 = np.squeeze(np.array(pop_hist['pop2']['w']))
+    ax.plot(t_all, w_pop1, 'b-', linewidth=1.5, label='w pop1')
+    ax.plot(t_all, w_pop2, 'r-', linewidth=1.5, label='w pop2')
+    ax.set_xlabel('Time (ms)')
+    ax.set_ylabel('w (dimensionless)')
+    ax.set_title('Adaptation Current w')
+    ax.legend()
+    ax.grid(True, alpha=0.3)
+
+    ax = axes[2, 0]
+    R_1to2 = np.squeeze(np.array(syn_hist['syn_1to2']['R']))
+    U_1to2 = np.squeeze(np.array(syn_hist['syn_1to2']['U']))
+    A_1to2 = np.squeeze(np.array(syn_hist['syn_1to2']['A']))
+    ax.plot(t_all, R_1to2, 'b-', linewidth=1.5, label='R')
+    ax.plot(t_all, U_1to2, 'g-', linewidth=1.5, label='U')
+    ax.plot(t_all, A_1to2, 'm-', linewidth=1.5, label='A')
+    ax.set_xlabel('Time (ms)')
+    ax.set_ylabel('State')
+    ax.set_title('Synapse Pop1->Pop2: R, U, A')
+    ax.legend()
+    ax.grid(True, alpha=0.3)
+
+    ax = axes[2, 1]
+    R_2to1 = np.squeeze(np.array(syn_hist['syn_2to1']['R']))
+    U_2to1 = np.squeeze(np.array(syn_hist['syn_2to1']['U']))
+    A_2to1 = np.squeeze(np.array(syn_hist['syn_2to1']['A']))
+    ax.plot(t_all, R_2to1, 'b-', linewidth=1.5, label='R')
+    ax.plot(t_all, U_2to1, 'g-', linewidth=1.5, label='U')
+    ax.plot(t_all, A_2to1, 'm-', linewidth=1.5, label='A')
+    ax.set_xlabel('Time (ms)')
+    ax.set_ylabel('State')
+    ax.set_title('Synapse Pop2->Pop1: R, U, A')
+    ax.legend()
+    ax.grid(True, alpha=0.3)
+
+    ax = axes[3, 0]
+    ax.plot(t_all, rates_pop1_hz, 'b-', linewidth=1.5, label='Pop1 (Hz)')
+    ax.plot(t_all, rates_pop2_hz, 'r-', linewidth=1.5, label='Pop2 (Hz)')
+    ax.set_xlabel('Time (ms)')
+    ax.set_ylabel('Firing Rate (Hz)')
+    ax.set_title('Final Firing Rates in Hz')
+    ax.legend()
+    ax.grid(True, alpha=0.3)
+
+    ax = axes[3, 1]
+    phase = np.arctan2(rates_pop2_hz, rates_pop1_hz)
+    ax.plot(t_all, phase, 'k-', linewidth=1.5)
+    ax.set_xlabel('Time (ms)')
+    ax.set_ylabel('Phase (rad)')
+    ax.set_title('Phase (arctan2(Pop2, Pop1))')
+    ax.grid(True, alpha=0.3)
+
+    plt.tight_layout()
+    plt.savefig('optimal_dynamics.png', dpi=150)
+    print("Optimal dynamics visualization saved to optimal_dynamics.png")
+    plt.close()
+
+except ImportError as e:
+    print(f"Matplotlib not available: {e}")
