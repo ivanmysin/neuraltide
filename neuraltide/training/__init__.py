@@ -1,6 +1,7 @@
 from neuraltide.training.losses import (
     BaseLoss,
     MSELoss,
+    MSLELoss,
     StabilityPenalty,
     L2RegularizationLoss,
     ParameterBoundLoss,
@@ -24,6 +25,7 @@ from neuraltide.training.callbacks import (
 __all__ = [
     "BaseLoss",
     "MSELoss",
+    "MSLELoss",
     "StabilityPenalty",
     "L2RegularizationLoss",
     "ParameterBoundLoss",

@@ -19,7 +19,7 @@ from neuraltide.populations import IzhikevichMeanField
 from neuraltide.synapses import TsodyksMarkramSynapse
 from neuraltide.inputs import VonMisesGenerator
 from neuraltide.integrators import RK4Integrator
-from neuraltide.training import Trainer, CompositeLoss, MSELoss, StabilityPenalty
+from neuraltide.training import Trainer, CompositeLoss, MSELoss, MSLELoss, StabilityPenalty
 from neuraltide.training.callbacks import DivergenceDetector
 
 dt = 0.1
@@ -27,6 +27,7 @@ T_total = 1000  # ms - total simulation time
 batch_size = 25   # ms per batch
 transient = 20     # ms transient to skip
 nbatches = 2       # number of batches to optimize (reduced for test)
+nepochs = 2
 
 n_batches = T_total // batch_size
 print(f"Total: T={T_total}ms, batch={batch_size}ms ({n_batches} batches), transient={transient}ms")
@@ -172,15 +173,15 @@ print(f"Starting {nbatches}-batch optimization...")
 current_pop_state = initial_pop_state
 current_syn_state = initial_syn_state
 
-from neuraltide.training.losses import MSELoss
 
-for epoch in range(nbatches):
+
+for epoch in range(nepochs):
     for b in range(nbatches):
         t_batch = get_batch_tensor(b)
         target_batch = get_batch_target(b)
         
         loss_batch = CompositeLoss([
-            (1.0, MSELoss(target_batch)),
+            (1.0, MSLELoss(target_batch)),
             (1e-3, StabilityPenalty()),
         ])
         
@@ -220,6 +221,58 @@ print(f"Pop2 mean rate: {final_rates_pop2[0,n_eval_start:].mean():.2f} Hz")
 print("\n=== Trainable variables ===")
 for v in network.trainable_variables:
     print(f"{v.name}: {float(v.numpy()[0, 0]):.4f}")
+
+print("\n=== Visualization ===")
+try:
+    import matplotlib
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
+
+    fig, axes = plt.subplots(3, 1, figsize=(12, 10))
+
+    t_values = t_all[:n_steps_per_batch * nbatches]
+
+    ax = axes[0]
+    ax.plot(t_values, target_full[:n_steps_per_batch * nbatches, 0], 'b--', label='Target Pop1', linewidth=2)
+    ax.plot(t_values, final_rates_pop1[0, :], 'b-', label='Actual Pop1', linewidth=1.5, alpha=0.8)
+    ax.plot(t_values, target_full[:n_steps_per_batch * nbatches, 1], 'r--', label='Target Pop2', linewidth=2)
+    ax.plot(t_values, final_rates_pop2[0, :], 'r-', label='Actual Pop2', linewidth=1.5, alpha=0.8)
+    ax.set_xlabel('Time (ms)')
+    ax.set_ylabel('Firing Rate (Hz)')
+    ax.set_title('Target vs Actual Firing Rates (after optimization)')
+    ax.legend()
+    ax.grid(True, alpha=0.3)
+
+    ax = axes[1]
+    diff_pop1 = target_full[:n_steps_per_batch * nbatches, 0] - final_rates_pop1[0, :]
+    diff_pop2 = target_full[:n_steps_per_batch * nbatches, 1] - final_rates_pop2[0, :]
+    ax.plot(t_values, diff_pop1, 'b-', label='Error Pop1', linewidth=1.5)
+    ax.plot(t_values, diff_pop2, 'r-', label='Error Pop2', linewidth=1.5)
+    ax.axhline(0, color='k', linestyle='--', linewidth=0.5)
+    ax.set_xlabel('Time (ms)')
+    ax.set_ylabel('Error (Hz)')
+    ax.set_title('Prediction Error (Target - Actual)')
+    ax.legend()
+    ax.grid(True, alpha=0.3)
+
+    ax = axes[2]
+    var_names = [v.name.split(':')[0] for v in network.trainable_variables]
+    var_values = [float(v.numpy()[0, 0]) for v in network.trainable_variables]
+    colors = ['steelblue' if 'gsyn' in n else 'coral' for n in var_names]
+    ax.bar(range(len(var_names)), var_values, color=colors)
+    ax.set_xticks(range(len(var_names)))
+    ax.set_xticklabels(var_names, rotation=45, ha='right')
+    ax.set_ylabel('Value')
+    ax.set_title('Optimized Parameters')
+    ax.grid(True, alpha=0.3, axis='y')
+
+    plt.tight_layout()
+    plt.savefig('optimization_visualization.png', dpi=150)
+    print("Visualization saved to optimization_visualization.png")
+    plt.close()
+
+except ImportError as e:
+    print(f"Matplotlib not available: {e}")
 
 trainer.export_results('optimization_results.json')
 trainer.export_results('optimization_results.csv', format='csv')

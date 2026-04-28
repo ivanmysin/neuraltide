@@ -85,6 +85,42 @@ class MSELoss(BaseLoss):
 
         return total_loss
 
+
+class MSLELoss(BaseLoss):
+    """
+    Mean Squared Logarithmic Error: mean((log(1+pred) - log(1+target))^2).
+
+    Better for comparing rates across different scales.
+    """
+
+    def __init__(
+        self,
+        target: Dict[str, TensorType],
+        readout: Optional[BaseReadout] = None,
+        eps: float = 1.0,
+    ):
+        self.target = target
+        self.readout = readout if readout is not None else IdentityReadout()
+        self.eps = eps
+
+    def __call__(self, predictions: NetworkOutput, model: NetworkRNN) -> TensorType:
+        total_loss = tf.constant(0.0, dtype=neuraltide.config.get_dtype())
+
+        for pop_name, target_val in self.target.items():
+            pred_val = predictions.firing_rates[pop_name]
+
+            pred_readout = self.readout(pred_val)
+            target_readout = self.readout(target_val)
+
+            log_pred = tf.math.log(pred_readout + self.eps)
+            log_target = tf.math.log(target_readout + self.eps)
+
+            loss = tf.reduce_mean((log_pred - log_target) ** 2)
+
+            total_loss += loss
+
+        return total_loss
+
     def per_step_loss(
         self,
         firing_rates: Dict[str, TensorType],

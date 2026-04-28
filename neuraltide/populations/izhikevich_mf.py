@@ -391,19 +391,18 @@ class IzhikevichMeanField(PopulationModel):
         """
         Extract firing rate from state.
 
-        Returns the dimensionless rate r directly (no ReLU).
-        This ensures non-zero gradient almost everywhere.
-        The caller should scale to Hz if needed: rate_Hz = r / (dt * 1e-3).
+        Returns the firing rate in Hz.
+        Conversion: r_Hz = r / (tau_pop * 1e-3) where tau_pop is in ms.
         """
         r = state[0]
-        return r
+        return r / (self.tau_pop * 1e-3)
 
     def observables(self, state: StateList) -> Dict[str, TensorType]:
         """
         Return observable variables.
 
         Includes:
-            - firing_rate: dimensionless (should be scaled by 1/(dt*1e-3) for Hz)
+            - firing_rate: in Hz (converted from dimensionless r via r / (dt * 1e-3))
             - v_mean: dimensionless mean membrane potential (used by NMDASynapse)
             - w_mean: dimensionless mean adaptation current
         """
