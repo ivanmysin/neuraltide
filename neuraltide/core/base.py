@@ -333,6 +333,11 @@ class SynapseModel(tf.keras.layers.Layer):
         lo = spec.get('min', None)
         hi = spec.get('max', None)
 
+        if train:
+            constraint = MinMaxConstraint(min_val=lo, max_val=hi) if (lo is not None or hi is not None) else None
+        else:
+            constraint = None
+
         value = tf.constant(raw, dtype=neuraltide.config.get_dtype())
         value = self._broadcast_to_matrix(value, name)
 
@@ -340,7 +345,7 @@ class SynapseModel(tf.keras.layers.Layer):
             shape=(self.n_pre, self.n_post),
             initializer=tf.keras.initializers.Constant(value.numpy()),
             trainable=train,
-            constraint=None,
+            constraint=constraint,
             dtype=neuraltide.config.get_dtype(),
             name=name,
         )

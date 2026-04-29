@@ -48,7 +48,7 @@ pop_params = {
     'B': 0.22,
     'W_jump': 2.0,
     'Delta_I': 20.0,
-    'I_ext': {'value': 400.0, 'trainable': False},
+    'I_ext': {'value': 400.0, 'trainable': True, 'min': 0.0, 'max': 1000.0},
 }
 
 pop1 = IzhikevichMeanField(dt=dt, params=pop_params.copy(), name='pop1')
@@ -377,12 +377,21 @@ for epoch in range(nepochs):
 
         if grads_and_vars:
             grads_only = [g for g, v in grads_and_vars]
-            grad_norm = tf.sqrt(sum([tf.reduce_sum(g**2) for g in grads_only]))
-            epoch_grads_norm.append(float(grad_norm.numpy()))
-
             clipped_grads, _ = tf.clip_by_global_norm(grads_only, 1.0)
             grads_and_vars = [(g, v) for g, (_, v) in zip(clipped_grads, grads_and_vars)]
+
+            if epoch == 0 and b < 3:
+                print(f"    Before step - Uinc values: {[float(v.numpy()[0,0]) for n,v in network.trainable_variables if 'Uinc' in n]}")
+
             optimizer.apply_gradients(grads_and_vars)
+
+            for var in network.trainable_variables:
+                constraint = var.constraint
+                if constraint is not None:
+                    var.assign(constraint(var))
+
+            if epoch == 0 and b < 3:
+                print(f"    After step - Uinc values: {[float(v.numpy()[0,0]) for n,v in network.trainable_variables if 'Uinc' in n]}")
 
             for g, v in grads_and_vars:
                 if np.any(np.isnan(v.numpy())):

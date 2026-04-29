@@ -298,19 +298,102 @@ class IzhikevichMeanField(PopulationModel):
     def _build_params_from_dimensional(
         self, params,
     ) -> Dict[str, Any]:
-        """Convert dimensional parameters to dimensionless."""
-        missing_keys = [key for key in ['V_rest', 'V_T', 'Cm', 'K', 'A', 'B', 'W_jump', 'Delta_I', 'I_ext'] if key not in params.keys()]
+        """Convert dimensional parameters to dimensionless.
+
+        Returns dict with structure expected by _make_param:
+            {param_name: {'value': [...], 'trainable': bool, 'min': [...], 'max': [...]}}
+
+        Mapping of dimensionless -> dimensional source:
+            Delta_I  -> Delta_I   (scale: 1 / (K * V_rest^2))
+            I_ext    -> I_ext     (scale: 1 / (K * V_rest^2))
+            w_jump   -> W_jump    (scale: 1 / (K * V_rest^2))
+            tau_pop  -> composite (non-trainable, no constraints)
+            alpha    -> composite (non-trainable, no constraints)
+            a        -> composite (non-trainable, no constraints)
+            b        -> composite (non-trainable, no constraints)
+        """
+        required = ['V_rest', 'V_T', 'Cm', 'K', 'A', 'B', 'W_jump', 'Delta_I', 'I_ext']
+        missing_keys = [k for k in required if k not in params]
         if missing_keys:
             raise ValueError(
-                f"IzhikevichMeanField '{self.name}': missing required dimensional parameters: {missing_keys}"
+                f"IzhikevichMeanField '{self.name}': "
+                f"missing required dimensional parameters: {missing_keys}"
             )
 
-        dimless = self._compute_dimensionless_from_dimensional(params, self.n_units)
+        dimless_values = self._compute_dimensionless_from_dimensional(
+            params, self.n_units
+        )
+
+        def _dim_spec(key):
+            """Extract {value, trainable, min, max} from a dimensional param."""
+            raw = params.get(key)
+            if isinstance(raw, dict):
+                return {
+                    'value': raw.get('value'),
+                    'trainable': raw.get('trainable', False),
+                    'min': raw.get('min', None),
+                    'max': raw.get('max', None),
+                }
+            return {'value': raw, 'trainable': False, 'min': None, 'max': None}
+
+        def _to_list(raw_val):
+            """Convert scalar or list value to a list of length n_units."""
+            if isinstance(raw_val, (int, float)):
+                return [raw_val] * self.n_units
+            if isinstance(raw_val, (list, tuple)):
+                return list(raw_val)
+            if isinstance(raw_val, np.ndarray):
+                return list(raw_val)
+            return [raw_val] * self.n_units
+
+        def _convert_bounds(lo, hi, scale_list):
+            """Divide bounds element-wise by scale_list."""
+            lo_out = None
+            hi_out = None
+            if lo is not None:
+                if isinstance(lo, (int, float)):
+                    lo_out = [lo / s for s in scale_list]
+                else:
+                    lo_out = [v / s for v, s in zip(_to_list(lo), scale_list)]
+            if hi is not None:
+                if isinstance(hi, (int, float)):
+                    hi_out = [hi / s for s in scale_list]
+                else:
+                    hi_out = [v / s for v, s in zip(_to_list(hi), scale_list)]
+            return lo_out, hi_out
+
+        # Scale factor for Delta_I, I_ext, w_jump (all use 1/(K*V_rest^2))
+        V_rest_vals = _to_list(_dim_spec('V_rest')['value'])
+        K_vals = _to_list(_dim_spec('K')['value'])
+        scale_v2 = [K_vals[i] * V_rest_vals[i]**2 for i in range(self.n_units)]
+
+        # Which dimensionless params map directly to a dimensional source
+        # (and use the scale_v2 divisor)
+        direct_map = {
+            'Delta_I': 'Delta_I',
+            'I_ext': 'I_ext',
+            'w_jump': 'W_jump',
+        }
 
         dtype = neuraltide.config.get_dtype()
         result = {}
-        for key, value in dimless.items():
-            result[key] = tf.constant(value, dtype=dtype)
+
+        for dimless_key, dimless_vals in dimless_values.items():
+            src_key = direct_map.get(dimless_key)
+            if src_key is not None:
+                src = _dim_spec(src_key)
+                trainable = src['trainable']
+                lo, hi = _convert_bounds(src['min'], src['max'], scale_v2)
+            else:
+                trainable = False
+                lo, hi = None, None
+
+            result[dimless_key] = {
+                'value': tf.constant(dimless_vals, dtype=dtype),
+                'trainable': trainable,
+                'min': lo,
+                'max': hi,
+            }
 
         return result
 
