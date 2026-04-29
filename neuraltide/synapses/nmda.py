@@ -110,6 +110,9 @@ class NMDASynapse(SynapseModel):
 
         d_dgnmda_dt = (s_input - gnmda - (tau1 + tau2) * dgnmda) / (tau1 * tau2)
 
+        d_gnmda_dt = tf.debugging.check_numerics(d_gnmda_dt, 'NMDA d(gnmda)/dt NaN')
+        d_dgnmda_dt = tf.debugging.check_numerics(d_dgnmda_dt, 'NMDA d(dgnmda)/dt NaN')
+
         return [d_gnmda_dt, d_dgnmda_dt]
 
     def compute_current(

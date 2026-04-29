@@ -66,6 +66,12 @@ class Trainer:
         if not run_eagerly:
             self._train_step = tf.function(self._train_step)
 
+    def _apply_constraints(self):
+        for v in self.network.trainable_variables:
+            c = v.constraint
+            if c is not None:
+                v.assign(c(v))
+
     def _train_step(
         self,
         t_sequence: TensorType,
@@ -91,6 +97,7 @@ class Trainer:
             grads_and_vars = [(g, v) for g, (_, v) in zip(clipped_grads, grads_and_vars)]
 
         self.optimizer.apply_gradients(grads_and_vars)
+        self._apply_constraints()
 
         return {'loss': loss}
 
@@ -137,6 +144,7 @@ class Trainer:
             grads_and_vars = [(g, v) for g, (_, v) in zip(clipped_grads, grads_and_vars)]
 
         self.optimizer.apply_gradients(grads_and_vars)
+        self._apply_constraints()
 
         return {'loss': loss}
 
@@ -165,6 +173,7 @@ class Trainer:
             grads_and_vars = [(g, v) for g, (_, v) in zip(clipped_grads, grads_and_vars)]
 
         self.optimizer.apply_gradients(grads_and_vars)
+        self._apply_constraints()
 
         return {'loss': loss}
 
@@ -259,6 +268,7 @@ class Trainer:
             grads_and_vars = [(g, v) for g, (_, v) in zip(clipped_grads, grads_and_vars)]
 
         self.optimizer.apply_gradients(grads_and_vars)
+        self._apply_constraints()
 
         return {'loss': loss}
 

@@ -63,10 +63,7 @@ class TsodyksMarkramSynapse(SynapseModel):
         firing_probs_T = tf.transpose(firing_probs)
         FRpre_normed = self.pconn * firing_probs_T
 
-        tau1r = tf.where(
-            tf.math.abs(self.tau_d - self.tau_r) > 1e-13,
-            self.tau_d / (self.tau_d - self.tau_r),
-            1e-13)
+        tau1r = tf.math.divide_no_nan(self.tau_d, self.tau_d - self.tau_r)
 
 
         exp_d = tf.exp(-dt / self.tau_d)
@@ -124,6 +121,10 @@ class TsodyksMarkramSynapse(SynapseModel):
         dU_dt = -U / tau_f + Uinc * (1.0 - U) * s_input
 
         dR_dt = (1.0 - R - A) / tau_r - U * R * s_input
+
+        dR_dt = tf.debugging.check_numerics(dR_dt, 'TsodyksMarkram dR/dt NaN')
+        dU_dt = tf.debugging.check_numerics(dU_dt, 'TsodyksMarkram dU/dt NaN')
+        dA_dt = tf.debugging.check_numerics(dA_dt, 'TsodyksMarkram dA/dt NaN')
 
         return [dR_dt, dU_dt, dA_dt]
 
