@@ -112,7 +112,8 @@ class MSLELoss(BaseLoss):
             pred_readout = self.readout(pred_val)
             target_readout = self.readout(target_val)
 
-            log_pred = tf.math.log(pred_readout + self.eps)
+            pred_clamped = tf.nn.relu(pred_readout) + self.eps
+            log_pred = tf.math.log(pred_clamped)
             log_target = tf.math.log(target_readout + self.eps)
 
             loss = tf.reduce_mean((log_pred - log_target) ** 2)
