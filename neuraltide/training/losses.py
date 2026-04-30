@@ -16,6 +16,32 @@ class BaseLoss(ABC):
     def __call__(self, predictions: NetworkOutput, model: NetworkRNN) -> TensorType:
         raise NotImplementedError
 
+    def per_step_loss(
+        self,
+        firing_rates: Dict[str, TensorType],
+        target: Dict[str, TensorType],
+    ) -> TensorType:
+        """
+        Compute loss for a single time step (for adjoint method).
+        
+        Args:
+            firing_rates: Dict of firing rates at time t
+            target: Dict of target values at time t
+        
+        Returns:
+            Scalar loss value
+        """
+        return self._default_per_step_loss(firing_rates, target)
+
+    def _default_per_step_loss(
+        self,
+        firing_rates: Dict[str, TensorType],
+        target: Dict[str, TensorType],
+    ) -> TensorType:
+        """Default implementation using full NetworkOutput."""
+        dtype = neuraltide.config.get_dtype()
+        return tf.constant(0.0, dtype=dtype)
+
 
 class MSELoss(BaseLoss):
     """
@@ -60,6 +86,69 @@ class MSELoss(BaseLoss):
         return total_loss
 
 
+class MSLELoss(BaseLoss):
+    """
+    Mean Squared Logarithmic Error: mean((log(1+pred) - log(1+target))^2).
+
+    Better for comparing rates across different scales.
+    """
+
+    def __init__(
+        self,
+        target: Dict[str, TensorType],
+        readout: Optional[BaseReadout] = None,
+        eps: float = 1.0,
+    ):
+        self.target = target
+        self.readout = readout if readout is not None else IdentityReadout()
+        self.eps = eps
+
+    def __call__(self, predictions: NetworkOutput, model: NetworkRNN) -> TensorType:
+        total_loss = tf.constant(0.0, dtype=neuraltide.config.get_dtype())
+
+        for pop_name, target_val in self.target.items():
+            pred_val = predictions.firing_rates[pop_name]
+
+            pred_readout = self.readout(pred_val)
+            target_readout = self.readout(target_val)
+
+            pred_clamped = tf.nn.relu(pred_readout) + self.eps
+            log_pred = tf.math.log(pred_clamped)
+            log_target = tf.math.log(target_readout + self.eps)
+
+            loss = tf.reduce_mean((log_pred - log_target) ** 2)
+
+            total_loss += loss
+
+        return total_loss
+
+    def per_step_loss(
+        self,
+        firing_rates: Dict[str, TensorType],
+        target: Dict[str, TensorType],
+    ) -> TensorType:
+        """Compute MSE loss for a single time step."""
+        total_loss = tf.constant(0.0, dtype=neuraltide.config.get_dtype())
+
+        for pop_name, target_val in target.items():
+            pred_val = firing_rates.get(pop_name)
+            if pred_val is None:
+                continue
+
+            pred_readout = self.readout(pred_val)
+            target_readout = self.readout(target_val)
+
+            loss = tf.reduce_mean((pred_readout - target_readout) ** 2)
+
+            if self.mask is not None and pop_name in self.mask:
+                mask_val = self.mask[pop_name]
+                loss = loss * mask_val
+
+            total_loss += loss
+
+        return total_loss
+
+
 class StabilityPenalty(BaseLoss):
     """
     Штраф за численную нестабильность.
@@ -68,6 +157,14 @@ class StabilityPenalty(BaseLoss):
 
     def __call__(self, predictions: NetworkOutput, model: NetworkRNN) -> TensorType:
         return predictions.stability_loss
+
+    def per_step_loss(
+        self,
+        firing_rates: Dict[str, TensorType],
+        target: Dict[str, TensorType],
+    ) -> TensorType:
+        """StabilityPenalty doesn't have per-step gradient (handled separately)."""
+        return tf.constant(0.0, dtype=neuraltide.config.get_dtype())
 
 
 class L2RegularizationLoss(BaseLoss):

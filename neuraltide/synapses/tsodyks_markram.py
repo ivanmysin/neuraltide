@@ -1,5 +1,5 @@
 import tensorflow as tf
-from typing import Dict, Tuple
+from typing import Dict, Tuple, List
 
 import neuraltide
 import neuraltide.config
@@ -34,15 +34,6 @@ class TsodyksMarkramSynapse(SynapseModel):
         self.pconn = self._make_param(params, 'pconn')
         self.e_r = self._make_param(params, 'e_r')
 
-        dtype = neuraltide.config.get_dtype()
-        self.gsyn_max = tf.cast(self.gsyn_max, dtype)
-        self.tau_f = tf.cast(self.tau_f, dtype)
-        self.tau_d = tf.cast(self.tau_d, dtype)
-        self.tau_r = tf.cast(self.tau_r, dtype)
-        self.Uinc = tf.cast(self.Uinc, dtype)
-        self.pconn = tf.cast(self.pconn, dtype)
-        self.e_r = tf.cast(self.e_r, dtype)
-
         self.state_size = [
             tf.TensorShape([n_pre, n_post]),
             tf.TensorShape([n_pre, n_post]),
@@ -72,10 +63,7 @@ class TsodyksMarkramSynapse(SynapseModel):
         firing_probs_T = tf.transpose(firing_probs)
         FRpre_normed = self.pconn * firing_probs_T
 
-        tau1r = tf.where(
-            tf.math.abs(self.tau_d - self.tau_r) > 1e-13,
-            self.tau_d / (self.tau_d - self.tau_r),
-            1e-13)
+        tau1r = tf.math.divide_no_nan(self.tau_d, self.tau_d - self.tau_r)
 
 
         exp_d = tf.exp(-dt / self.tau_d)
@@ -99,6 +87,77 @@ class TsodyksMarkramSynapse(SynapseModel):
         g_syn = tf.reduce_sum(g_eff, axis=0, keepdims=True)
 
         return ({'I_syn': I_syn, 'g_syn': g_syn}, [R_new, U_new, A_new])
+
+    def derivatives(
+        self,
+        state: StateList,
+        pre_firing_rate: TensorType,
+        post_voltage: TensorType,
+    ) -> StateList:
+        """
+        Compute derivatives for the Tsodyks-Markram short-term plasticity dynamics.
+
+        Differential equations:
+            dA/dt = -A/tau_d + U * R * s_input
+            dU/dt = -U/tau_f + Uinc * (1 - U) * s_input
+            dR/dt = (1 - R)/tau_r - U * R * s_input
+
+        where s_input = pconn * firing_probability (converted to rate)
+        """
+        R, U, A = state
+
+        dtype = neuraltide.config.get_dtype()
+        pconn = tf.cast(self.pconn, dtype)
+        tau_d = tf.maximum(tf.cast(self.tau_d, dtype), 1e-6)
+        tau_f = tf.maximum(tf.cast(self.tau_f, dtype), 1e-6)
+        tau_r = tf.maximum(tf.cast(self.tau_r, dtype), 1e-6)
+        Uinc = tf.cast(self.Uinc, dtype)
+
+        firing_probs_T = tf.transpose(pre_firing_rate / 1000.0)
+        s_input = pconn * firing_probs_T
+
+        dA_dt = -A / tau_d + U * R * s_input
+
+        dU_dt = -U / tau_f + Uinc * (1.0 - U) * s_input
+
+        dR_dt = (1.0 - R - A) / tau_r - U * R * s_input
+
+        dR_dt = tf.debugging.check_numerics(dR_dt, 'TsodyksMarkram dR/dt NaN')
+        dU_dt = tf.debugging.check_numerics(dU_dt, 'TsodyksMarkram dU/dt NaN')
+        dA_dt = tf.debugging.check_numerics(dA_dt, 'TsodyksMarkram dA/dt NaN')
+
+        return [dR_dt, dU_dt, dA_dt]
+
+    def compute_current(
+        self,
+        state: StateList,
+        pre_firing_rate: TensorType,
+        post_voltage: TensorType,
+    ) -> Dict[str, TensorType]:
+        """
+        Compute synaptic current and conductance from state.
+
+        Used after numerical integration to compute currents.
+        """
+        dtype = neuraltide.config.get_dtype()
+        gsyn_max = tf.cast(self.gsyn_max, dtype)
+        pconn = tf.cast(self.pconn, dtype)
+        e_r = tf.cast(self.e_r, dtype)
+
+        if len(state) > 0:
+            R_new, U_new, A_new = state
+            g_eff = gsyn_max * A_new
+        else:
+            firing_probs_T = tf.transpose(pre_firing_rate / 1000.0)
+            FRpre_normed = pconn * firing_probs_T
+            g_eff = gsyn_max * FRpre_normed
+
+        post_v_flat = tf.reshape(post_voltage, [-1])
+        I_pair = g_eff * (e_r - post_v_flat)
+        I_syn = tf.reduce_sum(I_pair, axis=0, keepdims=True)
+        g_syn = tf.reduce_sum(g_eff, axis=0, keepdims=True)
+
+        return {'I_syn': I_syn, 'g_syn': g_syn}
 
     @property
     def parameter_spec(self) -> Dict[str, Dict[str, any]]:

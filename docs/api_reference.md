@@ -577,6 +577,7 @@ Trainer(
 
 **Методы**:
 - `fit(t_sequence, epochs, verbose=1) -> History`
+- `export_results(path, format="json")` — экспорт результатов в JSON/CSV
 
 ### CompositeLoss
 

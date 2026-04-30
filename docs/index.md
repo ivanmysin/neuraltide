@@ -66,6 +66,7 @@ output = network(t_seq)
 | [Интеграторы](integrators.md) | Методы численного интегрирования |
 | [Сеть](network.md) | NetworkGraph и NetworkRNN |
 | [Конфигурация](config.md) | Система конфигурации и реестры |
+| [Обучение](training.md) | Обучение сети: Trainer, loss functions, adjoint method |
 | [Ограничения](constraints.md) | Ограничения на параметры |
 | [Примеры](examples.md) | Полные примеры использования |
 | [API Reference](api_reference.md) | Полный справочник API |

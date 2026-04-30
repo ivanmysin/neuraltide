@@ -551,3 +551,85 @@ t_seq = tf.constant(np.arange(0, 1000, 0.5)[None, :, None])
 output = network(t_seq)
 print(output.firing_rates['exc'].shape)
 ```
+
+---
+
+## Пример: Управление начальным состоянием и Stateful режим
+
+NeuralTide позволяет:
+1. Устанавливать пользовательские начальные условия
+2. Сохранять состояние между батчами (stateful режим)
+3. Сбрасывать состояние для нового эксперимента
+
+### Пользовательские начальные условия
+
+```python
+network = NetworkRNN(graph, integrator=RK4Integrator())
+
+# Получение начального состояния
+init_pop, init_syn = network.get_initial_state(batch_size=1)
+
+# Модификация: r=0.5, v=-1.0, w=0.0 (для IzhikevichMeanField)
+init_pop[0] = tf.constant([[0.5]])  # r
+init_pop[1] = tf.constant([[-1.0]])  # v (относительно rest=0)
+init_pop[2] = tf.constant([[0.0]])  # w
+
+# Установка состояния
+network.set_initial_state((init_pop, init_syn))
+
+# Запуск симуляции
+output = network(t_seq, initial_state=(init_pop, init_syn))
+```
+
+### Stateful режим
+
+```python
+# Создание сети с stateful=True
+network = NetworkRNN(graph, integrator=RK4Integrator(), stateful=True)
+
+# Первый батч
+output1 = network(t_seq)
+final_state = network.get_state()
+
+# Второй батч продолжает с финального состояния первого
+output2 = network(t_seq)
+
+# Сброс для нового эксперимента
+network.reset_state()
+```
+
+---
+
+## Пример 9: Взаимное ингибирование двух популяций
+
+Две популяции fast-spiking нейронов с взаимным ингибированием через синапсыshort-term depression (Tsodyks-Markram). Оптимизируются синаптические проводимости и внешние токи.
+
+```python
+from neuraltide.examples.example_mutual_inhibition import *
+```
+
+Полное описание примера в файле [`examples/example_mutual_inhibition.py`](examples/example_mutual_inhibition.py).
+
+### Архитектура
+
+- Две популяции `IzhikevichMeanField` (pop1, pop2) с dimensionalными параметрами
+- Каждая популяция получает вход от `VonMisesGenerator` со сдвигом фазы 150° (2.61 рад)
+- Взаимное ингибирование через `TsodyksMarkramSynapse` (short-term depression)
+
+### Оптимизируемые параметры
+
+| Параметр | Начальное | Диапазон |
+|----------|-----------|----------|
+| `gsyn_max` (syn_1to2, syn_2to1) | 3000 пСм | 100–5000 |
+| `I_ext` (pop1, pop2) | 200 пА | 50–500 |
+| `tau_d` | 6.02 мс | 2–15 |
+| `tau_r` | 359.8 мс | 91–1300 |
+| `tau_f` | 21.0 мс | 6–240 |
+| `U_inc` | 0.25 | 0.04–0.7 |
+
+### Экспорт результатов
+
+```python
+trainer.export_results('results.json')
+trainer.export_results('results.csv', format='csv')
+```

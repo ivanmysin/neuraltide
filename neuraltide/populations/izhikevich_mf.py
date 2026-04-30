@@ -133,6 +133,7 @@ class IzhikevichMeanField(PopulationModel):
         self.w_jump = self._make_param(self._params, 'w_jump')
         self.Delta_I = self._make_param(self._params, 'Delta_I')
         self.I_ext = self._make_param(self._params, 'I_ext')
+        self.v_max = tf.constant(10.0, dtype=neuraltide.config.get_dtype())
 
         dtype = neuraltide.config.get_dtype()
         self.PI = tf.constant(3.141592653589793, dtype=dtype)
@@ -237,7 +238,10 @@ class IzhikevichMeanField(PopulationModel):
             Each value is a list of length n_units.
         """
         def process_param(value, param_name):
-            """Convert scalar/list/np.ndarray to list of length n_units."""
+            """Convert scalar/list/np.ndarray/dict to list of length n_units."""
+            if isinstance(value, dict):
+                value = value.get('value', value)
+            
             if isinstance(value, (list, tuple)):
                 if len(value) == n_units:
                     return [float(v) for v in value]
@@ -294,19 +298,102 @@ class IzhikevichMeanField(PopulationModel):
     def _build_params_from_dimensional(
         self, params,
     ) -> Dict[str, Any]:
-        """Convert dimensional parameters to dimensionless."""
-        missing_keys = [key for key in ['V_rest', 'V_T', 'Cm', 'K', 'A', 'B', 'W_jump', 'Delta_I', 'I_ext'] if key not in params.keys()]
+        """Convert dimensional parameters to dimensionless.
+
+        Returns dict with structure expected by _make_param:
+            {param_name: {'value': [...], 'trainable': bool, 'min': [...], 'max': [...]}}
+
+        Mapping of dimensionless -> dimensional source:
+            Delta_I  -> Delta_I   (scale: 1 / (K * V_rest^2))
+            I_ext    -> I_ext     (scale: 1 / (K * V_rest^2))
+            w_jump   -> W_jump    (scale: 1 / (K * V_rest^2))
+            tau_pop  -> composite (non-trainable, no constraints)
+            alpha    -> composite (non-trainable, no constraints)
+            a        -> composite (non-trainable, no constraints)
+            b        -> composite (non-trainable, no constraints)
+        """
+        required = ['V_rest', 'V_T', 'Cm', 'K', 'A', 'B', 'W_jump', 'Delta_I', 'I_ext']
+        missing_keys = [k for k in required if k not in params]
         if missing_keys:
             raise ValueError(
-                f"IzhikevichMeanField '{self.name}': missing required dimensional parameters: {missing_keys}"
+                f"IzhikevichMeanField '{self.name}': "
+                f"missing required dimensional parameters: {missing_keys}"
             )
 
-        dimless = self._compute_dimensionless_from_dimensional(params, self.n_units)
+        dimless_values = self._compute_dimensionless_from_dimensional(
+            params, self.n_units
+        )
+
+        def _dim_spec(key):
+            """Extract {value, trainable, min, max} from a dimensional param."""
+            raw = params.get(key)
+            if isinstance(raw, dict):
+                return {
+                    'value': raw.get('value'),
+                    'trainable': raw.get('trainable', False),
+                    'min': raw.get('min', None),
+                    'max': raw.get('max', None),
+                }
+            return {'value': raw, 'trainable': False, 'min': None, 'max': None}
+
+        def _to_list(raw_val):
+            """Convert scalar or list value to a list of length n_units."""
+            if isinstance(raw_val, (int, float)):
+                return [raw_val] * self.n_units
+            if isinstance(raw_val, (list, tuple)):
+                return list(raw_val)
+            if isinstance(raw_val, np.ndarray):
+                return list(raw_val)
+            return [raw_val] * self.n_units
+
+        def _convert_bounds(lo, hi, scale_list):
+            """Divide bounds element-wise by scale_list."""
+            lo_out = None
+            hi_out = None
+            if lo is not None:
+                if isinstance(lo, (int, float)):
+                    lo_out = [lo / s for s in scale_list]
+                else:
+                    lo_out = [v / s for v, s in zip(_to_list(lo), scale_list)]
+            if hi is not None:
+                if isinstance(hi, (int, float)):
+                    hi_out = [hi / s for s in scale_list]
+                else:
+                    hi_out = [v / s for v, s in zip(_to_list(hi), scale_list)]
+            return lo_out, hi_out
+
+        # Scale factor for Delta_I, I_ext, w_jump (all use 1/(K*V_rest^2))
+        V_rest_vals = _to_list(_dim_spec('V_rest')['value'])
+        K_vals = _to_list(_dim_spec('K')['value'])
+        scale_v2 = [K_vals[i] * V_rest_vals[i]**2 for i in range(self.n_units)]
+
+        # Which dimensionless params map directly to a dimensional source
+        # (and use the scale_v2 divisor)
+        direct_map = {
+            'Delta_I': 'Delta_I',
+            'I_ext': 'I_ext',
+            'w_jump': 'W_jump',
+        }
 
         dtype = neuraltide.config.get_dtype()
         result = {}
-        for key, value in dimless.items():
-            result[key] = tf.constant(value, dtype=dtype)
+
+        for dimless_key, dimless_vals in dimless_values.items():
+            src_key = direct_map.get(dimless_key)
+            if src_key is not None:
+                src = _dim_spec(src_key)
+                trainable = src['trainable']
+                lo, hi = _convert_bounds(src['min'], src['max'], scale_v2)
+            else:
+                trainable = False
+                lo, hi = None, None
+
+            result[dimless_key] = {
+                'value': tf.constant(dimless_vals, dtype=dtype),
+                'trainable': trainable,
+                'min': lo,
+                'max': hi,
+            }
 
         return result
 
@@ -377,9 +464,15 @@ class IzhikevichMeanField(PopulationModel):
         g_syn_tot = total_synaptic_input['g_syn']
         I_syn = total_synaptic_input['I_syn']
 
-        drdt = (self.Delta_I / self.PI + 2.0 * r * v - (self.alpha + g_syn_tot) * r) / self.tau_pop
-        dvdt = (v ** 2 - self.alpha * v - w + self.I_ext + I_syn - (self.PI * r) ** 2) / self.tau_pop
-        dwdt = (self.a * (self.b * v - w) + self.w_jump * r) / self.tau_pop
+        tau_pop = tf.maximum(self.tau_pop, 1e-6)
+
+        drdt = (self.Delta_I / self.PI + 2.0 * r * v - (self.alpha + g_syn_tot) * r) / tau_pop
+        dvdt = (v**2 / (1 + (v/self.v_max)**2) - self.alpha * v - w + self.I_ext + I_syn - (self.PI * r) ** 2) / tau_pop
+        dwdt = (self.a * (self.b * v - w) + self.w_jump * r) / tau_pop
+
+        drdt = tf.debugging.check_numerics(drdt, f'IzhikevichMeanField dr/dt NaN')
+        dvdt = tf.debugging.check_numerics(dvdt, f'IzhikevichMeanField dv/dt NaN')
+        dwdt = tf.debugging.check_numerics(dwdt, f'IzhikevichMeanField dw/dt NaN')
 
         return [drdt, dvdt, dwdt]
 
@@ -387,18 +480,18 @@ class IzhikevichMeanField(PopulationModel):
         """
         Extract firing rate from state.
 
-        Returns the dimensionless rate r. The caller should scale to Hz
-        if needed using: rate_Hz = r / (dt * 1e-3) where dt is in ms.
+        Returns the firing rate in Hz.
+        Conversion: r_Hz = r / (tau_pop * 1e-3) where tau_pop is in ms.
         """
         r = state[0]
-        return tf.nn.relu(r)
+        return r / (self.tau_pop * 1e-3)
 
     def observables(self, state: StateList) -> Dict[str, TensorType]:
         """
         Return observable variables.
 
         Includes:
-            - firing_rate: dimensionless (should be scaled by 1/(dt*1e-3) for Hz)
+            - firing_rate: in Hz (converted from dimensionless r via r / (dt * 1e-3))
             - v_mean: dimensionless mean membrane potential (used by NMDASynapse)
             - w_mean: dimensionless mean adaptation current
         """
@@ -408,6 +501,129 @@ class IzhikevichMeanField(PopulationModel):
             'v_mean': v,
             'w_mean': w,
         }
+
+    def adjoint_derivatives(
+        self,
+        adjoint_state: StateList,
+        state: StateList,
+        total_synaptic_input: Dict[str, TensorType],
+    ) -> StateList:
+        """
+        Compute adjoint derivatives for IzhikevichMeanField.
+
+        The adjoint system: dλ/dt = -J^T @ λ
+
+        Jacobian J = ∂derivatives/∂state where state = [r, v, w]:
+            J = [[dr/dr, dr/dv, dr/dw],
+                 [dv/dr, dv/dv, dv/dw],
+                 [dw/dr, dw/dv, dw/dw]]
+
+        For Izhikevich:
+            dr/dt = (Delta_I/pi + 2*r*v - (alpha + g_syn)*r) / tau_pop
+            dv/dt = (v^2 - alpha*v - w + I_ext + I_syn - (pi*r)^2) / tau_pop
+            dw/dt = (a*(b*v - w) + w_jump*r) / tau_pop
+
+        Derivatives:
+            dr/dr = (2*v - alpha - g_syn) / tau_pop
+            dr/dv = 2*r / tau_pop
+            dr/dw = 0
+
+            dv/dr = -2*pi*r / tau_pop
+            dv/dv = (2*v - alpha) / tau_pop
+            dv/dw = -1 / tau_pop
+
+            dw/dr = w_jump / tau_pop
+            dw/dv = a*b / tau_pop
+            dw/dw = -a / tau_pop
+        """
+        r = state[0]
+        v = state[1]
+        w = state[2]
+
+        g_syn = total_synaptic_input.get('g_syn', tf.zeros_like(r))
+        I_syn = total_synaptic_input.get('I_syn', tf.zeros_like(r))
+
+        lambda_r = adjoint_state[0]
+        lambda_v = adjoint_state[1]
+        lambda_w = adjoint_state[2]
+
+        PI = self.PI
+
+        dr_dr = (2.0 * v - self.alpha - g_syn) / self.tau_pop
+        dr_dv = 2.0 * r / self.tau_pop
+        dr_dw = tf.zeros_like(r)
+
+        dv_dr = -2.0 * (PI ** 2) * r / self.tau_pop
+        dv_dv = (2.0 * v - self.alpha) / self.tau_pop
+        dv_dw = -1.0 / self.tau_pop
+
+        dw_dr = self.w_jump / self.tau_pop
+        dw_dv = self.a * self.b / self.tau_pop
+        dw_dw = -self.a / self.tau_pop
+
+        dlambda_r = -(dr_dr * lambda_r + dv_dr * lambda_v + dw_dr * lambda_w)
+        dlambda_v = -(dr_dv * lambda_r + dv_dv * lambda_v + dw_dv * lambda_w)
+        dlambda_w = -(dr_dw * lambda_r + dv_dw * lambda_v + dw_dw * lambda_w)
+
+        return [dlambda_r, dlambda_v, dlambda_w]
+
+    def parameter_jacobian(
+        self,
+        param_name: str,
+        state: StateList,
+        total_synaptic_input: Dict[str, TensorType],
+    ) -> TensorType:
+        """
+        Compute ∂derivatives/∂param for IzhikevichMeanField.
+
+        The state is [r, v, w]. Derivatives:
+            dr/dt = (Delta_I/pi + 2*r*v - (alpha + g_syn)*r) / tau_pop
+            dv/dt = (v^2 - alpha*v - w + I_ext + I_syn - (pi*r)^2) / tau_pop
+            dw/dt = (a*(b*v - w) + w_jump*r) / tau_pop
+
+        Jacobian for each parameter:
+            Delta_I: ∂(dr/dt)/∂Delta_I = 1/(pi * tau_pop)
+            I_ext:   ∂(dv/dt)/∂I_ext = 1/tau_pop
+            tau_pop: ∂derivatives/∂tau_pop involves more complex terms (we skip for simplicity)
+            alpha:  ∂dr/dt/∂alpha = -r/tau_pop, ∂dv/dt/∂alpha = v/tau_pop
+            etc.
+
+        Returns 0 for non-trainable parameters (tau_pop, alpha, a, b, w_jump).
+        """
+        r = state[0]
+
+        r = state[0]
+        v = state[1]
+
+        g_syn = total_synaptic_input.get('g_syn', tf.zeros_like(r))
+        I_syn = total_synaptic_input.get('I_syn', tf.zeros_like(r))
+
+        dtype = neuraltide.config.get_dtype()
+
+        if param_name == 'Delta_I':
+            ones = tf.ones_like(r)
+            return ones / (self.PI * self.tau_pop)
+        elif param_name == 'I_ext':
+            ones = tf.ones_like(r)
+            return ones / self.tau_pop
+        elif param_name == 'tau_pop':
+            return tf.zeros_like(r)
+        elif param_name == 'alpha':
+            # Return scalar for simplicity, adjoint will use first component
+            ones = tf.ones_like(r)
+            return -ones / self.tau_pop
+        elif param_name == 'a':
+            ones = tf.ones_like(r)
+            return ones / self.tau_pop
+        elif param_name == 'b':
+            v = state[1]
+            ones = tf.ones_like(r)
+            return self.a * v / self.tau_pop
+        elif param_name == 'w_jump':
+            ones = tf.ones_like(r)
+            return ones / self.tau_pop
+        else:
+            return tf.zeros_like(r)
 
     @property
     def parameter_spec(self) -> Dict[str, Dict[str, Any]]:

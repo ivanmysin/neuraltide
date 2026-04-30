@@ -70,6 +70,54 @@ class CompositeSynapse(SynapseModel):
 
         return ({'I_syn': total_I_syn, 'g_syn': total_g_syn}, new_states)
 
+    def derivatives(
+        self,
+        state: StateList,
+        pre_firing_rate: TensorType,
+        post_voltage: TensorType,
+    ) -> StateList:
+        """
+        Compute derivatives as the concatenation of all component derivatives.
+        """
+        derivs = []
+        state_idx = 0
+
+        for name, syn in self.components:
+            n_syn_states = len(syn.state_size)
+            syn_state = state[state_idx:state_idx + n_syn_states]
+            state_idx += n_syn_states
+
+            comp_derivs = syn.derivatives(syn_state, pre_firing_rate, post_voltage)
+            derivs.extend(comp_derivs)
+
+        return derivs
+
+    def compute_current(
+        self,
+        state: StateList,
+        pre_firing_rate: TensorType,
+        post_voltage: TensorType,
+    ) -> Dict[str, TensorType]:
+        """
+        Compute total synaptic current as sum of all components.
+        """
+        dtype = neuraltide.config.get_dtype()
+        total_I_syn = tf.zeros([1, self.n_post], dtype=dtype)
+        total_g_syn = tf.zeros([1, self.n_post], dtype=dtype)
+
+        state_idx = 0
+
+        for name, syn in self.components:
+            n_syn_states = len(syn.state_size)
+            syn_state = state[state_idx:state_idx + n_syn_states]
+            state_idx += n_syn_states
+
+            comp_current = syn.compute_current(syn_state, pre_firing_rate, post_voltage)
+            total_I_syn += comp_current['I_syn']
+            total_g_syn += comp_current['g_syn']
+
+        return {'I_syn': total_I_syn, 'g_syn': total_g_syn}
+
     @property
     def parameter_spec(self) -> Dict[str, Dict[str, any]]:
         spec = {}

@@ -19,6 +19,18 @@ class _SynapseEntry:
     tgt: str
 
 
+def compute_synapse_current(
+    synapse: SynapseModel,
+    state: StateList,
+    pre_firing_rate: TensorType,
+    post_voltage: TensorType,
+) -> Dict[str, TensorType]:
+    """
+    Compute synaptic current and conductance from synapse state.
+    """
+    return synapse.compute_current(state, pre_firing_rate, post_voltage)
+
+
 class NetworkGraph:
     """
     Описание топологии сети: популяции и синаптические проекции.
@@ -125,6 +137,87 @@ class NetworkGraph:
         ]
 
 
+def unpack_state(
+    graph: NetworkGraph,
+    flat_pop_states: StateList,
+    flat_syn_states: StateList,
+) -> Tuple[Dict[str, StateList], Dict[str, StateList]]:
+    """
+    Unpack flat state lists into dictionaries keyed by population/synapse name.
+    
+    Args:
+        graph: NetworkGraph
+        flat_pop_states: Flat list of population states
+        flat_syn_states: Flat list of synapse states
+    
+    Returns:
+        (pop_states_dict, syn_states_dict)
+    """
+    pop_states_dict = {}
+    idx = 0
+    for name in graph.population_names:
+        pop = graph._populations[name]
+        n = len(pop.state_size)
+        pop_states_dict[name] = flat_pop_states[idx:idx + n]
+        idx += n
+    
+    syn_states_dict = {}
+    idx = 0
+    for name in graph.synapse_names:
+        entry = graph._synapses[name]
+        n = len(entry.model.state_size)
+        syn_states_dict[name] = flat_syn_states[idx:idx + n]
+        idx += n
+    
+    return pop_states_dict, syn_states_dict
+
+
+def pack_state(
+    pop_states_dict: Dict[str, StateList],
+    syn_states_dict: Dict[str, StateList],
+) -> Tuple[StateList, StateList]:
+    """
+    Pack state dictionaries into flat lists.
+    
+    Args:
+        pop_states_dict: Dict of population states
+        syn_states_dict: Dict of synapse states
+    
+    Returns:
+        (flat_pop_states, flat_syn_states)
+    """
+    flat_pop = []
+    for name in pop_states_dict:
+        flat_pop.extend(pop_states_dict[name])
+    
+    flat_syn = []
+    for name in syn_states_dict:
+        flat_syn.extend(syn_states_dict[name])
+    
+    return flat_pop, flat_syn
+
+
+def get_firing_rates(
+    graph: NetworkGraph,
+    pop_states_dict: Dict[str, StateList],
+) -> Dict[str, TensorType]:
+    """
+    Get firing rates for all dynamic populations.
+    
+    Args:
+        graph: NetworkGraph
+        pop_states_dict: Dict of population states
+    
+    Returns:
+        Dict of firing rates keyed by population name
+    """
+    all_rates = {}
+    for name in graph.dynamic_population_names:
+        pop = graph._populations[name]
+        all_rates[name] = pop.get_firing_rate(pop_states_dict[name])
+    return all_rates
+
+
 def _step_fn(
     states: Tuple[StateList, StateList, TensorType],
     t: TensorType,
@@ -182,15 +275,19 @@ def _step_fn(
         syn_state = syn_states_dict[syn_name]
         
         pre_rate = src_pop.get_firing_rate(src_state)
-        
+
         tgt_obs = tgt_pop.observables(tgt_state)
         post_v = tgt_obs.get(
             'v_mean',
             tf.zeros([1, tgt_pop.n_units], dtype=dtype)
         )
-        
-        current_dict, new_syn_state = entry.model.forward(
-            pre_rate, post_v, syn_state, entry.model.dt
+
+        new_syn_state, local_err = integrator.step_synapse(
+            entry.model, syn_state, pre_rate, post_v, entry.model.dt
+        )
+
+        current_dict = compute_synapse_current(
+            entry.model, new_syn_state, pre_rate, post_v
         )
 
         syn_I[entry.tgt] = syn_I[entry.tgt] + current_dict['I_syn']
@@ -214,7 +311,12 @@ def _step_fn(
     new_syn_states_list = []
     for name in graph.synapse_names:
         new_syn_states_list.extend(syn_states_dict[name])
-    
+
+    for i, s in enumerate(new_pop_states_list):
+        new_pop_states_list[i] = tf.debugging.check_numerics(s, f'NaN in population state[{i}]')
+    for i, s in enumerate(new_syn_states_list):
+        new_syn_states_list[i] = tf.debugging.check_numerics(s, f'NaN in synapse state[{i}]')
+
     return (tuple(new_pop_states_list), tuple(new_syn_states_list), stability_error)
 
 
@@ -251,6 +353,7 @@ class NetworkRNN(tf.keras.layers.Layer):
         return_sequences: bool = True,
         return_hidden_states: bool = False,
         stability_penalty_weight: float = 0.0,
+        stateful: bool = False,
         **kwargs,
     ):
         super().__init__(**kwargs)
@@ -259,6 +362,8 @@ class NetworkRNN(tf.keras.layers.Layer):
         self._integrator = integrator
         self._return_hidden_states = return_hidden_states
         self._stability_penalty_weight = stability_penalty_weight
+        self._stateful = stateful
+        self._current_state: Optional[Tuple[StateList, StateList]] = None
         
         self._build()
 
@@ -294,6 +399,7 @@ class NetworkRNN(tf.keras.layers.Layer):
         t_sequence: TensorType,
         initial_state: Optional[Tuple[StateList, StateList]] = None,
         training: bool = False,
+        reset_state: bool = False,
     ) -> NetworkOutput:
         """
         Симулирует сеть на протяжении временной последовательности.
@@ -302,7 +408,11 @@ class NetworkRNN(tf.keras.layers.Layer):
             t_sequence: tf.Tensor shape [batch, T, 1] или [batch, T]
                 Временная последовательность в мс.
             initial_state: Optional[Tuple[pop_states, syn_states]]
-                Начальное состояние. Если None, используется нулевое.
+                Начальное состояние. Если None, используется нулевое
+                (или _current_state если stateful=True).
+            training: bool — режим обучения.
+            reset_state: bool — сбросить состояние перед прогоном.
+                Полезно для batch-симуляций без stateful mode.
         
         Returns:
             NetworkOutput с firing_rates для каждой динамической популяции.
@@ -312,11 +422,16 @@ class NetworkRNN(tf.keras.layers.Layer):
         
         n_steps = int(t_sequence.shape[1])
         
-        if initial_state is None:
+        if reset_state:
+            self._current_state = None
+        
+        if initial_state is not None:
+            init_pop, init_syn = initial_state
+        elif self._stateful and self._current_state is not None:
+            init_pop, init_syn = self._current_state
+        else:
             init_pop = list(self._init_pop_states)
             init_syn = list(self._init_syn_states)
-        else:
-            init_pop, init_syn = initial_state
         
         pop_states = list(init_pop)
         syn_states = list(init_syn)
@@ -366,6 +481,11 @@ class NetworkRNN(tf.keras.layers.Layer):
         
         stability_loss = self._stability_penalty_weight * tf.reduce_mean(stability_acc)
         
+        self._last_final_state = (pop_states, syn_states)
+        
+        if self._stateful:
+            self._current_state = (pop_states, syn_states)
+        
         return NetworkOutput(
             firing_rates=all_rates,
             hidden_states=None,
@@ -383,7 +503,7 @@ class NetworkRNN(tf.keras.layers.Layer):
         return vars_
 
     def get_initial_state(self, batch_size: int = 1) -> Tuple[StateList, StateList]:
-        """Возвращает начальное состояние сети."""
+        """Возвращает начальное состояние сети (по умолчанию нулевое)."""
         init_pop = []
         for pop in self._graph._populations.values():
             init_pop.extend(pop.get_initial_state(batch_size))
@@ -393,3 +513,43 @@ class NetworkRNN(tf.keras.layers.Layer):
             init_syn.extend(entry.model.get_initial_state(batch_size))
         
         return init_pop, init_syn
+
+    def get_state(self, force_compute: bool = False) -> Tuple[StateList, StateList]:
+        """
+        Возвращает текущее сохранённое состояние.
+
+        В stateful режиме после вызова call() возвращает состояние
+        на конец последнего прогона. Если stateful=False или
+        состояние не установлено, возвращает None.
+
+        Args:
+            force_compute: если True и состояние не сохранено,
+                          вычислить из последнего прогона (требует
+                          сохранения состояний в call).
+
+        Returns:
+            Tuple[pop_states, syn_states] или None.
+        """
+        if self._current_state is not None:
+            return self._current_state
+        
+        if force_compute and hasattr(self, '_last_final_state'):
+            return self._last_final_state
+        
+        return None
+
+    def set_initial_state(self, state: Tuple[StateList, StateList]) -> None:
+        """
+        Устанавливает внутреннее состояние сети.
+
+        Позволяет продолжить симуляцию с заданного состояния
+        вместо нулевого начального состояния.
+
+        Args:
+            state: Tuple[pop_states, syn_states] — состояние популяций и синапсов.
+        """
+        self._current_state = state
+
+    def reset_state(self) -> None:
+        """Сбрасывает внутреннее состояние в нулевое."""
+        self._current_state = None
