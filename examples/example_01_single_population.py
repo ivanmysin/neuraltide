@@ -45,13 +45,13 @@ gen = VonMisesGenerator(
 )
 
 syn_in = TsodyksMarkramSynapse(n_pre=1, n_post=2, dt=dt, params={
-    'gsyn_max': {'value': [[0.1, 0.1]], 'trainable': True},
+    'gsyn_max': {'value': [[0.1, 0.1]], 'trainable': True, 'min': 0.0},
     'tau_f':    {'value': 20.0,  'trainable': True, 'min': 6.0,  'max': 240.0},
     'tau_d':    {'value': 5.0,   'trainable': True, 'min': 2.0,  'max': 15.0},
     'tau_r':    {'value': 200.0, 'trainable': True, 'min': 91.0, 'max': 1300.0},
     'Uinc':     {'value': 0.2,   'trainable': True, 'min': 0.04, 'max': 0.7},
     'pconn':    {'value': [[1.0, 1.0]], 'trainable': False},
-    'e_r':      {'value': 0.0,   'trainable': False},
+    'e_r':      {'value': 1.0,   'trainable': False},
 })
 
 syn_rec = TsodyksMarkramSynapse(n_pre=2, n_post=2, dt=dt, params={
@@ -61,7 +61,7 @@ syn_rec = TsodyksMarkramSynapse(n_pre=2, n_post=2, dt=dt, params={
     'tau_r':    {'value': 200.0, 'trainable': True, 'min': 91.0, 'max': 1300.0},
     'Uinc':     {'value': 0.2,   'trainable': True, 'min': 0.04, 'max': 0.7},
     'pconn':    {'value': [[1, 1], [1, 1]], 'trainable': False},
-    'e_r':      {'value': 0.0,   'trainable': False},
+    'e_r':      {'value': 1.0,   'trainable': False},
 })
 
 graph = NetworkGraph(dt=dt)
@@ -94,7 +94,7 @@ loss_fn = CompositeLoss([
 ])
 trainer = Trainer(network, loss_fn,
                   optimizer=tf.keras.optimizers.Adam(1e-3))
-history = trainer.fit(t_seq, epochs=2000, verbose=1)
+history = trainer.fit(t_seq, epochs=2000, verbose=2)
 
 output_after = network(t_seq, training=False)
 

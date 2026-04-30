@@ -100,8 +100,8 @@ class NMDASynapse(SynapseModel):
 
         dtype = neuraltide.config.get_dtype()
         pconn = tf.cast(self.pconn_nmda, dtype)
-        tau1 = tf.cast(self.tau1_nmda, dtype)
-        tau2 = tf.cast(self.tau2_nmda, dtype)
+        tau1 = tf.maximum(tf.cast(self.tau1_nmda, dtype), 1e-6)
+        tau2 = tf.maximum(tf.cast(self.tau2_nmda, dtype), 1e-6)
 
         firing_probs_T = tf.transpose(pre_firing_rate / 1000.0)
         s_input = pconn * firing_probs_T

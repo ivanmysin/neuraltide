@@ -108,9 +108,9 @@ class TsodyksMarkramSynapse(SynapseModel):
 
         dtype = neuraltide.config.get_dtype()
         pconn = tf.cast(self.pconn, dtype)
-        tau_d = tf.cast(self.tau_d, dtype)
-        tau_f = tf.cast(self.tau_f, dtype)
-        tau_r = tf.cast(self.tau_r, dtype)
+        tau_d = tf.maximum(tf.cast(self.tau_d, dtype), 1e-6)
+        tau_f = tf.maximum(tf.cast(self.tau_f, dtype), 1e-6)
+        tau_r = tf.maximum(tf.cast(self.tau_r, dtype), 1e-6)
         Uinc = tf.cast(self.Uinc, dtype)
 
         firing_probs_T = tf.transpose(pre_firing_rate / 1000.0)

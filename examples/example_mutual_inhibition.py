@@ -26,7 +26,7 @@ dt = 0.1
 T_total = 1000  # ms - total simulation time
 batch_size = 25   # ms per batch
 transient = 20     # ms transient to skip
-nbatches = 20       # number of batches to optimize (reduced for test)
+nbatches = 1       # number of batches to optimize (reduced for test)
 nepochs = 200
 
 n_batches = T_total // batch_size
@@ -38,40 +38,50 @@ n_transient_steps = int(transient / dt)
 
 t_seq_full = tf.constant(t_all[None, :, None], dtype=tf.float32)
 
-pop_params = {
-    'Cm': 114.0,
-    'K': 1.19,
-    'V_rest': -57.63,
-    'V_T': -35.53,
-    'V_reset': -48.7,
-    'A': 0.005,
-    'B': 0.22,
-    'W_jump': 2.0,
-    'Delta_I': 20.0,
-    'I_ext': {'value': 400.0, 'trainable': True, 'min': 0.0, 'max': 1000.0},
-}
+# pop_params = {
+#     'Cm': 114.0,
+#     'K': 1.19,
+#     'V_rest': -57.63,
+#     'V_T': -35.53,
+#     'V_reset': -48.7,
+#     'A': 0.005,
+#     'B': 0.22,
+#     'W_jump': 2.0,
+#     'Delta_I': 20.0,
+#     'I_ext': {'value': 400.0, 'trainable': True, 'min': 0.0, 'max': 1000.0},
+# }
+
+pop_params = {'tau_pop':   {'value': [1.0, ],   'trainable': False},
+              'alpha':     {'value': [0.5, ],   'trainable': False},
+              'a':         {'value': [0.02, ], 'trainable': False},
+              'b':         {'value': [0.2, ],   'trainable': False},
+              'w_jump':    {'value': [0.1, ],   'trainable': False},
+              'Delta_I':   {'value': [0.5, ],   'trainable': False,
+                            'min': 0.01, 'max': 2.0},
+              'I_ext':     {'value': [0.1, ],   'trainable': True,
+                            'min': -2.0, 'max': 2.0},}
 
 pop1 = IzhikevichMeanField(dt=dt, params=pop_params.copy(), name='pop1')
 pop2 = IzhikevichMeanField(dt=dt, params=pop_params.copy(), name='pop2')
 
 syn_1to2 = TsodyksMarkramSynapse(n_pre=1, n_post=1, dt=dt, params={
-    'gsyn_max': {'value': 100.0, 'trainable': True, 'min': 0.0, 'max': 5000.0},
+    'gsyn_max': {'value': 0.1, 'trainable': True, 'min': 0.0, 'max': 0.5},
     'tau_d': {'value': 6.02, 'trainable': True, 'min': 2.0, 'max': 15.0},
     'tau_r': {'value': 200.0, 'trainable': True, 'min': 50.0, 'max': 500.0},
     'tau_f': {'value': 20.0, 'trainable': True, 'min': 5.0, 'max': 100.0},
     'Uinc': {'value': 0.3, 'trainable': True, 'min': 0.1, 'max': 0.6},
     'pconn': {'value': 1.0, 'trainable': False},
-    'e_r': {'value': -75.0, 'trainable': False},
+    'e_r': {'value': -1.0, 'trainable': False},
 }, name='syn_1to2')
 
 syn_2to1 = TsodyksMarkramSynapse(n_pre=1, n_post=1, dt=dt, params={
-    'gsyn_max': {'value': 100.0, 'trainable': True, 'min': 10.0, 'max': 500.0},
+    'gsyn_max': {'value': 0.1, 'trainable': True, 'min': 0.0, 'max': 0.5},
     'tau_d': {'value': 6.02, 'trainable': True, 'min': 2.0, 'max': 15.0},
     'tau_r': {'value': 200.0, 'trainable': True, 'min': 50.0, 'max': 500.0},
     'tau_f': {'value': 20.0, 'trainable': True, 'min': 5.0, 'max': 100.0},
     'Uinc': {'value': 0.3, 'trainable': True, 'min': 0.1, 'max': 0.6},
     'pconn': {'value': 1.0, 'trainable': False},
-    'e_r': {'value': -75.0, 'trainable': False},
+    'e_r': {'value': -0.2, 'trainable': False},
 }, name='syn_2to1')
 
 graph = NetworkGraph(dt=dt)
@@ -123,138 +133,138 @@ _ = network(t_seq_full_tf, training=False)
 
 pre_train_pop_state, pre_train_syn_state = network.get_state(force_compute=True)
 
-print(f"Pre-training state after full simulation:")
-print(f"  Pop1: r={float(pre_train_pop_state[0].numpy()[0,0]):.4f}, v={float(pre_train_pop_state[1].numpy()[0,0]):.4f}, w={float(pre_train_pop_state[2].numpy()[0,0]):.4f}")
-print(f"  Pop2: r={float(pre_train_pop_state[3].numpy()[0,0]):.4f}, v={float(pre_train_pop_state[4].numpy()[0,0]):.4f}, w={float(pre_train_pop_state[5].numpy()[0,0]):.4f}")
-print(f"  Syn1to2: R={float(pre_train_syn_state[0].numpy()[0,0]):.4f}, U={float(pre_train_syn_state[1].numpy()[0,0]):.4f}, A={float(pre_train_syn_state[2].numpy()[0,0]):.4f}")
-print(f"  Syn2to1: R={float(pre_train_syn_state[3].numpy()[0,0]):.4f}, U={float(pre_train_syn_state[4].numpy()[0,0]):.4f}, A={float(pre_train_syn_state[5].numpy()[0,0]):.4f}")
+# print(f"Pre-training state after full simulation:")
+# print(f"  Pop1: r={float(pre_train_pop_state[0].numpy()[0,0]):.4f}, v={float(pre_train_pop_state[1].numpy()[0,0]):.4f}, w={float(pre_train_pop_state[2].numpy()[0,0]):.4f}")
+# print(f"  Pop2: r={float(pre_train_pop_state[3].numpy()[0,0]):.4f}, v={float(pre_train_pop_state[4].numpy()[0,0]):.4f}, w={float(pre_train_pop_state[5].numpy()[0,0]):.4f}")
+# print(f"  Syn1to2: R={float(pre_train_syn_state[0].numpy()[0,0]):.4f}, U={float(pre_train_syn_state[1].numpy()[0,0]):.4f}, A={float(pre_train_syn_state[2].numpy()[0,0]):.4f}")
+# print(f"  Syn2to1: R={float(pre_train_syn_state[3].numpy()[0,0]):.4f}, U={float(pre_train_syn_state[4].numpy()[0,0]):.4f}, A={float(pre_train_syn_state[5].numpy()[0,0]):.4f}")
 
-print("\n=== Visualization: Pre-training dynamics ===")
-try:
-    import matplotlib
-    matplotlib.use('Agg')
-    import matplotlib.pyplot as plt
-
-    network.reset_state()
-    pop_hist = {
-        'pop1': {'r': [], 'v': [], 'w': []},
-        'pop2': {'r': [], 'v': [], 'w': []},
-    }
-    syn_hist = {
-        'syn_1to2': {'R': [], 'U': [], 'A': []},
-        'syn_2to1': {'R': [], 'U': [], 'A': []},
-    }
-    pop_states, syn_states = None, None
-    transient_states = [pre_train_pop_state, pre_train_syn_state]
-
-    for step in range(t_all.shape[0]):
-        t = tf.constant([[t_all[step]]], dtype=tf.float32)
-        if step == 0:
-            output = network(t, training=False, initial_state=transient_states)
-        else:
-            output = network(t, training=False, initial_state=(pop_states, syn_states))
-        pop_states, syn_states = network.get_state(force_compute=True)
-        pop_hist['pop1']['r'].append(pop_states[0][0].numpy())
-        pop_hist['pop1']['v'].append(pop_states[1][0].numpy())
-        pop_hist['pop1']['w'].append(pop_states[2][0].numpy())
-        pop_hist['pop2']['r'].append(pop_states[3][0].numpy())
-        pop_hist['pop2']['v'].append(pop_states[4][0].numpy())
-        pop_hist['pop2']['w'].append(pop_states[5][0].numpy())
-        syn_hist['syn_1to2']['R'].append(syn_states[0][0].numpy())
-        syn_hist['syn_1to2']['U'].append(syn_states[1][0].numpy())
-        syn_hist['syn_1to2']['A'].append(syn_states[2][0].numpy())
-        syn_hist['syn_2to1']['R'].append(syn_states[3][0].numpy())
-        syn_hist['syn_2to1']['U'].append(syn_states[4][0].numpy())
-        syn_hist['syn_2to1']['A'].append(syn_states[5][0].numpy())
-
-    fig, axes = plt.subplots(4, 2, figsize=(14, 12))
-
-    ax = axes[0, 0]
-    r_p1 = np.squeeze(np.array(pop_hist['pop1']['r']))
-    r_p2 = np.squeeze(np.array(pop_hist['pop2']['r']))
-    ax.plot(t_all, r_p1, 'b-', linewidth=1.5, label='pop1')
-    ax.plot(t_all, r_p2, 'r-', linewidth=1.5, label='pop2')
-    ax.set_xlabel('Time (ms)')
-    ax.set_ylabel('r (dimensionless)')
-    ax.set_title('Pre-training: Firing Rate r (dimensionless)')
-    ax.legend()
-    ax.grid(True, alpha=0.3)
-
-    ax = axes[0, 1]
-    ax.plot(t_all, target_full[:, 0], 'b--', linewidth=2, label='Target pop1')
-    ax.plot(t_all, r_p1 / (dt * 1e-3), 'b-', linewidth=1.5, alpha=0.8, label='pop1')
-    ax.plot(t_all, target_full[:, 1], 'r--', linewidth=2, label='Target pop2')
-    ax.plot(t_all, r_p2 / (dt * 1e-3), 'r-', linewidth=1.5, alpha=0.8, label='pop2')
-    ax.set_xlabel('Time (ms)')
-    ax.set_ylabel('Firing Rate (Hz)')
-    ax.set_title('Pre-training: Firing Rate (Hz) with Target')
-    ax.legend()
-    ax.grid(True, alpha=0.3)
-
-    ax = axes[1, 0]
-    ax.plot(t_all, np.squeeze(np.array(pop_hist['pop1']['v'])), 'b-', linewidth=1.5, label='v pop1')
-    ax.plot(t_all, np.squeeze(np.array(pop_hist['pop2']['v'])), 'r-', linewidth=1.5, label='v pop2')
-    ax.set_xlabel('Time (ms)')
-    ax.set_ylabel('v (dimensionless)')
-    ax.set_title('Pre-training: Mean Membrane Potential v')
-    ax.legend()
-    ax.grid(True, alpha=0.3)
-
-    ax = axes[1, 1]
-    ax.plot(t_all, np.squeeze(np.array(pop_hist['pop1']['w'])), 'b-', linewidth=1.5, label='w pop1')
-    ax.plot(t_all, np.squeeze(np.array(pop_hist['pop2']['w'])), 'r-', linewidth=1.5, label='w pop2')
-    ax.set_xlabel('Time (ms)')
-    ax.set_ylabel('w (dimensionless)')
-    ax.set_title('Pre-training: Adaptation Current w')
-    ax.legend()
-    ax.grid(True, alpha=0.3)
-
-    ax = axes[2, 0]
-    ax.plot(t_all, np.squeeze(np.array(syn_hist['syn_1to2']['R'])), 'b-', linewidth=1.5, label='R')
-    ax.plot(t_all, np.squeeze(np.array(syn_hist['syn_1to2']['U'])), 'g-', linewidth=1.5, label='U')
-    ax.plot(t_all, np.squeeze(np.array(syn_hist['syn_1to2']['A'])), 'm-', linewidth=1.5, label='A')
-    ax.set_xlabel('Time (ms)')
-    ax.set_ylabel('State')
-    ax.set_title('Pre-training: Synapse Pop1->Pop2: R, U, A')
-    ax.legend()
-    ax.grid(True, alpha=0.3)
-
-    ax = axes[2, 1]
-    ax.plot(t_all, np.squeeze(np.array(syn_hist['syn_2to1']['R'])), 'b-', linewidth=1.5, label='R')
-    ax.plot(t_all, np.squeeze(np.array(syn_hist['syn_2to1']['U'])), 'g-', linewidth=1.5, label='U')
-    ax.plot(t_all, np.squeeze(np.array(syn_hist['syn_2to1']['A'])), 'm-', linewidth=1.5, label='A')
-    ax.set_xlabel('Time (ms)')
-    ax.set_ylabel('State')
-    ax.set_title('Pre-training: Synapse Pop2->Pop1: R, U, A')
-    ax.legend()
-    ax.grid(True, alpha=0.3)
-
-    ax = axes[3, 0]
-    rates_p1 = r_p1 / (dt * 1e-3)
-    rates_p2 = r_p2 / (dt * 1e-3)
-    ax.plot(t_all, rates_p1, 'b-', linewidth=1.5, label='Pop1 (Hz)')
-    ax.plot(t_all, rates_p2, 'r-', linewidth=1.5, label='Pop2 (Hz)')
-    ax.set_xlabel('Time (ms)')
-    ax.set_ylabel('Firing Rate (Hz)')
-    ax.set_title('Pre-training: Firing Rates in Hz')
-    ax.legend()
-    ax.grid(True, alpha=0.3)
-
-    ax = axes[3, 1]
-    phase = np.arctan2(rates_p2, rates_p1)
-    ax.plot(t_all, phase, 'k-', linewidth=1.5)
-    ax.set_xlabel('Time (ms)')
-    ax.set_ylabel('Phase (rad)')
-    ax.set_title('Pre-training: Phase (arctan2(Pop2, Pop1))')
-    ax.grid(True, alpha=0.3)
-
-    plt.tight_layout()
-    plt.savefig('pretraining_dynamics.png', dpi=150)
-    print("Pre-training dynamics saved to pretraining_dynamics.png")
-    plt.close()
-
-except ImportError as e:
-    print(f"Matplotlib not available: {e}")
+# print("\n=== Visualization: Pre-training dynamics ===")
+# try:
+#     import matplotlib
+#     matplotlib.use('Agg')
+#     import matplotlib.pyplot as plt
+#
+#     network.reset_state()
+#     pop_hist = {
+#         'pop1': {'r': [], 'v': [], 'w': []},
+#         'pop2': {'r': [], 'v': [], 'w': []},
+#     }
+#     syn_hist = {
+#         'syn_1to2': {'R': [], 'U': [], 'A': []},
+#         'syn_2to1': {'R': [], 'U': [], 'A': []},
+#     }
+#     pop_states, syn_states = None, None
+#     transient_states = [pre_train_pop_state, pre_train_syn_state]
+#
+#     for step in range(t_all.shape[0]):
+#         t = tf.constant([[t_all[step]]], dtype=tf.float32)
+#         if step == 0:
+#             output = network(t, training=False, initial_state=transient_states)
+#         else:
+#             output = network(t, training=False, initial_state=(pop_states, syn_states))
+#         pop_states, syn_states = network.get_state(force_compute=True)
+#         pop_hist['pop1']['r'].append(pop_states[0][0].numpy())
+#         pop_hist['pop1']['v'].append(pop_states[1][0].numpy())
+#         pop_hist['pop1']['w'].append(pop_states[2][0].numpy())
+#         pop_hist['pop2']['r'].append(pop_states[3][0].numpy())
+#         pop_hist['pop2']['v'].append(pop_states[4][0].numpy())
+#         pop_hist['pop2']['w'].append(pop_states[5][0].numpy())
+#         syn_hist['syn_1to2']['R'].append(syn_states[0][0].numpy())
+#         syn_hist['syn_1to2']['U'].append(syn_states[1][0].numpy())
+#         syn_hist['syn_1to2']['A'].append(syn_states[2][0].numpy())
+#         syn_hist['syn_2to1']['R'].append(syn_states[3][0].numpy())
+#         syn_hist['syn_2to1']['U'].append(syn_states[4][0].numpy())
+#         syn_hist['syn_2to1']['A'].append(syn_states[5][0].numpy())
+#
+#     fig, axes = plt.subplots(4, 2, figsize=(14, 12))
+#
+#     ax = axes[0, 0]
+#     r_p1 = np.squeeze(np.array(pop_hist['pop1']['r']))
+#     r_p2 = np.squeeze(np.array(pop_hist['pop2']['r']))
+#     ax.plot(t_all, r_p1, 'b-', linewidth=1.5, label='pop1')
+#     ax.plot(t_all, r_p2, 'r-', linewidth=1.5, label='pop2')
+#     ax.set_xlabel('Time (ms)')
+#     ax.set_ylabel('r (dimensionless)')
+#     ax.set_title('Pre-training: Firing Rate r (dimensionless)')
+#     ax.legend()
+#     ax.grid(True, alpha=0.3)
+#
+#     ax = axes[0, 1]
+#     ax.plot(t_all, target_full[:, 0], 'b--', linewidth=2, label='Target pop1')
+#     ax.plot(t_all, r_p1 / (dt * 1e-3), 'b-', linewidth=1.5, alpha=0.8, label='pop1')
+#     ax.plot(t_all, target_full[:, 1], 'r--', linewidth=2, label='Target pop2')
+#     ax.plot(t_all, r_p2 / (dt * 1e-3), 'r-', linewidth=1.5, alpha=0.8, label='pop2')
+#     ax.set_xlabel('Time (ms)')
+#     ax.set_ylabel('Firing Rate (Hz)')
+#     ax.set_title('Pre-training: Firing Rate (Hz) with Target')
+#     ax.legend()
+#     ax.grid(True, alpha=0.3)
+#
+#     ax = axes[1, 0]
+#     ax.plot(t_all, np.squeeze(np.array(pop_hist['pop1']['v'])), 'b-', linewidth=1.5, label='v pop1')
+#     ax.plot(t_all, np.squeeze(np.array(pop_hist['pop2']['v'])), 'r-', linewidth=1.5, label='v pop2')
+#     ax.set_xlabel('Time (ms)')
+#     ax.set_ylabel('v (dimensionless)')
+#     ax.set_title('Pre-training: Mean Membrane Potential v')
+#     ax.legend()
+#     ax.grid(True, alpha=0.3)
+#
+#     ax = axes[1, 1]
+#     ax.plot(t_all, np.squeeze(np.array(pop_hist['pop1']['w'])), 'b-', linewidth=1.5, label='w pop1')
+#     ax.plot(t_all, np.squeeze(np.array(pop_hist['pop2']['w'])), 'r-', linewidth=1.5, label='w pop2')
+#     ax.set_xlabel('Time (ms)')
+#     ax.set_ylabel('w (dimensionless)')
+#     ax.set_title('Pre-training: Adaptation Current w')
+#     ax.legend()
+#     ax.grid(True, alpha=0.3)
+#
+#     ax = axes[2, 0]
+#     ax.plot(t_all, np.squeeze(np.array(syn_hist['syn_1to2']['R'])), 'b-', linewidth=1.5, label='R')
+#     ax.plot(t_all, np.squeeze(np.array(syn_hist['syn_1to2']['U'])), 'g-', linewidth=1.5, label='U')
+#     ax.plot(t_all, np.squeeze(np.array(syn_hist['syn_1to2']['A'])), 'm-', linewidth=1.5, label='A')
+#     ax.set_xlabel('Time (ms)')
+#     ax.set_ylabel('State')
+#     ax.set_title('Pre-training: Synapse Pop1->Pop2: R, U, A')
+#     ax.legend()
+#     ax.grid(True, alpha=0.3)
+#
+#     ax = axes[2, 1]
+#     ax.plot(t_all, np.squeeze(np.array(syn_hist['syn_2to1']['R'])), 'b-', linewidth=1.5, label='R')
+#     ax.plot(t_all, np.squeeze(np.array(syn_hist['syn_2to1']['U'])), 'g-', linewidth=1.5, label='U')
+#     ax.plot(t_all, np.squeeze(np.array(syn_hist['syn_2to1']['A'])), 'm-', linewidth=1.5, label='A')
+#     ax.set_xlabel('Time (ms)')
+#     ax.set_ylabel('State')
+#     ax.set_title('Pre-training: Synapse Pop2->Pop1: R, U, A')
+#     ax.legend()
+#     ax.grid(True, alpha=0.3)
+#
+#     ax = axes[3, 0]
+#     rates_p1 = r_p1 / (dt * 1e-3)
+#     rates_p2 = r_p2 / (dt * 1e-3)
+#     ax.plot(t_all, rates_p1, 'b-', linewidth=1.5, label='Pop1 (Hz)')
+#     ax.plot(t_all, rates_p2, 'r-', linewidth=1.5, label='Pop2 (Hz)')
+#     ax.set_xlabel('Time (ms)')
+#     ax.set_ylabel('Firing Rate (Hz)')
+#     ax.set_title('Pre-training: Firing Rates in Hz')
+#     ax.legend()
+#     ax.grid(True, alpha=0.3)
+#
+#     ax = axes[3, 1]
+#     phase = np.arctan2(rates_p2, rates_p1)
+#     ax.plot(t_all, phase, 'k-', linewidth=1.5)
+#     ax.set_xlabel('Time (ms)')
+#     ax.set_ylabel('Phase (rad)')
+#     ax.set_title('Pre-training: Phase (arctan2(Pop2, Pop1))')
+#     ax.grid(True, alpha=0.3)
+#
+#     plt.tight_layout()
+#     plt.savefig('pretraining_dynamics.png', dpi=150)
+#     print("Pre-training dynamics saved to pretraining_dynamics.png")
+#     plt.close()
+#
+# except ImportError as e:
+#     print(f"Matplotlib not available: {e}")
 
 print("\n=== Transient simulation ===")
 t_transient = t_all[:n_transient_steps]
@@ -328,14 +338,16 @@ for epoch in range(nepochs):
         target_batch = get_batch_target(b)
 
         loss_batch = CompositeLoss([
-            (1.0, MSLELoss(target_batch)),
+            # (1.0, MSLELoss(target_batch)),
+            (1.0, MSELoss(target_batch)),
             (1e-3, StabilityPenalty()),
         ])
 
         with tf.GradientTape() as tape:
             output = network(t_batch, training=True, initial_state=(current_pop_state, current_syn_state))
             
-            msle_loss = MSLELoss(target_batch)(output, network)
+            # msle_loss = MSLELoss(target_batch)(output, network)
+            msle_loss = MSELoss(target_batch)(output, network)
             stab_loss = StabilityPenalty()(output, network)
             
             if b == 6 and epoch == 1:
@@ -381,7 +393,8 @@ for epoch in range(nepochs):
             grads_and_vars = [(g, v) for g, (_, v) in zip(clipped_grads, grads_and_vars)]
 
             if epoch == 0 and b < 3:
-                print(f"    Before step - Uinc values: {[float(v.numpy()[0,0]) for n,v in network.trainable_variables if 'Uinc' in n]}")
+                print(f"    Before step - Uinc values: {[float(v.numpy().flatten()[0]) for v in network.trainable_variables if 'Uinc' in v.name]}")
+                print(f"    Before step - tau_r values: {[float(v.numpy().flatten()[0]) for v in network.trainable_variables if 'tau_r' in v.name]}")
 
             optimizer.apply_gradients(grads_and_vars)
 
@@ -390,12 +403,21 @@ for epoch in range(nepochs):
                 if constraint is not None:
                     var.assign(constraint(var))
 
+            for var in network.trainable_variables:
+                c = var.constraint
+                if c is not None:
+                    vals = var.numpy().flatten()
+                    lo = np.asarray(c.min_val, dtype=float).flatten()
+                    hi = np.asarray(c.max_val, dtype=float).flatten()
+                    if np.any(vals < lo - 1e-6) or np.any(vals > hi + 1e-6):
+                        print(f"    *** CONSTRAINT VIOLATION: {var.name} = {vals} not in [{lo},{hi}]")
+
             if epoch == 0 and b < 3:
-                print(f"    After step - Uinc values: {[float(v.numpy()[0,0]) for n,v in network.trainable_variables if 'Uinc' in n]}")
+                print(f"    After step - Uinc values: {[float(v.numpy().flatten()[0]) for v in network.trainable_variables if 'Uinc' in v.name]}")
 
             for g, v in grads_and_vars:
                 if np.any(np.isnan(v.numpy())):
-                    print(f"\n!!! NAN in VAR after batch {b}: {v.name.split(':')[0]} = {v.numpy()[0,0]:.6e}")
+                    print(f"\n!!! NAN in VAR after batch {b}: {v.name.split(':')[0]} = {v.numpy().flatten()[0]:.6e}")
 
         current_pop_state, current_syn_state = network.get_state(force_compute=True)
         
@@ -412,34 +434,13 @@ for epoch in range(nepochs):
         print(f"\n!!! NAN DETECTED at epoch {epoch+1} !!!")
         print("  Current parameters:")
         for v in network.trainable_variables:
-            print(f"    {v.name.split(':')[0]}: {float(v.numpy()[0,0]):.6f}")
-        break
+            print(f"    {v.name.split(':')[0]}: {float(v.numpy().flatten()[0]):.6f}")
 
-    avg_loss = np.mean(epoch_losses)
-    avg_r = np.mean(epoch_r)
-    avg_v = float(np.mean([float(current_pop_state[1].numpy()[0, 0]), float(current_pop_state[4].numpy()[0, 0])]))
-    avg_w = float(np.mean([float(current_pop_state[2].numpy()[0, 0]), float(current_pop_state[5].numpy()[0, 0])]))
-    avg_syn_R = float(np.mean([float(current_syn_state[0].numpy()[0, 0]), float(current_syn_state[3].numpy()[0, 0])]))
-    avg_syn_A = float(np.mean([float(current_syn_state[2].numpy()[0, 0]), float(current_syn_state[5].numpy()[0, 0])]))
-
-    train_log.append({
-        'epoch': epoch + 1,
-        'loss': avg_loss,
-        'r_pop1': float(current_pop_state[0].numpy()[0, 0]),
-        'r_pop2': float(current_pop_state[3].numpy()[0, 0]),
-        'v_pop1': float(current_pop_state[1].numpy()[0, 0]),
-        'v_pop2': float(current_pop_state[4].numpy()[0, 0]),
-        'syn_R': avg_syn_R,
-        'syn_A': avg_syn_A,
-    })
-
-    print(f"Epoch {epoch+1}/{nepochs}: loss={avg_loss:.4f}, r_pop1={avg_r:.4f}, v_avg={avg_v:.4f}, w_avg={avg_w:.4f}, syn_R={avg_syn_R:.4f}, syn_A={avg_syn_A:.4f}, grad_norm={np.mean(epoch_grads_norm):.4f}")
-
-    if np.isnan(avg_loss) or np.isnan(avg_r) or np.abs(avg_r) > 1e6:
-        print(f"\n!!! NAN DETECTED at epoch {epoch+1} !!!")
-        print("  Current parameters:")
-        for v in network.trainable_variables:
-            print(f"    {v.name.split(':')[0]}: {float(v.numpy()[0,0]):.6f}")
+        if nan_detected:
+            print(f"\n!!! NAN DETECTED at epoch {epoch+1} !!!")
+            print("  Current parameters:")
+            for v in network.trainable_variables:
+                print(f"    {v.name.split(':')[0]}: {float(v.numpy().flatten()[0]):.6f}")
         break
 
 rates_pop1, rates_pop2 = run_batched_simulation(nbatches)
@@ -459,7 +460,7 @@ print(f"Pop2 mean rate: {final_rates_pop2[0,n_eval_start:].mean():.2f} Hz")
 
 print("\n=== Trainable variables ===")
 for v in network.trainable_variables:
-    print(f"{v.name}: {float(v.numpy()[0, 0]):.4f}")
+    print(f"{v.name}: {float(v.numpy().flatten()[0]):.4f}")
 
 print("\n=== Visualization ===")
 try:
@@ -496,7 +497,7 @@ try:
 
     ax = axes[2]
     var_names = [v.name.split(':')[0] for v in network.trainable_variables]
-    var_values = [float(v.numpy()[0, 0]) for v in network.trainable_variables]
+    var_values = [float(v.numpy().flatten()[0]) for v in network.trainable_variables]
     colors = ['steelblue' if 'gsyn' in n else 'coral' for n in var_names]
     ax.bar(range(len(var_names)), var_values, color=colors)
     ax.set_xticks(range(len(var_names)))
