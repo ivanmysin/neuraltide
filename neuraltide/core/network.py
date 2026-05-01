@@ -372,11 +372,17 @@ class NetworkRNN(tf.keras.layers.Layer):
         batch_size = 1
         
         self._init_pop_states: StateList = []
-        for pop in self._graph._populations.values():
+        self._pop_state_offsets: Dict[str, int] = {}
+        for name in self._graph.population_names:
+            pop = self._graph._populations[name]
+            self._pop_state_offsets[name] = len(self._init_pop_states)
             self._init_pop_states.extend(pop.get_initial_state(batch_size))
         
         self._init_syn_states: StateList = []
-        for entry in self._graph._synapses.values():
+        self._syn_state_offsets: Dict[str, int] = {}
+        for name in self._graph.synapse_names:
+            entry = self._graph._synapses[name]
+            self._syn_state_offsets[name] = len(self._init_syn_states)
             self._init_syn_states.extend(entry.model.get_initial_state(batch_size))
         
         self._total_dynamic_units = sum(
@@ -420,8 +426,6 @@ class NetworkRNN(tf.keras.layers.Layer):
         if t_sequence.shape.rank == 2:
             t_sequence = t_sequence[:, :, tf.newaxis]
         
-        n_steps = int(t_sequence.shape[1])
-        
         if reset_state:
             self._current_state = None
         
@@ -433,58 +437,35 @@ class NetworkRNN(tf.keras.layers.Layer):
             init_pop = list(self._init_pop_states)
             init_syn = list(self._init_syn_states)
         
-        pop_states = list(init_pop)
-        syn_states = list(init_syn)
-        stability_acc = tf.zeros([1], dtype=neuraltide.config.get_dtype())
+        init_stability = tf.zeros([1], dtype=neuraltide.config.get_dtype())
         
-        pop_states_dict: Dict[str, StateList] = {}
-        idx = 0
-        for name in self._graph.population_names:
+        elems = tf.transpose(t_sequence, [1, 0, 2])
+        
+        scan_all = tf.scan(
+            lambda carry, t: _step_fn(carry, t, self._graph, self._integrator),
+            elems=elems,
+            initializer=(tuple(init_pop), tuple(init_syn), init_stability),
+            parallel_iterations=1,
+        )
+        
+        all_pop_stacked, all_syn_stacked, all_stability = scan_all
+        
+        all_rates = {}
+        for name in self._graph.dynamic_population_names:
+            idx = self._pop_state_offsets[name]
+            stacked_r = all_pop_stacked[idx]
             pop = self._graph._populations[name]
-            n = len(pop.state_size)
-            pop_states_dict[name] = pop_states[idx:idx + n]
-            idx += n
+            rate = pop.get_firing_rate([stacked_r])
+            all_rates[name] = tf.transpose(rate, [1, 0, 2])
         
-        dyn_names = self._graph.dynamic_population_names
-        all_rates: Dict[str, List[TensorType]] = {name: [] for name in dyn_names}
+        stability_loss = self._stability_penalty_weight * tf.reduce_mean(all_stability[-1])
         
-        for step in range(n_steps):
-            t = t_sequence[:, step:step+1, 0]
-            
-            pop_states_tuple = tuple(pop_states)
-            syn_states_tuple = tuple(syn_states)
-            
-            new_pop, new_syn, stability_acc = _step_fn(
-                (pop_states_tuple, syn_states_tuple, stability_acc),
-                t,
-                self._graph,
-                self._integrator
-            )
-            
-            pop_states = list(new_pop)
-            syn_states = list(new_syn)
-            
-            idx = 0
-            for name in self._graph.population_names:
-                pop = self._graph._populations[name]
-                n = len(pop.state_size)
-                pop_states_dict[name] = pop_states[idx:idx + n]
-                idx += n
-            
-            for name in dyn_names:
-                pop = self._graph._populations[name]
-                rate = pop.get_firing_rate(pop_states_dict[name])
-                all_rates[name].append(rate)
-        
-        for name in dyn_names:
-            all_rates[name] = tf.stack(all_rates[name], axis=1)
-        
-        stability_loss = self._stability_penalty_weight * tf.reduce_mean(stability_acc)
-        
-        self._last_final_state = (pop_states, syn_states)
+        final_pop_states = [s[-1] for s in all_pop_stacked]
+        final_syn_states = [s[-1] for s in all_syn_stacked]
+        self._last_final_state = (final_pop_states, final_syn_states)
         
         if self._stateful:
-            self._current_state = (pop_states, syn_states)
+            self._current_state = (final_pop_states, final_syn_states)
         
         return NetworkOutput(
             firing_rates=all_rates,

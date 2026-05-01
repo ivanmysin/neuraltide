@@ -20,6 +20,7 @@ from neuraltide.synapses import TsodyksMarkramSynapse
 from neuraltide.inputs import VonMisesGenerator
 from neuraltide.integrators import RK4Integrator
 from neuraltide.training import Trainer, CompositeLoss, MSELoss, MSLELoss, StabilityPenalty
+import time
 
 
 dt = 0.1
@@ -71,7 +72,7 @@ syn_1to2 = TsodyksMarkramSynapse(n_pre=1, n_post=1, dt=dt, params={
     'tau_f': {'value': 20.0, 'trainable': True, 'min': 5.0, 'max': 100.0},
     'Uinc': {'value': 0.3, 'trainable': True, 'min': 0.1, 'max': 0.6},
     'pconn': {'value': 1.0, 'trainable': False},
-    'e_r': {'value': -1.0, 'trainable': False},
+    'e_r': {'value': -0.2, 'trainable': False},
 }, name='syn_1to2')
 
 syn_2to1 = TsodyksMarkramSynapse(n_pre=1, n_post=1, dt=dt, params={
@@ -117,7 +118,7 @@ target = {
 }
 
 loss_fn = CompositeLoss([
-    (1.0, MSELoss(target)),
+    (1.0, MSLELoss(target)),
     (1e-3, StabilityPenalty()),
 ])
 
@@ -129,8 +130,10 @@ print("Running full T=1000ms simulation to observe pre-training dynamics...")
 
 network.reset_state()
 t_seq_full_tf = tf.constant(t_all[None, :, None], dtype=tf.float32)
-_ = network(t_seq_full_tf, training=False)
 
+timer=time.time()
+_ = network(t_seq_full_tf, training=False)
+print(f"Full simulation time: {time.time()-timer:.2f} sec")
 pre_train_pop_state, pre_train_syn_state = network.get_state(force_compute=True)
 
 # print(f"Pre-training state after full simulation:")
@@ -338,8 +341,7 @@ for epoch in range(nepochs):
         target_batch = get_batch_target(b)
 
         loss_batch = CompositeLoss([
-            # (1.0, MSLELoss(target_batch)),
-            (1.0, MSELoss(target_batch)),
+            (1.0, MSLELoss(target_batch)),
             (1e-3, StabilityPenalty()),
         ])
 
@@ -347,43 +349,14 @@ for epoch in range(nepochs):
             output = network(t_batch, training=True, initial_state=(current_pop_state, current_syn_state))
             
             # msle_loss = MSLELoss(target_batch)(output, network)
-            msle_loss = MSELoss(target_batch)(output, network)
+            msle_loss = MSLELoss(target_batch)(output, network)
             stab_loss = StabilityPenalty()(output, network)
             
-            if b == 6 and epoch == 1:
-                print(f"\n  DEBUG batch 6 (epoch 1, before crash):")
-                print(f"    pred pop1: min={float(output.firing_rates['pop1'].numpy().min()):.6f}, max={float(output.firing_rates['pop1'].numpy().max()):.6f}")
-                print(f"    pred pop2: min={float(output.firing_rates['pop2'].numpy().min()):.6f}, max={float(output.firing_rates['pop2'].numpy().max()):.6f}")
-                print(f"    target pop1: min={float(target_batch['pop1'].numpy().min()):.6f}, max={float(target_batch['pop1'].numpy().max()):.6f}")
-                print(f"    target pop2: min={float(target_batch['pop2'].numpy().min()):.6f}, max={float(target_batch['pop2'].numpy().max()):.6f}")
-                print(f"    MSLE loss: {float(msle_loss.numpy()):.6f}")
-                print(f"    Stability loss: {float(stab_loss.numpy()):.6f}")
+
             
             loss = loss_batch(output, network)
 
-        loss_val = float(loss.numpy())
-        if np.isnan(loss_val) or np.isinf(loss_val):
-            print(f"\n!!! NAN/INF in LOSS at epoch {epoch+1}, batch {b} !!!")
-            print(f"  Target batch shape: {target_batch['pop1'].shape}")
-            print(f"  Target batch range: [{float(target_batch['pop1'].numpy().min()):.4f}, {float(target_batch['pop1'].numpy().max()):.4f}]")
-            print(f"  Pred rates pop1: min={float(output.firing_rates['pop1'].numpy().min()):.4f}, max={float(output.firing_rates['pop1'].numpy().max()):.4f}")
-            print(f"  Pred rates pop2: min={float(output.firing_rates['pop2'].numpy().min()):.4f}, max={float(output.firing_rates['pop2'].numpy().max()):.4f}")
-            nan_detected = True
-            break
-
         grads = tape.gradient(loss, network.trainable_variables)
-
-        if b == 0 and epoch == 0:
-            print(f"\n  Gradient analysis (epoch 1, batch 0):")
-            for g, v in zip(grads, network.trainable_variables):
-                if g is not None:
-                    g_np = g.numpy()
-                    print(f"    {v.name.split(':')[0]}: mean={np.mean(g_np):.6e}, max={np.max(np.abs(g_np)):.6e}, has_nan={np.any(np.isnan(g_np))}")
-                else:
-                    print(f"    {v.name.split(':')[0]}: None")
-
-        if epoch == 0:
-            print(f"    Batch {b}: loss={loss_val:.4f}")
 
         grads_and_vars = [(g, v) for g, v in zip(grads, network.trainable_variables) if g is not None]
 
@@ -392,56 +365,15 @@ for epoch in range(nepochs):
             clipped_grads, _ = tf.clip_by_global_norm(grads_only, 1.0)
             grads_and_vars = [(g, v) for g, (_, v) in zip(clipped_grads, grads_and_vars)]
 
-            if epoch == 0 and b < 3:
-                print(f"    Before step - Uinc values: {[float(v.numpy().flatten()[0]) for v in network.trainable_variables if 'Uinc' in v.name]}")
-                print(f"    Before step - tau_r values: {[float(v.numpy().flatten()[0]) for v in network.trainable_variables if 'tau_r' in v.name]}")
-
             optimizer.apply_gradients(grads_and_vars)
-
-            for var in network.trainable_variables:
-                constraint = var.constraint
-                if constraint is not None:
-                    var.assign(constraint(var))
-
-            for var in network.trainable_variables:
-                c = var.constraint
-                if c is not None:
-                    vals = var.numpy().flatten()
-                    lo = np.asarray(c.min_val, dtype=float).flatten()
-                    hi = np.asarray(c.max_val, dtype=float).flatten()
-                    if np.any(vals < lo - 1e-6) or np.any(vals > hi + 1e-6):
-                        print(f"    *** CONSTRAINT VIOLATION: {var.name} = {vals} not in [{lo},{hi}]")
-
-            if epoch == 0 and b < 3:
-                print(f"    After step - Uinc values: {[float(v.numpy().flatten()[0]) for v in network.trainable_variables if 'Uinc' in v.name]}")
-
-            for g, v in grads_and_vars:
-                if np.any(np.isnan(v.numpy())):
-                    print(f"\n!!! NAN in VAR after batch {b}: {v.name.split(':')[0]} = {v.numpy().flatten()[0]:.6e}")
 
         current_pop_state, current_syn_state = network.get_state(force_compute=True)
         
         r_val = float(current_pop_state[0].numpy()[0, 0])
-        if np.isnan(r_val):
-            print(f"\n!!! NAN in STATE at epoch {epoch+1}, batch {b} !!!")
-            nan_detected = True
-            break
-            
-        epoch_losses.append(loss_val)
+
+        epoch_losses.append(loss.numpy())
         epoch_r.append(r_val)
 
-    if nan_detected:
-        print(f"\n!!! NAN DETECTED at epoch {epoch+1} !!!")
-        print("  Current parameters:")
-        for v in network.trainable_variables:
-            print(f"    {v.name.split(':')[0]}: {float(v.numpy().flatten()[0]):.6f}")
-
-        if nan_detected:
-            print(f"\n!!! NAN DETECTED at epoch {epoch+1} !!!")
-            print("  Current parameters:")
-            for v in network.trainable_variables:
-                print(f"    {v.name.split(':')[0]}: {float(v.numpy().flatten()[0]):.6f}")
-        break
 
 rates_pop1, rates_pop2 = run_batched_simulation(nbatches)
 rates_full = rates_pop1[0, :]
