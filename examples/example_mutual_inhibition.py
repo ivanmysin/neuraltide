@@ -22,13 +22,15 @@ from neuraltide.inputs import VonMisesGenerator
 from neuraltide.integrators import RK4Integrator
 from neuraltide.populations import IzhikevichMeanField
 from neuraltide.synapses import TsodyksMarkramSynapse
-from neuraltide.training import Trainer, CompositeLoss, MSELoss, StabilityPenalty
+from neuraltide.training import Trainer, CompositeLoss, MSELoss, MSLELoss, StabilityPenalty
 
 
 dt = 0.1
 T_total = 1000
 transient = 20
-nepochs = 20
+nepochs = 200
+
+Loss = MSLELoss
 
 n_transient_steps = int(transient / dt)
 
@@ -95,10 +97,10 @@ target = {
 
 # --- Trainer ---
 loss_fn = CompositeLoss([
-    (1.0, MSELoss(target)),
+    (1.0, Loss(target)),
     (1e-3, StabilityPenalty()),
 ])
-optimizer = tf.keras.optimizers.Adam(1e-4)
+optimizer = tf.keras.optimizers.Adam(1e-3)
 trainer = Trainer(network, loss_fn, optimizer, grad_method='bptt',
                   grad_clip_norm=1.0)
 
