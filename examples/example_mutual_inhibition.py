@@ -28,7 +28,7 @@ from neuraltide.training import Trainer, CompositeLoss, MSELoss, MSLELoss, Stabi
 dt = 0.1
 T_total = 1000
 transient = 20
-nepochs = 200
+nepochs = 2000
 
 Loss = MSLELoss
 
@@ -101,8 +101,8 @@ loss_fn = CompositeLoss([
     (1e-3, StabilityPenalty()),
 ])
 optimizer = tf.keras.optimizers.Adam(1e-3)
-trainer = Trainer(network, loss_fn, optimizer, grad_method='bptt',
-                  grad_clip_norm=1.0)
+trainer = Trainer(network, loss_fn, optimizer, grad_method='bptt')
+                  #grad_clip_norm=1.0)
 
 # --- Предварительный transient-прогон ---
 print("\n=== Transient simulation ===")
