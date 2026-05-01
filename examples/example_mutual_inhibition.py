@@ -42,13 +42,13 @@ print(f"Total: T={T_total}ms, dt={dt}ms, steps={t_all.shape[0]}, "
 
 # --- Популяции ---
 pop_params = {
-    'tau_pop': {'value': [1.0], 'trainable': False},
-    'alpha': {'value': [0.5], 'trainable': False},
-    'a': {'value': [0.02], 'trainable': False},
-    'b': {'value': [0.2], 'trainable': False},
-    'w_jump': {'value': [0.1], 'trainable': False},
-    'Delta_I': {'value': [0.5], 'trainable': False, 'min': 0.01, 'max': 2.0},
-    'I_ext': {'value': [0.1], 'trainable': True, 'min': -2.0, 'max': 2.0},
+    'tau_pop': {'value': [1.6622994,], 'trainable': False},
+    'alpha': {'value': [0.38348085,], 'trainable': False},
+    'a': {'value': [0.0083115,], 'trainable': False},
+    'b': {'value': [0.00320795,], 'trainable': False},
+    'w_jump': {'value': [0.00050604,], 'trainable': False},
+    'Delta_I': {'value': [0.00632551,], 'trainable': False, 'min': 0.01, 'max': 2.0},
+    'I_ext': {'value': [0.1,], 'trainable': True, 'min': -20.0, 'max': 20.0},
 }
 
 pop1 = IzhikevichMeanField(dt=dt, params=pop_params, name='pop1')
@@ -56,7 +56,7 @@ pop2 = IzhikevichMeanField(dt=dt, params=pop_params, name='pop2')
 
 # --- Синапсы ---
 syn_params = {
-    'gsyn_max': {'value': 0.1, 'trainable': True, 'min': 0.0, 'max': 0.5},
+    'gsyn_max': {'value': 0.1, 'trainable': True, 'min': 0.0, 'max': 100.0},
     'tau_d': {'value': 6.02, 'trainable': True, 'min': 2.0, 'max': 15.0},
     'tau_r': {'value': 200.0, 'trainable': True, 'min': 50.0, 'max': 500.0},
     'tau_f': {'value': 20.0, 'trainable': True, 'min': 5.0, 'max': 100.0},
