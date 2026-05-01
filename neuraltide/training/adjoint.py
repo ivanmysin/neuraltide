@@ -125,14 +125,14 @@ class AdjointSolver:
             stability_acc
         )
 
+        final_state = (list(pop_states), list(syn_states))
+
         output = NetworkOutput(
             firing_rates=all_rates,
             hidden_states=None,
             stability_loss=stability_loss,
+            final_state=final_state,
         )
-
-        final_state = (pop_states, syn_states)
-
         return output, final_state, states_sequence
 
     def backward_pass(
