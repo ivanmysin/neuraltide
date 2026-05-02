@@ -296,24 +296,37 @@ class AdjointSolver(tf.Module):
 
         return CompositeLoss(main_terms), stab_terms
 
+    # ── Compiled stability forward step ──────────────────────────────────────
+
+    @tf.function
+    def _stab_forward_step(
+        self,
+        pop_tup: Tuple[TensorType, ...],
+        syn_tup: Tuple[TensorType, ...],
+        stab_acc: TensorType,
+        t_val: TensorType,
+        dtype: tf.DType,
+    ) -> Tuple[Tuple[TensorType, ...], Tuple[TensorType, ...], TensorType]:
+        return _step_fn(
+            (pop_tup, syn_tup, stab_acc),
+            t_val, self._graph, self._integrator)
+
     def _stability_gradients(self) -> List[TensorType]:
         variables = self._network.trainable_variables
+        dtype = neuraltide.config.get_dtype()
 
         batch_size = 1
         init_pop, init_syn = self._network.get_initial_state(batch_size)
-        pop_states = list(init_pop)
-        syn_states = list(init_syn)
-        stability_acc = tf.zeros([1], dtype=neuraltide.config.get_dtype())
+        pop_states = tuple(init_pop)
+        syn_states = tuple(init_syn)
+        stability_acc = tf.zeros([1], dtype=dtype)
 
-        t = tf.constant([[[0.05]]], dtype=neuraltide.config.get_dtype())
+        t_val = tf.squeeze(tf.constant([[[0.05]]], dtype=dtype))
 
         with tf.GradientTape() as tape:
             for _ in range(10):
-                new_pop, new_syn, stability_acc = _step_fn(
-                    (tuple(pop_states), tuple(syn_states), stability_acc),
-                    t, self._graph, self._integrator)
-                pop_states = list(new_pop)
-                syn_states = list(new_syn)
+                pop_states, syn_states, stability_acc = self._stab_forward_step(
+                    pop_states, syn_states, stability_acc, t_val, dtype)
             stability_loss = tf.reduce_mean(stability_acc)
 
         grads = tape.gradient(stability_loss, variables)
