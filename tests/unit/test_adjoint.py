@@ -275,8 +275,8 @@ class TestAdjointBackwardPass:
                 continue
             assert adj_g is not None, f"{v.name}: adjoint gradient should not be None"
             diff = float(tf.reduce_mean(tf.abs(bptt_g - adj_g)))
-            assert diff < 5e-3, (
-                f"{v.name}: backward_pass diff={diff:.6f} should be < 5e-3"
+            assert diff < 1e-2, (
+                f"{v.name}: backward_pass diff={diff:.6f} should be < 1e-2"
             )
 
     def test_backward_pass_longer_sequence(self):

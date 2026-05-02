@@ -57,6 +57,9 @@ class AdjointSolver:
         """
         Run forward pass and store states for backward pass.
         
+        Uses eager execution for maximum gradient correctness (tf.function
+        compilation risks capturing tf.Variable values as constants).
+        
         Args:
             t_sequence: Tensor of shape [batch, T, 1] or [batch, T]
             initial_state: Optional initial (pop_states, syn_states)
@@ -143,18 +146,9 @@ class AdjointSolver:
         Computes gradients dL/dθ by propagating the adjoint vector λ backwards
         through the stored state sequence without holding the full TF graph.
 
-        Algorithm (verified to match BPTT up to 1e-6):
-          Init: λ = 0
-          For t = T-1 down to 0:
-            z_{t+1} = F(z_t, θ)           (one local forward step)
-            y_{t+1} = h(z_{t+1})          (firing rates)
-            l_{t+1} = loss(y_{t+1}) / T   (per-step loss, normalised)
-            proxy   = λ_{t+1} · z_{t+1}   (VJP scalar)
-
-            dL/dθ  += d(proxy)/dθ          (signal from all future steps via λ)
-            dL/dθ  += d(l_{t+1})/dθ        (direct local loss contribution)
-
-            λ_t = d(proxy)/dz_t + d(l_{t+1})/dz_t
+        Optimised: non-persistent GradientTape, combined (proxy + loss) scalar
+        target, single tape.gradient call per step (eliminates 3× redundant
+        backward passes vs naive persistent-tape implementation).
 
         Args:
             t_sequence: [batch, T, 1]
@@ -168,107 +162,76 @@ class AdjointSolver:
         if t_sequence.shape.rank == 2:
             t_sequence = t_sequence[:, :, tf.newaxis]
 
-        T = len(states_sequence) - 1      # states_sequence[0..T]
+        T = len(states_sequence) - 1
         dtype = neuraltide.config.get_dtype()
         variables = self._network.trainable_variables
         trainable_vars = [v for v in variables if v.trainable]
 
-        # ── Initialise adjoint vector λ (zeros, same structure as z_0) ──────
         pop_0, syn_0 = states_sequence[0]
         lam_pop = [tf.zeros_like(s) for s in pop_0]
         lam_syn = [tf.zeros_like(s) for s in syn_0]
 
-        # ── Gradient accumulators for θ ──────────────────────────────────────
         dL_dtheta = {v.name: tf.zeros_like(v) for v in trainable_vars}
 
-        # ── Backward loop ────────────────────────────────────────────────────
+        target_slices = []
+        for t_idx in range(T):
+            step_target = {}
+            for name, t_tensor in target.items():
+                if t_idx < int(t_tensor.shape[1]):
+                    step_target[name] = t_tensor[:, t_idx, :]
+            target_slices.append(step_target)
+
+        graph = self._graph
+        integrator = self._integrator
+        zero_scalar = tf.constant([0.0], dtype=dtype)
+        n_pop = len(pop_0)
+        n_syn = len(syn_0)
+
         for t_idx in range(T - 1, -1, -1):
-            pop_t, syn_t = states_sequence[t_idx]          # z_t
+            pop_t = states_sequence[t_idx][0]
+            syn_t = states_sequence[t_idx][1]
             t_val = t_sequence[:, t_idx:t_idx + 1, 0]
+            target_t1 = target_slices[t_idx]
 
-            # target for y_{t+1} = output[:, t_idx, :]
-            target_t1 = {
-                name: target[name][:, t_idx, :]
-                for name in target
-                if t_idx < int(target[name].shape[1])
-            }
+            all_sources = pop_t + syn_t + trainable_vars
 
-            with tf.GradientTape(persistent=True) as tape:
-                tape.watch(pop_t + syn_t)   # watch state tensors only
-                # trainable Variables are watched automatically
+            with tf.GradientTape() as tape:
+                tape.watch(pop_t)
+                tape.watch(syn_t)
 
-                # One integration step: z_{t+1} = F(z_t, θ)
                 new_pop, new_syn, _ = _step_fn(
-                    (tuple(pop_t), tuple(syn_t), tf.zeros([1], dtype=dtype)),
-                    t_val, self._graph, self._integrator)
+                    (tuple(pop_t), tuple(syn_t), zero_scalar),
+                    t_val, graph, integrator)
                 new_pop_list = list(new_pop)
                 new_syn_list = list(new_syn)
 
-                # Firing rates from z_{t+1}
                 new_pop_dict, _ = unpack_state(
-                    self._graph, new_pop_list, new_syn_list
-                )
-                y_t1 = get_firing_rates(self._graph, new_pop_dict)
+                    graph, new_pop_list, new_syn_list)
+                y_t1 = get_firing_rates(graph, new_pop_dict)
 
-                # Per-step loss, normalised by T to match BPTT reduce_mean
-                if target_t1:
-                    l_t1 = (
-                        loss_fn.per_step_loss(y_t1, target_t1)
-                        / tf.cast(T, dtype)
-                    )
-                else:
-                    l_t1 = tf.zeros([], dtype=dtype)
+                l_t1 = loss_fn.per_step_loss(y_t1, target_t1)
+                if T > 1:
+                    l_t1 = l_t1 / tf.cast(T, dtype)
 
-                # VJP proxy scalar: λ_{t+1} · z_{t+1}
                 proxy = (
-                    sum(
-                        tf.reduce_sum(p * lam)
-                        for p, lam in zip(new_pop_list, lam_pop)
-                    )
-                    + sum(
-                        tf.reduce_sum(s * lam)
-                        for s, lam in zip(new_syn_list, lam_syn)
-                    )
+                    sum(tf.reduce_sum(p * lam)
+                        for p, lam in zip(new_pop_list, lam_pop))
+                    + sum(tf.reduce_sum(s * lam)
+                         for s, lam in zip(new_syn_list, lam_syn))
                 )
 
-            # ── Gradient of θ: two contributions ────────────────────────────
-            # 1) (dF/dθ)ᵀ · λ_{t+1}  — signal carried from all future steps
-            grads_proxy = tape.gradient(proxy, trainable_vars)
-            # 2) dl_{t+1}/dθ  — direct local loss gradient
-            grads_direct = tape.gradient(l_t1, trainable_vars)
+                combined = proxy + l_t1
 
-            for v, gp, gd in zip(trainable_vars, grads_proxy, grads_direct):
-                g = (
-                    (gp if gp is not None else tf.zeros_like(v))
-                    + (gd if gd is not None else tf.zeros_like(v))
-                )
+            all_grads = tape.gradient(
+                combined, all_sources, unconnected_gradients='zero')
+
+            lam_pop = all_grads[:n_pop]
+            lam_syn = all_grads[n_pop:n_pop + n_syn]
+            dtheta_step = all_grads[n_pop + n_syn:]
+
+            for v, g in zip(trainable_vars, dtheta_step):
                 dL_dtheta[v.name] = dL_dtheta[v.name] + g
 
-            # ── Update adjoint vector λ_t ────────────────────────────────────
-            # (dF/dz_t)ᵀ · λ_{t+1}
-            vjp_state = tape.gradient(proxy, pop_t + syn_t)
-            # dl_{t+1}/dz_t
-            dl_dstate = tape.gradient(l_t1, pop_t + syn_t)
-
-            del tape   # release graph memory for this step
-
-            n_pop = len(pop_t)
-            lam_pop = [
-                (vjp_state[i] if vjp_state[i] is not None
-                 else tf.zeros_like(pop_t[i]))
-                + (dl_dstate[i] if dl_dstate[i] is not None
-                   else tf.zeros_like(pop_t[i]))
-                for i in range(n_pop)
-            ]
-            lam_syn = [
-                (vjp_state[n_pop + i] if vjp_state[n_pop + i] is not None
-                 else tf.zeros_like(syn_t[i]))
-                + (dl_dstate[n_pop + i] if dl_dstate[n_pop + i] is not None
-                   else tf.zeros_like(syn_t[i]))
-                for i in range(len(syn_t))
-            ]
-
-        # Return aligned with variables (zeros for non-trainable)
         return [
             dL_dtheta.get(v.name, tf.zeros_like(v))
             for v in variables
