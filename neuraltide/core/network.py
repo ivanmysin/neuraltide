@@ -314,9 +314,9 @@ def _step_fn(
         new_syn_states_list.extend(syn_states_dict[name])
 
     for i, s in enumerate(new_pop_states_list):
-        new_pop_states_list[i] = tf.debugging.check_numerics(s, f'NaN in population state[{i}]')
+        new_pop_states_list[i] = neuraltide.config.maybe_check_numerics(s, f'NaN in population state[{i}]')
     for i, s in enumerate(new_syn_states_list):
-        new_syn_states_list[i] = tf.debugging.check_numerics(s, f'NaN in synapse state[{i}]')
+        new_syn_states_list[i] = neuraltide.config.maybe_check_numerics(s, f'NaN in synapse state[{i}]')
 
     return (tuple(new_pop_states_list), tuple(new_syn_states_list), stability_error)
 

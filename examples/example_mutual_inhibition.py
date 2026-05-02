@@ -28,7 +28,7 @@ from neuraltide.training import Trainer, CompositeLoss, MSELoss, MSLELoss, Stabi
 dt = 0.1
 T_total = 1000
 transient = 20
-nepochs = 2000
+nepochs = 20
 
 Loss = MSLELoss
 

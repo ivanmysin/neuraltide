@@ -470,9 +470,9 @@ class IzhikevichMeanField(PopulationModel):
         dvdt = (v**2 / (1 + (v/self.v_max)**2) - self.alpha * v - w + self.I_ext + I_syn - (self.PI * r) ** 2) / tau_pop
         dwdt = (self.a * (self.b * v - w) + self.w_jump * r) / tau_pop
 
-        drdt = tf.debugging.check_numerics(drdt, f'IzhikevichMeanField dr/dt NaN')
-        dvdt = tf.debugging.check_numerics(dvdt, f'IzhikevichMeanField dv/dt NaN')
-        dwdt = tf.debugging.check_numerics(dwdt, f'IzhikevichMeanField dw/dt NaN')
+        drdt = neuraltide.config.maybe_check_numerics(drdt, f'IzhikevichMeanField dr/dt NaN')
+        dvdt = neuraltide.config.maybe_check_numerics(dvdt, f'IzhikevichMeanField dv/dt NaN')
+        dwdt = neuraltide.config.maybe_check_numerics(dwdt, f'IzhikevichMeanField dw/dt NaN')
 
         return [drdt, dvdt, dwdt]
 

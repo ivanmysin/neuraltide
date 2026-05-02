@@ -122,9 +122,9 @@ class TsodyksMarkramSynapse(SynapseModel):
 
         dR_dt = (1.0 - R - A) / tau_r - U * R * s_input
 
-        dR_dt = tf.debugging.check_numerics(dR_dt, 'TsodyksMarkram dR/dt NaN')
-        dU_dt = tf.debugging.check_numerics(dU_dt, 'TsodyksMarkram dU/dt NaN')
-        dA_dt = tf.debugging.check_numerics(dA_dt, 'TsodyksMarkram dA/dt NaN')
+        dR_dt = neuraltide.config.maybe_check_numerics(dR_dt, 'TsodyksMarkram dR/dt NaN')
+        dU_dt = neuraltide.config.maybe_check_numerics(dU_dt, 'TsodyksMarkram dU/dt NaN')
+        dA_dt = neuraltide.config.maybe_check_numerics(dA_dt, 'TsodyksMarkram dA/dt NaN')
 
         return [dR_dt, dU_dt, dA_dt]
 
