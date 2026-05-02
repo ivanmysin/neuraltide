@@ -116,12 +116,15 @@ class TestAdjointBasics:
         t_seq = tf.constant(np.arange(10, dtype=np.float32)[None, :, None] * 0.05)
         solver = AdjointSolver(network, network._integrator)
 
-        output, states_final, states_seq = solver.forward_pass(t_seq)
+        output, states_final, state_info = solver.forward_pass(t_seq)
+        init_pop, init_syn, pop_stacked, syn_stacked = state_info
 
         assert output is not None, "forward_pass should return output"
         assert hasattr(output, 'firing_rates'), "output should have firing_rates"
         assert hasattr(output, 'stability_loss'), "output should have stability_loss"
         assert 'exc' in output.firing_rates, "firing_rates should contain 'exc'"
+        assert len(pop_stacked) > 0, "pop_stacked should contain state tensors"
+        assert len(syn_stacked) > 0, "syn_stacked should contain state tensors"
 
 
 class TestAdjointGradientCorrectness:
@@ -263,8 +266,8 @@ class TestAdjointBackwardPass:
 
         # Adjoint backward_pass
         solver = AdjointSolver(network, network._integrator)
-        _, _, states_seq = solver.forward_pass(t_seq)
-        adj_grads = solver.backward_pass(t_seq, states_seq, target, loss_fn)
+        _, _, state_info = solver.forward_pass(t_seq)
+        adj_grads = solver.backward_pass(t_seq, state_info, target, loss_fn)
 
         assert len(bptt_grads) == len(adj_grads), "Should have same number of gradients"
 
@@ -301,8 +304,8 @@ class TestAdjointBackwardPass:
         bptt_grads = bptt_tape.gradient(bptt_loss, network.trainable_variables)
 
         solver = AdjointSolver(network, network._integrator)
-        _, _, states_seq = solver.forward_pass(t_seq)
-        adj_grads = solver.backward_pass(t_seq, states_seq, target, loss_fn)
+        _, _, state_info = solver.forward_pass(t_seq)
+        adj_grads = solver.backward_pass(t_seq, state_info, target, loss_fn)
 
         for v, bptt_g, adj_g in zip(
             network.trainable_variables, bptt_grads, adj_grads
@@ -336,8 +339,8 @@ class TestAdjointBackwardPass:
         bptt_grads = bptt_tape.gradient(bptt_loss, network.trainable_variables)
 
         solver = AdjointSolver(network, network._integrator)
-        _, _, states_seq = solver.forward_pass(t_seq)
-        adj_grads = solver.backward_pass(t_seq, states_seq, target, loss_fn)
+        _, _, state_info = solver.forward_pass(t_seq)
+        adj_grads = solver.backward_pass(t_seq, state_info, target, loss_fn)
 
         for v, bptt_g, adj_g in zip(
             network.trainable_variables, bptt_grads, adj_grads

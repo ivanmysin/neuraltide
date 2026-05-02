@@ -32,7 +32,7 @@ from neuraltide.utils import print_summary
 
 # ── Network configuration ─────────────────────────────────────────────────────
 dt = 0.1     # ms
-T  = 1000.0   # ms  (100 steps)
+T  = 100.0   # ms  (100 steps)
 n_steps = int(T / dt)
 
 pop = IzhikevichMeanField(dt=dt, params={
