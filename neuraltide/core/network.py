@@ -445,6 +445,51 @@ class NetworkRNN(tf.keras.layers.Layer):
         return all_rates, stability_loss, final_pop_states, final_syn_states
 
     @tf.function
+    def _scan_forward_states(
+        self,
+        t_sequence: TensorType,
+        init_pop: Tuple[TensorType, ...],
+        init_syn: Tuple[TensorType, ...],
+    ) -> Tuple[
+        Dict[str, TensorType],
+        TensorType,
+        Tuple[TensorType, ...],
+        Tuple[TensorType, ...],
+        List[TensorType],
+        List[TensorType],
+    ]:
+        """Same as _scan_forward but also returns stacked state tensors."""
+        init_stability = tf.zeros([1], dtype=neuraltide.config.get_dtype())
+        elems = tf.transpose(t_sequence, [1, 0, 2])
+
+        scan_all = tf.scan(
+            lambda carry, t: _step_fn(carry, t, self._graph, self._integrator),
+            elems=elems,
+            initializer=(init_pop, init_syn, init_stability),
+            parallel_iterations=1,
+        )
+
+        all_pop_stacked, all_syn_stacked, all_stability = scan_all
+
+        all_rates = {}
+        for name in self._graph.dynamic_population_names:
+            idx = self._pop_state_offsets[name]
+            stacked_r = all_pop_stacked[idx]
+            pop = self._graph._populations[name]
+            rate = pop.get_firing_rate([stacked_r])
+            all_rates[name] = tf.transpose(rate, [1, 0, 2])
+
+        stability_loss = self._stability_penalty_weight * tf.reduce_mean(
+            all_stability[-1])
+
+        final_pop_states = tuple([s[-1] for s in all_pop_stacked])
+        final_syn_states = tuple([s[-1] for s in all_syn_stacked])
+
+        return (all_rates, stability_loss,
+                final_pop_states, final_syn_states,
+                all_pop_stacked, all_syn_stacked)
+
+    @tf.function
     def call(
         self,
         t_sequence: TensorType,

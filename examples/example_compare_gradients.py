@@ -27,13 +27,12 @@ from neuraltide.inputs import VonMisesGenerator
 from neuraltide.integrators import RK4Integrator
 from neuraltide.training import MSELoss, StabilityPenalty, CompositeLoss
 from neuraltide.training.adjoint import AdjointSolver
-from neuraltide.utils import seed_everything, print_summary
+from neuraltide.utils import print_summary
 
-seed_everything(42)
 
 # ── Network configuration ─────────────────────────────────────────────────────
-dt   = 0.1     # ms
-T    = 10.0    # ms  (100 steps)
+dt = 0.1     # ms
+T  = 1000.0   # ms  (100 steps)
 n_steps = int(T / dt)
 
 pop = IzhikevichMeanField(dt=dt, params={
