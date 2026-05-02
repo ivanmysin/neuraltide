@@ -85,6 +85,32 @@ class MSELoss(BaseLoss):
 
         return total_loss
 
+    def per_step_loss(
+        self,
+        firing_rates: Dict[str, TensorType],
+        target: Dict[str, TensorType],
+    ) -> TensorType:
+        """Compute MSE loss for a single time step."""
+        total_loss = tf.constant(0.0, dtype=neuraltide.config.get_dtype())
+
+        for pop_name, target_val in target.items():
+            pred_val = firing_rates.get(pop_name)
+            if pred_val is None:
+                continue
+
+            pred_readout = self.readout(pred_val)
+            target_readout = self.readout(target_val)
+
+            loss = tf.reduce_mean((pred_readout - target_readout) ** 2)
+
+            if self.mask is not None and pop_name in self.mask:
+                mask_val = self.mask[pop_name]
+                loss = loss * mask_val
+
+            total_loss += loss
+
+        return total_loss
+
 
 class MSLELoss(BaseLoss):
     """
@@ -127,7 +153,7 @@ class MSLELoss(BaseLoss):
         firing_rates: Dict[str, TensorType],
         target: Dict[str, TensorType],
     ) -> TensorType:
-        """Compute MSE loss for a single time step."""
+        """Compute MSLE loss for a single time step."""
         total_loss = tf.constant(0.0, dtype=neuraltide.config.get_dtype())
 
         for pop_name, target_val in target.items():
@@ -138,7 +164,11 @@ class MSLELoss(BaseLoss):
             pred_readout = self.readout(pred_val)
             target_readout = self.readout(target_val)
 
-            loss = tf.reduce_mean((pred_readout - target_readout) ** 2)
+            pred_clamped = pred_readout + self.eps
+            log_pred = tf.math.log(pred_clamped)
+            log_target = tf.math.log(target_readout + self.eps)
+
+            loss = tf.reduce_mean((log_pred - log_target) ** 2)
 
             if self.mask is not None and pop_name in self.mask:
                 mask_val = self.mask[pop_name]
