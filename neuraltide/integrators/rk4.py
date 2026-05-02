@@ -16,10 +16,13 @@ class RK4Integrator(BaseIntegrator):
     k2 = derivatives(state + dt/2 * k1)
     k3 = derivatives(state + dt/2 * k2)
     k4 = derivatives(state + dt   * k3)
-    new_state[i]  = state[i] + dt/6 * (k1+2k2+2k3+k4)[i]
-    heun_state[i] = state[i] + dt/2 * (k1+k2)[i]
-    local_error   = mean(||new_state - heun_state||²)
+    new_state[i] = state[i] + dt/6 * (k1+2k2+2k3+k4)[i]
+    heun_state[i]= state[i] + dt/2 * (k1+k2)[i]   (только если compute_error=True)
+    local_error  = mean(||new_state - heun_state||²)
     """
+
+    def __init__(self, compute_error: bool = True):
+        self.compute_error = compute_error
 
     def step(
         self,
@@ -54,16 +57,18 @@ class RK4Integrator(BaseIntegrator):
             for i in range(len(state))
         ]
 
-        heun_state = [
-            state[i] + dt * 0.5 * (k1[i] + k2[i])
-            for i in range(len(state))
-        ]
-
-        errors = [
-            tf.reduce_sum((new_state[i] - heun_state[i]) ** 2)
-            for i in range(len(state))
-        ]
-        local_error = tf.reduce_mean(errors)[tf.newaxis]
+        if self.compute_error:
+            heun_state = [
+                state[i] + dt * 0.5 * (k1[i] + k2[i])
+                for i in range(len(state))
+            ]
+            errors = [
+                tf.reduce_sum((new_state[i] - heun_state[i]) ** 2)
+                for i in range(len(state))
+            ]
+            local_error = tf.reduce_mean(errors)[tf.newaxis]
+        else:
+            local_error = tf.zeros([1], dtype=neuraltide.config.get_dtype())
 
         return new_state, local_error
 
@@ -105,15 +110,17 @@ class RK4Integrator(BaseIntegrator):
             for i in range(len(k1))
         ]
 
-        heun_state = [
-            state[i] + dt * 0.5 * (k1[i] + k2[i])
-            for i in range(len(k1))
-        ]
-
-        errors = [
-            tf.reduce_sum((new_state[i] - heun_state[i]) ** 2)
-            for i in range(len(k1))
-        ]
-        local_error = tf.reduce_mean(errors)[tf.newaxis]
+        if self.compute_error:
+            heun_state = [
+                state[i] + dt * 0.5 * (k1[i] + k2[i])
+                for i in range(len(k1))
+            ]
+            errors = [
+                tf.reduce_sum((new_state[i] - heun_state[i]) ** 2)
+                for i in range(len(k1))
+            ]
+            local_error = tf.reduce_mean(errors)[tf.newaxis]
+        else:
+            local_error = tf.zeros([1], dtype=neuraltide.config.get_dtype())
 
         return new_state, local_error

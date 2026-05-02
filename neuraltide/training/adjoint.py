@@ -10,16 +10,14 @@ from typing import Dict, List, Tuple, Optional
 import neuraltide
 import neuraltide.config
 from neuraltide.core.network import (
-    NetworkGraph,
     NetworkRNN,
     NetworkOutput,
+    _step_fn,
     unpack_state,
-    pack_state,
     get_firing_rates,
 )
 from neuraltide.core.types import TensorType, StateList
 from neuraltide.integrators.base import BaseIntegrator
-from neuraltide.populations.input_population import InputPopulation
 from neuraltide.training.losses import BaseLoss, CompositeLoss
 
 
@@ -98,12 +96,9 @@ class AdjointSolver:
             pop_states_tuple = tuple(pop_states)
             syn_states_tuple = tuple(syn_states)
 
-            new_pop, new_syn, stability_acc = self._step_fn(
+            new_pop, new_syn, stability_acc = _step_fn(
                 (pop_states_tuple, syn_states_tuple, stability_acc),
-                t,
-                self._graph,
-                self._integrator
-            )
+                t, self._graph, self._integrator)
 
             pop_states = list(new_pop)
             syn_states = list(new_syn)
@@ -203,12 +198,9 @@ class AdjointSolver:
                 # trainable Variables are watched automatically
 
                 # One integration step: z_{t+1} = F(z_t, θ)
-                new_pop, new_syn, _ = self._step_fn(
+                new_pop, new_syn, _ = _step_fn(
                     (tuple(pop_t), tuple(syn_t), tf.zeros([1], dtype=dtype)),
-                    t_val,
-                    self._graph,
-                    self._integrator,
-                )
+                    t_val, self._graph, self._integrator)
                 new_pop_list = list(new_pop)
                 new_syn_list = list(new_syn)
 
@@ -281,176 +273,6 @@ class AdjointSolver:
             dL_dtheta.get(v.name, tf.zeros_like(v))
             for v in variables
         ]
-
-    def _integrate_step(
-        self,
-        pop_states_dict: Dict[str, StateList],
-        syn_states_dict: Dict[str, StateList],
-        t: TensorType,
-    ) -> Tuple[StateList, StateList]:
-        """
-        Perform one integration step.
-        
-        Args:
-            pop_states_dict: Population states
-            syn_states_dict: Synapse states
-            t: Current time
-        
-        Returns:
-            (new_pop_states, new_syn_states)
-        """
-        dtype = neuraltide.config.get_dtype()
-
-        for name in self._graph.population_names:
-            pop = self._graph._populations[name]
-            if isinstance(pop, InputPopulation):
-                pop_states_dict[name] = [t]
-
-        syn_I: Dict[str, TensorType] = {}
-        syn_g: Dict[str, TensorType] = {}
-        for name in self._graph.dynamic_population_names:
-            n = self._graph._populations[name].n_units
-            syn_I[name] = tf.zeros([1, n], dtype=dtype)
-            syn_g[name] = tf.zeros([1, n], dtype=dtype)
-
-        for syn_name, entry in self._graph._synapses.items():
-            src_pop = self._graph._populations[entry.src]
-            tgt_pop = self._graph._populations[entry.tgt]
-            src_state = pop_states_dict[entry.src]
-            tgt_state = pop_states_dict[entry.tgt]
-            syn_state = syn_states_dict[syn_name]
-
-            pre_rate = src_pop.get_firing_rate(src_state)
-
-            tgt_obs = tgt_pop.observables(tgt_state)
-            post_v = tgt_obs.get(
-                'v_mean',
-                tf.zeros([1, tgt_pop.n_units], dtype=dtype)
-            )
-
-            new_syn_state, _ = self._integrator.step_synapse(
-                entry.model, syn_state, pre_rate, post_v, entry.model.dt
-            )
-
-            current_dict = entry.model.compute_current(
-                new_syn_state, pre_rate, post_v
-            )
-
-            syn_I[entry.tgt] = syn_I[entry.tgt] + current_dict['I_syn']
-            syn_g[entry.tgt] = syn_g[entry.tgt] + current_dict['g_syn']
-            syn_states_dict[syn_name] = new_syn_state
-
-        new_pop_states_list = []
-        for name in self._graph.population_names:
-            pop = self._graph._populations[name]
-            pop_state = pop_states_dict[name]
-
-            if isinstance(pop, InputPopulation):
-                new_pop_states_list.extend(pop_state)
-            else:
-                total_syn = {'I_syn': syn_I[name], 'g_syn': syn_g[name]}
-                new_pop_state, _ = self._integrator.step(pop, pop_state, total_syn)
-                new_pop_states_list.extend(new_pop_state)
-
-        new_syn_states_list = []
-        for name in self._graph.synapse_names:
-            new_syn_states_list.extend(syn_states_dict[name])
-
-        return new_pop_states_list, new_syn_states_list
-
-    def _step_fn(
-        self,
-        states: Tuple[StateList, StateList, TensorType],
-        t: TensorType,
-        graph: NetworkGraph,
-        integrator: BaseIntegrator,
-    ) -> Tuple[StateList, StateList, TensorType]:
-        """
-        Internal step function (same as network._step_fn).
-        """
-        from neuraltide.core.network import compute_synapse_current
-
-        pop_states, syn_states, stability_acc = states
-        dtype = neuraltide.config.get_dtype()
-
-        pop_states_dict = {}
-        idx = 0
-        for name in graph.population_names:
-            pop = graph._populations[name]
-            n = len(pop.state_size)
-            pop_states_dict[name] = pop_states[idx:idx + n]
-            idx += n
-
-        syn_states_dict = {}
-        idx = 0
-        for name in graph.synapse_names:
-            entry = graph._synapses[name]
-            n = len(entry.model.state_size)
-            syn_states_dict[name] = syn_states[idx:idx + n]
-            idx += n
-
-        for name in graph.population_names:
-            pop = graph._populations[name]
-            if isinstance(pop, InputPopulation):
-                pop_states_dict[name] = [t]
-
-        syn_I: Dict[str, TensorType] = {}
-        syn_g: Dict[str, TensorType] = {}
-        for name in graph.dynamic_population_names:
-            n = graph._populations[name].n_units
-            syn_I[name] = tf.zeros([1, n], dtype=dtype)
-            syn_g[name] = tf.zeros([1, n], dtype=dtype)
-
-        for syn_name, entry in graph._synapses.items():
-            src_pop = graph._populations[entry.src]
-            tgt_pop = graph._populations[entry.tgt]
-            src_state = pop_states_dict[entry.src]
-            tgt_state = pop_states_dict[entry.tgt]
-            syn_state = syn_states_dict[syn_name]
-
-            pre_rate = src_pop.get_firing_rate(src_state)
-
-            tgt_obs = tgt_pop.observables(tgt_state)
-            post_v = tgt_obs.get(
-                'v_mean',
-                tf.zeros([1, tgt_pop.n_units], dtype=dtype)
-            )
-
-            new_syn_state, local_err = integrator.step_synapse(
-                entry.model, syn_state, pre_rate, post_v, entry.model.dt
-            )
-
-            current_dict = compute_synapse_current(
-                entry.model, new_syn_state, pre_rate, post_v
-            )
-
-            syn_I[entry.tgt] = syn_I[entry.tgt] + current_dict['I_syn']
-            syn_g[entry.tgt] = syn_g[entry.tgt] + current_dict['g_syn']
-            syn_states_dict[syn_name] = new_syn_state
-
-        stability_error = stability_acc
-        new_pop_states_list = []
-        for name in graph.population_names:
-            pop = graph._populations[name]
-            pop_state = pop_states_dict[name]
-
-            if isinstance(pop, InputPopulation):
-                new_pop_states_list.extend(pop_state)
-            else:
-                total_syn = {'I_syn': syn_I[name], 'g_syn': syn_g[name]}
-                new_pop_state, local_err = integrator.step(pop, pop_state, total_syn)
-                new_pop_states_list.extend(new_pop_state)
-                stability_error = stability_error + local_err
-
-        new_syn_states_list = []
-        for name in graph.synapse_names:
-            new_syn_states_list.extend(syn_states_dict[name])
-
-        return (
-            tuple(new_pop_states_list),
-            tuple(new_syn_states_list),
-            stability_error
-        )
 
     def compute_gradients(
         self,
@@ -558,12 +380,9 @@ class AdjointSolver:
                 pop_states_tuple = tuple(pop_states)
                 syn_states_tuple = tuple(syn_states)
 
-                new_pop, new_syn, stability_acc = self._step_fn(
+                new_pop, new_syn, stability_acc = _step_fn(
                     (pop_states_tuple, syn_states_tuple, stability_acc),
-                    t,
-                    self._graph,
-                    self._integrator
-                )
+                    t, self._graph, self._integrator)
 
                 pop_states = list(new_pop)
                 syn_states = list(new_syn)

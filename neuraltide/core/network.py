@@ -278,10 +278,9 @@ def _step_fn(
         pre_rate = src_pop.get_firing_rate(src_state)
 
         tgt_obs = tgt_pop.observables(tgt_state)
-        post_v = tgt_obs.get(
-            'v_mean',
-            tf.zeros([1, tgt_pop.n_units], dtype=dtype)
-        )
+        post_v = tgt_obs.get('v_mean')
+        if post_v is None:
+            post_v = tf.zeros([1, tgt_pop.n_units], dtype=dtype)
 
         new_syn_state, local_err = integrator.step_synapse(
             entry.model, syn_state, pre_rate, post_v, entry.model.dt
@@ -313,10 +312,11 @@ def _step_fn(
     for name in graph.synapse_names:
         new_syn_states_list.extend(syn_states_dict[name])
 
-    for i, s in enumerate(new_pop_states_list):
-        new_pop_states_list[i] = neuraltide.config.maybe_check_numerics(s, f'NaN in population state[{i}]')
-    for i, s in enumerate(new_syn_states_list):
-        new_syn_states_list[i] = neuraltide.config.maybe_check_numerics(s, f'NaN in synapse state[{i}]')
+    if neuraltide.config.get_debug_numerics():
+        for i, s in enumerate(new_pop_states_list):
+            new_pop_states_list[i] = tf.debugging.check_numerics(s, f'NaN in population state[{i}]')
+        for i, s in enumerate(new_syn_states_list):
+            new_syn_states_list[i] = tf.debugging.check_numerics(s, f'NaN in synapse state[{i}]')
 
     return (tuple(new_pop_states_list), tuple(new_syn_states_list), stability_error)
 
@@ -398,6 +398,16 @@ class NetworkRNN(tf.keras.layers.Layer):
             for entry in self._graph._synapses.values()
         )
 
+        self._cached_trainable_vars = self._collect_trainable_vars()
+
+    def _collect_trainable_vars(self) -> List[tf.Variable]:
+        vars_ = list(super().trainable_variables)
+        for pop in self._graph._populations.values():
+            vars_.extend(pop.trainable_variables)
+        for entry in self._graph._synapses.values():
+            vars_.extend(entry.model.trainable_variables)
+        return vars_
+
     @tf.function
     def _scan_forward(
         self,
@@ -475,13 +485,7 @@ class NetworkRNN(tf.keras.layers.Layer):
     
     @property
     def trainable_variables(self) -> List[tf.Variable]:
-        """Агрегирует trainable_variables из всех популяций и синапсов графа."""
-        vars_ = list(super().trainable_variables)
-        for pop in self._graph._populations.values():
-            vars_.extend(pop.trainable_variables)
-        for entry in self._graph._synapses.values():
-            vars_.extend(entry.model.trainable_variables)
-        return vars_
+        return self._cached_trainable_vars
 
     def get_initial_state(self, batch_size: int = 1) -> Tuple[StateList, StateList]:
         """Возвращает начальное состояние сети (по умолчанию нулевое)."""

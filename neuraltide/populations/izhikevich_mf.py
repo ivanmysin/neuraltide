@@ -591,8 +591,6 @@ class IzhikevichMeanField(PopulationModel):
         Returns 0 for non-trainable parameters (tau_pop, alpha, a, b, w_jump).
         """
         r = state[0]
-
-        r = state[0]
         v = state[1]
 
         g_syn = total_synaptic_input.get('g_syn', tf.zeros_like(r))
