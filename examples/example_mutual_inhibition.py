@@ -71,7 +71,7 @@ syn_1to2 = TsodyksMarkramSynapse(n_pre=1, n_post=1, dt=dt, params={
     'tau_f': {'value': 20.0, 'trainable': True, 'min': 5.0, 'max': 100.0},
     'Uinc': {'value': 0.3, 'trainable': True, 'min': 0.1, 'max': 0.6},
     'pconn': {'value': 1.0, 'trainable': False},
-    'e_r': {'value': -1.0, 'trainable': False},
+    'e_r': {'value': -0.2, 'trainable': False},
 }, name='syn_1to2')
 
 syn_2to1 = TsodyksMarkramSynapse(n_pre=1, n_post=1, dt=dt, params={

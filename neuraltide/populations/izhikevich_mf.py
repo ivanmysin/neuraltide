@@ -591,14 +591,12 @@ class IzhikevichMeanField(PopulationModel):
         Returns 0 for non-trainable parameters (tau_pop, alpha, a, b, w_jump).
         """
         r = state[0]
-
-        r = state[0]
         v = state[1]
 
         g_syn = total_synaptic_input.get('g_syn', tf.zeros_like(r))
         I_syn = total_synaptic_input.get('I_syn', tf.zeros_like(r))
 
-        dtype = neuraltide.config.get_dtype()
+        #dtype = neuraltide.config.get_dtype()
 
         if param_name == 'Delta_I':
             ones = tf.ones_like(r)
