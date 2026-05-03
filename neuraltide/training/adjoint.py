@@ -508,7 +508,7 @@ class AdjointSolver(tf.Module):
                             dtype)
                         new_lp[off] = (
                             new_lp[off]
-                            + dl * tf.cast(scaling, dl.dtype)
+                            + dt_val * dl * tf.cast(scaling, dl.dtype)
                         )
 
             # Parameter gradients
