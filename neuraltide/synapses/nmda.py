@@ -146,6 +146,118 @@ class NMDASynapse(SynapseModel):
 
         return {'I_syn': I_syn, 'g_syn': g_syn}
 
+    def adjoint_derivatives(
+        self,
+        adjoint_state: StateList,
+        state: StateList,
+        pre_firing_rate: TensorType,
+        post_voltage: TensorType,
+    ) -> StateList:
+        """
+        Compute adjoint derivatives for NMDA synapse.
+
+        dλ_gnmda/dt = λ_dgnmda / (tau1 * tau2)
+        dλ_dgnmda/dt = -λ_gnmda + (tau1+tau2)/(tau1*tau2) * λ_dgnmda
+        """
+        lam_gnmda, lam_dgnmda = adjoint_state
+
+        dtype = neuraltide.config.get_dtype()
+        tau1 = tf.maximum(tf.cast(self.tau1_nmda, dtype), 1e-6)
+        tau2 = tf.maximum(tf.cast(self.tau2_nmda, dtype), 1e-6)
+        t12 = tau1 * tau2
+
+        dlam_gnmda = lam_dgnmda / t12
+        dlam_dgnmda = -lam_gnmda + (tau1 + tau2) / t12 * lam_dgnmda
+
+        dlam_gnmda = neuraltide.config.maybe_check_numerics(dlam_gnmda, 'NMDA adjoint dlam_gnmda NaN')
+        dlam_dgnmda = neuraltide.config.maybe_check_numerics(dlam_dgnmda, 'NMDA adjoint dlam_dgnmda NaN')
+
+        return [dlam_gnmda, dlam_dgnmda]
+
+    def parameter_jacobian(
+        self,
+        param_name: str,
+        state: StateList,
+        pre_firing_rate: TensorType,
+        post_voltage: TensorType,
+    ) -> TensorType:
+        """
+        ∂derivatives/∂param for NMDA synapse.
+
+        Only gsyn_max_nmda is trainable and does not appear in derivatives → zero.
+        Non-trainable params (tau1, tau2) also not implemented.
+        """
+        gnmda, dgnmda = state
+        return tf.zeros_like(gnmda)
+
+    def compute_current_state_vjp(
+        self,
+        lam_I: TensorType,
+        lam_g: TensorType,
+        state: StateList,
+        pre_firing_rate: TensorType,
+        post_voltage: TensorType,
+    ) -> StateList:
+        """
+        VJP from I_syn/g_syn back to synapse state.
+
+        I_syn[b,j] = sum_i gsyn_max[i,j] * gnmda[i,j] * mg_block[b,j] * (e_r - post_v[b,j])
+        g_syn[b,j] = sum_i gsyn_max[i,j] * gnmda[i,j] * mg_block[b,j]
+
+        Only gnmda contributes (dgnmda doesn't appear):
+            dgnmda[i,j] += sum_b lam_I[b,j] * gsyn_max[i,j] * mg_block[b,j] * (e_r - post_v[b,j])
+                          + sum_b lam_g[b,j] * gsyn_max[i,j] * mg_block[b,j]
+        """
+        gnmda, dgnmda = state
+
+        dtype = neuraltide.config.get_dtype()
+        gsyn_max = tf.cast(self.gsyn_max_nmda, dtype)
+        Mgb = tf.cast(self.Mgb, dtype)
+        av_nmda = tf.cast(self.av_nmda, dtype)
+        e_r_nmda = tf.cast(self.e_r_nmda, dtype)
+        v_ref = tf.cast(self.v_ref, dtype)
+
+        mg_block = 1.0 / (1.0 + Mgb * tf.exp(-av_nmda * (post_voltage - v_ref)))
+
+        lam_I_sum = tf.reduce_sum(lam_I, axis=0)
+        lam_g_sum = tf.reduce_sum(lam_g, axis=0)
+
+        dgnmda_contrib = gsyn_max * mg_block * (lam_I_sum * (e_r_nmda - post_voltage) + lam_g_sum)
+
+        return [dgnmda_contrib, tf.zeros_like(dgnmda)]
+
+    def compute_current_param_grad(
+        self,
+        lam_I: TensorType,
+        lam_g: TensorType,
+        state: StateList,
+        pre_firing_rate: TensorType,
+        post_voltage: TensorType,
+    ) -> Dict[str, TensorType]:
+        """
+        Gradients for current-level parameters (only gsyn_max_nmda).
+        """
+        gnmda, dgnmda = state
+
+        dtype = neuraltide.config.get_dtype()
+        gsyn_max = tf.cast(self.gsyn_max_nmda, dtype)
+        Mgb = tf.cast(self.Mgb, dtype)
+        av_nmda = tf.cast(self.av_nmda, dtype)
+        e_r_nmda = tf.cast(self.e_r_nmda, dtype)
+        v_ref = tf.cast(self.v_ref, dtype)
+
+        mg_block = 1.0 / (1.0 + Mgb * tf.exp(-av_nmda * (post_voltage - v_ref)))
+        lam_I_sum = tf.reduce_sum(lam_I, axis=0)
+        lam_g_sum = tf.reduce_sum(lam_g, axis=0)
+
+        if self.gsyn_max_nmda.trainable:
+            dgsyn_max = gnmda * mg_block * (
+                lam_I_sum * (e_r_nmda - post_voltage) + lam_g_sum)
+        else:
+            dgsyn_max = tf.zeros_like(gnmda)
+
+        return {'gsyn_max_nmda': dgsyn_max}
+
     @property
     def parameter_spec(self) -> Dict[str, Dict[str, any]]:
         return {

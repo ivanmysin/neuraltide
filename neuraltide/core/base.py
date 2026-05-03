@@ -240,6 +240,29 @@ class PopulationModel(tf.keras.layers.Layer):
         """
         raise NotImplementedError
 
+    def synaptic_coupling(
+        self,
+        adjoint_state: StateList,
+        state: StateList,
+        total_synaptic_input: Dict[str, TensorType],
+    ) -> Tuple[TensorType, TensorType]:
+        """
+        Вычисляет λ_I и λ_g — сопряжённые I_syn и g_syn.
+
+        λ_I = λ^T @ ∂f/∂I_syn = sum_i λ_i * ∂f_i/∂I_syn
+        λ_g = λ^T @ ∂f/∂g_syn = sum_i λ_i * ∂f_i/∂g_syn
+
+        Args:
+            adjoint_state: λ популяции.
+            state: состояние популяции.
+            total_synaptic_input: {'I_syn': [...], 'g_syn': [...]}.
+
+        Returns:
+            (lam_I, lam_g): тензоры [batch, n_units], вклад для обратного
+            распространения через синаптический ток.
+        """
+        raise NotImplementedError
+
     def parameter_jacobian(
         self,
         param_name: str,
@@ -493,31 +516,99 @@ class SynapseModel(tf.keras.layers.Layer):
         """Аналогично PopulationModel.parameter_spec."""
         raise NotImplementedError
 
-    def adjoint_forward(
+    def adjoint_derivatives(
         self,
-        adjoint_current: Dict[str, TensorType],
+        adjoint_state: StateList,
+        state: StateList,
         pre_firing_rate: TensorType,
         post_voltage: TensorType,
-        state: StateList,
-    ) -> Tuple[Dict[str, TensorType], StateList]:
+    ) -> StateList:
         """
-        Вычисляет сопряжённое состояние синапса назад во времени.
+        Вычисляет производные сопряжённого состояния синапса.
 
-        Adjoint method для синапсов:
-            dλ_syn/dt = -J_syn^T @ λ_syn
+        dλ/dt = -J_syn^T @ λ
 
-        где J_syn = ∂forward_output/∂syn_state.
+        где J_syn = ∂derivatives/∂state (якобиан внутренней динамики).
 
         Args:
-            adjoint_current: словарь {'I_syn': ..., 'g_syn': ...}.
-            pre_firing_rate: частота пресинаптических популяций.
-            post_voltage: средний потенциал постсинаптических популяций.
+            adjoint_state: сопряжённое состояние синапса λ_syn.
             state: текущее состояние синапса.
+            pre_firing_rate: [batch, n_pre] Гц.
+            post_voltage: [batch, n_post] мВ.
 
         Returns:
-            (new_adjoint_dict, new_adjoint_state):
-                new_adjoint_dict: {'I_syn': ..., 'g_syn': ...} для входа в популяцию.
-                new_adjoint_state: новое сопряжённое состояние синапса.
+            list of tf.Tensor — dλ_syn/dt, той же структуры что state.
+        """
+        raise NotImplementedError
+
+    def parameter_jacobian(
+        self,
+        param_name: str,
+        state: StateList,
+        pre_firing_rate: TensorType,
+        post_voltage: TensorType,
+    ) -> TensorType:
+        """
+        ∂derivatives/∂param для синаптических параметров.
+
+        Args:
+            param_name: имя параметра синапса.
+            state: текущее состояние синапса.
+            pre_firing_rate: [batch, n_pre] Гц.
+            post_voltage: [batch, n_post] мВ.
+
+        Returns:
+            Tensor той же формы что и параметр (или broadcast-совместимой).
+        """
+        raise NotImplementedError
+
+    def compute_current_state_vjp(
+        self,
+        lam_I: TensorType,
+        lam_g: TensorType,
+        state: StateList,
+        pre_firing_rate: TensorType,
+        post_voltage: TensorType,
+    ) -> StateList:
+        """
+        VJP от тока и проводимости по состоянию синапса.
+
+        coupling = (∂I_syn/∂state)^T @ lam_I + (∂g_syn/∂state)^T @ lam_g
+
+        Args:
+            lam_I: [batch, n_post] — сопряжённый ток от популяции.
+            lam_g: [batch, n_post] — сопряжённая проводимость от популяции.
+            state: текущее состояние синапса.
+            pre_firing_rate: [batch, n_pre].
+            post_voltage: [batch, n_post].
+
+        Returns:
+            list of tf.Tensor — вклад в λ_syn, той же структуры что state.
+        """
+        raise NotImplementedError
+
+    def compute_current_param_grad(
+        self,
+        lam_I: TensorType,
+        lam_g: TensorType,
+        state: StateList,
+        pre_firing_rate: TensorType,
+        post_voltage: TensorType,
+    ) -> Dict[str, TensorType]:
+        """
+        Gradients for parameters that affect compute_current (not derivatives).
+
+        dparam += dt * ((∂I_syn/∂param)^T @ lam_I + (∂g_syn/∂param)^T @ lam_g)
+
+        Args:
+            lam_I: [batch, n_post].
+            lam_g: [batch, n_post].
+            state: текущее состояние синапса.
+            pre_firing_rate: [batch, n_pre].
+            post_voltage: [batch, n_post].
+
+        Returns:
+            Dict param_name → gradient contribution (shape matching parameter).
         """
         raise NotImplementedError
 

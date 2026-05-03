@@ -159,6 +159,139 @@ class TsodyksMarkramSynapse(SynapseModel):
 
         return {'I_syn': I_syn, 'g_syn': g_syn}
 
+    def adjoint_derivatives(
+        self,
+        adjoint_state: StateList,
+        state: StateList,
+        pre_firing_rate: TensorType,
+        post_voltage: TensorType,
+    ) -> StateList:
+        """
+        Compute adjoint derivatives for Tsodyks-Markram synapse.
+
+        dλ_R/dt = (1/tau_r + U*s) * λ_R - U*s * λ_A
+        dλ_U/dt = R*s * λ_R + (1/tau_f + Uinc*s) * λ_U - R*s * λ_A
+        dλ_A/dt = λ_R / tau_r + λ_A / tau_d
+
+        where s = pconn @ (pre_firing_rate_T / 1000.0)
+        """
+        R, U, A = state
+        lam_R, lam_U, lam_A = adjoint_state
+
+        dtype = neuraltide.config.get_dtype()
+        tau_d = tf.maximum(tf.cast(self.tau_d, dtype), 1e-6)
+        tau_f = tf.maximum(tf.cast(self.tau_f, dtype), 1e-6)
+        tau_r = tf.maximum(tf.cast(self.tau_r, dtype), 1e-6)
+        Uinc = tf.cast(self.Uinc, dtype)
+
+        firing_probs_T = tf.transpose(pre_firing_rate / 1000.0)
+        s = self.pconn * firing_probs_T
+
+        dlam_R = (1.0 / tau_r + U * s) * lam_R - U * s * lam_A
+        dlam_U = R * s * lam_R + (1.0 / tau_f + Uinc * s) * lam_U - R * s * lam_A
+        dlam_A = lam_R / tau_r + lam_A / tau_d
+
+        dlam_R = neuraltide.config.maybe_check_numerics(dlam_R, 'TM adjoint dlam_R NaN')
+        dlam_U = neuraltide.config.maybe_check_numerics(dlam_U, 'TM adjoint dlam_U NaN')
+        dlam_A = neuraltide.config.maybe_check_numerics(dlam_A, 'TM adjoint dlam_A NaN')
+
+        return [dlam_R, dlam_U, dlam_A]
+
+    def parameter_jacobian(
+        self,
+        param_name: str,
+        state: StateList,
+        pre_firing_rate: TensorType,
+        post_voltage: TensorType,
+    ) -> TensorType:
+        """
+        ∂derivatives/∂param for Tsodyks-Markram.
+
+        Only parameters appearing in derivatives() contribute:
+            tau_f:  ∂(dU/dt)/∂tau_f = U / tau_f^2
+            tau_d:  ∂(dA/dt)/∂tau_d = A / tau_d^2
+            tau_r:  ∂(dR/dt)/∂tau_r = -(1-R-A) / tau_r^2
+            Uinc:   ∂(dU/dt)/∂Uinc = (1-U) * s
+            gsyn_max, pconn, e_r: not in derivatives → zero
+        """
+        R, U, A = state
+
+        dtype = neuraltide.config.get_dtype()
+        firing_probs_T = tf.transpose(pre_firing_rate / 1000.0)
+        s = self.pconn * firing_probs_T
+
+        if param_name == 'tau_f':
+            return U / tf.square(tf.maximum(tf.cast(self.tau_f, dtype), 1e-6))
+        elif param_name == 'tau_d':
+            return A / tf.square(tf.maximum(tf.cast(self.tau_d, dtype), 1e-6))
+        elif param_name == 'tau_r':
+            return -(1.0 - R - A) / tf.square(tf.maximum(tf.cast(self.tau_r, dtype), 1e-6))
+        elif param_name == 'Uinc':
+            return (1.0 - U) * s
+        else:
+            return tf.zeros_like(R)
+
+    def compute_current_state_vjp(
+        self,
+        lam_I: TensorType,
+        lam_g: TensorType,
+        state: StateList,
+        pre_firing_rate: TensorType,
+        post_voltage: TensorType,
+    ) -> StateList:
+        """
+        VJP from I_syn/g_syn back to synapse state.
+
+        I_syn[b,j] = sum_i gsyn_max[i,j] * A[i,j] * (e_r[i,j] - post_v[b,j])
+        g_syn[b,j] = sum_i gsyn_max[i,j] * A[i,j]
+
+        Only A contributes (R, U don't appear in current):
+            ∂I/∂A[i,j] = gsyn_max[i,j] * (e_r[i,j] - post_v[b,j])
+            ∂g/∂A[i,j] = gsyn_max[i,j]
+
+        VJP: lam_A[i,j] += sum_b lam_I[b,j]*gsyn_max[i,j]*(e_r[i,j]-post_v[b,j])
+                           + sum_b lam_g[b,j]*gsyn_max[i,j]
+        """
+        dtype = neuraltide.config.get_dtype()
+        gsyn_max = tf.cast(self.gsyn_max, dtype)
+        e_r = tf.cast(self.e_r, dtype)
+
+        lam_I_sum = tf.reduce_sum(lam_I, axis=0)
+        lam_g_sum = tf.reduce_sum(lam_g, axis=0)
+
+        dA = gsyn_max * (lam_I_sum * (e_r - post_voltage) + lam_g_sum)
+
+        return [tf.zeros_like(state[0]), tf.zeros_like(state[1]), dA]
+
+    def compute_current_param_grad(
+        self,
+        lam_I: TensorType,
+        lam_g: TensorType,
+        state: StateList,
+        pre_firing_rate: TensorType,
+        post_voltage: TensorType,
+    ) -> Dict[str, TensorType]:
+        """
+        Gradients for current-level parameters.
+
+        dgsyn_max = A * (lam_I @ (e_r - post_v) + lam_g)
+        (sum over batch dimension)
+        """
+        dtype = neuraltide.config.get_dtype()
+        gsyn_max = tf.cast(self.gsyn_max, dtype)
+        e_r = tf.cast(self.e_r, dtype)
+        R, U, A = state
+
+        lam_I_sum = tf.reduce_sum(lam_I, axis=0)
+        lam_g_sum = tf.reduce_sum(lam_g, axis=0)
+
+        if self.gsyn_max.trainable:
+            dgsyn_max = A * (lam_I_sum * (e_r - post_voltage) + lam_g_sum)
+        else:
+            dgsyn_max = tf.zeros_like(A)
+
+        return {'gsyn_max': dgsyn_max}
+
     @property
     def parameter_spec(self) -> Dict[str, Dict[str, any]]:
         return {

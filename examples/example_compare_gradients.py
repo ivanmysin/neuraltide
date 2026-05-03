@@ -154,7 +154,7 @@ print("  Forward : stores states_sequence (plain tensors, no TF graph)")
 print("  Backward: one local GradientTape per step, deleted after each step")
 print("=" * 60)
 
-solver = AdjointSolver(network, network._integrator)
+solver = AdjointSolver(network, network._integrator, use_analytical_adjoint=True)
 
 def run_adjoint():
     grads, variables, out = solver.compute_gradients(t_seq, target, loss_fn)

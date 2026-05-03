@@ -19,7 +19,7 @@ Note on dimensionless variables:
 """
 import numpy as np
 import tensorflow as tf
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 import neuraltide
 import neuraltide.config
@@ -566,6 +566,27 @@ class IzhikevichMeanField(PopulationModel):
         dlambda_w = -(dr_dw * lambda_r + dv_dw * lambda_v + dw_dw * lambda_w)
 
         return [dlambda_r, dlambda_v, dlambda_w]
+
+    def synaptic_coupling(
+        self,
+        adjoint_state: StateList,
+        state: StateList,
+        total_synaptic_input: Dict[str, TensorType],
+    ) -> Tuple[TensorType, TensorType]:
+        """
+        Compute λ_I and λ_g from population adjoint.
+
+        λ_I = λ_v / tau_pop     (from ∂(dv/dt)/∂I_syn = 1/tau_pop)
+        λ_g = -λ_r * r / tau_pop (from ∂(dr/dt)/∂g_syn = -r/tau_pop)
+        """
+        r = state[0]
+        lambda_r = adjoint_state[0]
+        lambda_v = adjoint_state[1]
+
+        lam_I = lambda_v / self.tau_pop
+        lam_g = -lambda_r * r / self.tau_pop
+
+        return lam_I, lam_g
 
     def parameter_jacobian(
         self,

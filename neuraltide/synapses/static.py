@@ -90,6 +90,68 @@ class StaticSynapse(SynapseModel):
 
         return {'I_syn': I_syn, 'g_syn': g_syn}
 
+    def adjoint_derivatives(
+        self,
+        adjoint_state: StateList,
+        state: StateList,
+        pre_firing_rate: TensorType,
+        post_voltage: TensorType,
+    ) -> StateList:
+        return []
+
+    def parameter_jacobian(
+        self,
+        param_name: str,
+        state: StateList,
+        pre_firing_rate: TensorType,
+        post_voltage: TensorType,
+    ) -> TensorType:
+        dtype = neuraltide.config.get_dtype()
+        return tf.zeros([self.n_pre, self.n_post], dtype=dtype)
+
+    def compute_current_state_vjp(
+        self,
+        lam_I: TensorType,
+        lam_g: TensorType,
+        state: StateList,
+        pre_firing_rate: TensorType,
+        post_voltage: TensorType,
+    ) -> StateList:
+        return []
+
+    def compute_current_param_grad(
+        self,
+        lam_I: TensorType,
+        lam_g: TensorType,
+        state: StateList,
+        pre_firing_rate: TensorType,
+        post_voltage: TensorType,
+    ) -> Dict[str, TensorType]:
+        """
+        Static synapse: gsyn_max only.
+
+        I_syn = sum_j(gsyn_max * FRpre_normed * (e_r - post_v))
+        ∂I_syn/∂gsyn_max[i,j] = FRpre_normed[i,j] * (e_r[i,j] - post_v[j])
+        """
+        dtype = neuraltide.config.get_dtype()
+        gsyn_max = tf.cast(self.gsyn_max, dtype)
+        pconn = tf.cast(self.pconn, dtype)
+        e_r = tf.cast(self.e_r, dtype)
+
+        firing_probs_T = tf.transpose(pre_firing_rate / 1000.0)
+        FRpre_normed = pconn * firing_probs_T
+
+        lam_I_sum = tf.reduce_sum(lam_I, axis=0)
+        lam_g_sum = tf.reduce_sum(lam_g, axis=0)
+
+        if self.gsyn_max.trainable:
+            dgsyn_max = FRpre_normed * (
+                lam_I_sum * (e_r - post_voltage) + lam_g_sum)
+        else:
+            dgsyn_max = tf.zeros_like(gsyn_max)
+
+        return {'gsyn_max': dgsyn_max}
+
     @property
     def parameter_spec(self) -> Dict[str, Dict[str, any]]:
         return {
