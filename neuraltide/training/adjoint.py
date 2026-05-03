@@ -95,6 +95,108 @@ class AdjointSolver(tf.Module):
         return output, final_state, (list(init_pop), list(init_syn),
                                       pop_stacked, syn_stacked)
 
+    def _build_state_full(
+        self,
+        init_pop: StateList,
+        init_syn: StateList,
+        pop_stacked: List[TensorType],
+        syn_stacked: List[TensorType],
+    ) -> Tuple[Tuple[TensorType, ...], Tuple[TensorType, ...]]:
+        """Prepend initial state to stacked [T, ...] → [T+1, ...] for graph indexing."""
+        pop_full = tuple(
+            tf.concat([[init_pop[i]], pop_stacked[i]], axis=0)
+            for i in range(len(pop_stacked))
+        )
+        syn_full = tuple(
+            tf.concat([[init_syn[i]], syn_stacked[i]], axis=0)
+            for i in range(len(syn_stacked))
+        )
+        return pop_full, syn_full
+
+    # ── Compiled full backward loop ──────────────────────────────────────────
+
+    @tf.function
+    def _compiled_backward_loop(
+        self,
+        pop_full: Tuple[TensorType, ...],
+        syn_full: Tuple[TensorType, ...],
+        t_sequence: TensorType,
+        target: Dict[str, TensorType],
+        loss_fn_obj: BaseLoss,
+        T_val: TensorType,
+        dtype: tf.DType,
+    ) -> List[TensorType]:
+        """
+        Full backward pass compiled into a single tf.while_loop graph.
+
+        All slicing, adjoint steps, and gradient accumulation happen in graph
+        mode — zero eager overhead, no Python/RAM↔VRAM transfers per step.
+        """
+        n_pop = len(pop_full)
+        n_syn = len(syn_full)
+
+        lam_pop = tuple(tf.zeros_like(s[0]) for s in pop_full)
+        lam_syn = tuple(tf.zeros_like(s[0]) for s in syn_full)
+        dtheta_acc = tuple(tf.zeros_like(v) for v in self._trainable)
+
+        T = int(t_sequence.shape[1])
+
+        def cond(counter, lp, ls, da):
+            return counter >= 0
+
+        def body(counter, lp, ls, da):
+            t = counter
+
+            pop_t = tuple(s[t] for s in pop_full)
+            syn_t = tuple(s[t] for s in syn_full)
+            t_val = tf.squeeze(t_sequence[:, t, :], axis=1)
+
+            target_t = {name: t_tensor[:, t, :]
+                        for name, t_tensor in target.items()}
+
+            pop_list = list(pop_t)
+            syn_list = list(syn_t)
+            all_src = pop_list + syn_list + self._trainable
+
+            with tf.GradientTape() as tape:
+                tape.watch(pop_list)
+                tape.watch(syn_list)
+
+                new_pop, new_syn, y_dict, l_t1 = self._forward_only(
+                    pop_t, syn_t, t_val, target_t,
+                    loss_fn_obj, T_val, dtype,
+                )
+
+                npl = list(new_pop)
+                nsl = list(new_syn)
+                lpl = list(lp)
+                lsl = list(ls)
+
+                proxy = (
+                    sum(tf.reduce_sum(p * lm) for p, lm in zip(npl, lpl))
+                    + sum(tf.reduce_sum(s * lm) for s, lm in zip(nsl, lsl))
+                )
+                combined = proxy + l_t1
+
+            grads = tape.gradient(combined, all_src, unconnected_gradients="zero")
+
+            new_lp = tuple(grads[:n_pop])
+            new_ls = tuple(grads[n_pop:n_pop + n_syn])
+            ds = grads[n_pop + n_syn:]
+
+            new_da = tuple(a + g for a, g in zip(da, ds))
+
+            return counter - 1, new_lp, new_ls, new_da
+
+        _, _, _, dtheta_acc = tf.while_loop(
+            cond, body,
+            (tf.constant(T - 1, dtype=tf.int32),
+             lam_pop, lam_syn, dtheta_acc),
+            parallel_iterations=1,
+        )
+
+        return list(dtheta_acc)
+
     # ── Compiled forward-only step ───────────────────────────────────────────
 
     @tf.function
@@ -141,7 +243,10 @@ class AdjointSolver(tf.Module):
             (pop_tup, syn_tup, stab_acc),
             t_val, self._graph, self._integrator)
 
-    # ── Backward pass (slices stacked tensors on-the-fly) ────────────────────
+    # ── Compiled full adjoint step (tape + forward + gradient) ───────────────
+
+    @tf.function
+    # ── Backward pass (compiled tf.while_loop) ──────────────────────────────
 
     def backward_pass(
         self,
@@ -150,12 +255,10 @@ class AdjointSolver(tf.Module):
         target: Dict[str, TensorType],
         loss_fn: BaseLoss,
     ) -> List[TensorType]:
-        """
-        Discrete adjoint backward pass.
+        """Discrete adjoint backward pass — fully compiled tf.while_loop.
 
-        Takes stacked state tensors from forward_pass and slices per-step
-        on-the-fly — O(1) Python objects w.r.t. T (no precomputed
-        states_sequence or target_slices).
+        Zero eager overhead: state slicing, adjoint steps, and gradient
+        accumulation all run in a single graph-mode tf.while_loop.
         """
         if t_sequence.shape.rank == 2:
             t_sequence = t_sequence[:, :, tf.newaxis]
@@ -165,64 +268,15 @@ class AdjointSolver(tf.Module):
         dtype = neuraltide.config.get_dtype()
         variables = self._network.trainable_variables
 
-        lam_pop = [tf.zeros_like(s) for s in init_pop]
-        lam_syn = [tf.zeros_like(s) for s in init_syn]
+        pop_full, syn_full = self._build_state_full(
+            init_pop, init_syn, pop_stacked, syn_stacked)
 
-        dL_dtheta_list = [tf.zeros_like(v) for v in self._trainable]
+        dtheta_step_list = self._compiled_backward_loop(
+            pop_full, syn_full, t_sequence, target,
+            loss_fn, tf.constant(T, dtype=tf.int32), dtype,
+        )
 
-        T_int = tf.constant(T, dtype=tf.int32)
-        n_pop = len(init_pop)
-        n_syn = len(init_syn)
-
-        for t_idx in range(T - 1, -1, -1):
-            # ── Slice state at time t from stacked tensors (view, no copy) ──
-            if t_idx == 0:
-                pop_t = init_pop
-                syn_t = init_syn
-            else:
-                pop_t = [s[t_idx - 1] for s in pop_stacked]
-                syn_t = [s[t_idx - 1] for s in syn_stacked]
-
-            t_val = t_sequence[:, t_idx:t_idx + 1, 0]
-            t_sq = tf.squeeze(t_val, axis=1) if t_val.shape.rank > 1 else t_val
-
-            # ── Slice target on-the-fly ──────────────────────────────────────
-            target_t1 = {}
-            for name, t_tensor in target.items():
-                if t_idx < int(t_tensor.shape[1]):
-                    target_t1[name] = t_tensor[:, t_idx, :]
-
-            all_src = pop_t + syn_t + self._trainable
-
-            with tf.GradientTape() as tape:
-                tape.watch(pop_t)
-                tape.watch(syn_t)
-
-                new_pop, new_syn, y_dict, l_t1 = self._forward_only(
-                    tuple(pop_t), tuple(syn_t),
-                    t_sq, target_t1, loss_fn, T_int, dtype,
-                )
-
-                npl = list(new_pop)
-                nsl = list(new_syn)
-
-                proxy = (
-                    sum(tf.reduce_sum(p * lm) for p, lm in zip(npl, lam_pop))
-                    + sum(tf.reduce_sum(s * lm) for s, lm in zip(nsl, lam_syn))
-                )
-                combined = proxy + l_t1
-
-            all_grads = tape.gradient(
-                combined, all_src, unconnected_gradients="zero")
-
-            lam_pop = all_grads[:n_pop]
-            lam_syn = all_grads[n_pop:n_pop + n_syn]
-            dtheta_step = all_grads[n_pop + n_syn:]
-
-            for i in range(len(self._trainable)):
-                dL_dtheta_list[i] = dL_dtheta_list[i] + dtheta_step[i]
-
-        grad_map = {v.name: g for v, g in zip(self._trainable, dL_dtheta_list)}
+        grad_map = {v.name: g for v, g in zip(self._trainable, dtheta_step_list)}
         return [
             grad_map.get(v.name, tf.zeros_like(v))
             for v in variables
