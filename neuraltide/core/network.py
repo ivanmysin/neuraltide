@@ -1,3 +1,4 @@
+from collections import namedtuple
 from dataclasses import dataclass
 from typing import Dict, List, Tuple, Optional, OrderedDict
 
@@ -277,10 +278,9 @@ def _step_fn(
         pre_rate = src_pop.get_firing_rate(src_state)
 
         tgt_obs = tgt_pop.observables(tgt_state)
-        post_v = tgt_obs.get(
-            'v_mean',
-            tf.zeros([1, tgt_pop.n_units], dtype=dtype)
-        )
+        post_v = tgt_obs.get('v_mean')
+        if post_v is None:
+            post_v = tf.zeros([1, tgt_pop.n_units], dtype=dtype)
 
         new_syn_state, local_err = integrator.step_synapse(
             entry.model, syn_state, pre_rate, post_v, entry.model.dt
@@ -312,16 +312,17 @@ def _step_fn(
     for name in graph.synapse_names:
         new_syn_states_list.extend(syn_states_dict[name])
 
-    for i, s in enumerate(new_pop_states_list):
-        new_pop_states_list[i] = tf.debugging.check_numerics(s, f'NaN in population state[{i}]')
-    for i, s in enumerate(new_syn_states_list):
-        new_syn_states_list[i] = tf.debugging.check_numerics(s, f'NaN in synapse state[{i}]')
+    if neuraltide.config.get_debug_numerics():
+        for i, s in enumerate(new_pop_states_list):
+            new_pop_states_list[i] = tf.debugging.check_numerics(s, f'NaN in population state[{i}]')
+        for i, s in enumerate(new_syn_states_list):
+            new_syn_states_list[i] = tf.debugging.check_numerics(s, f'NaN in synapse state[{i}]')
 
     return (tuple(new_pop_states_list), tuple(new_syn_states_list), stability_error)
 
 
-@dataclass
-class NetworkOutput:
+class NetworkOutput(namedtuple('_NetworkOutputBase',
+    ['firing_rates', 'hidden_states', 'stability_loss', 'final_state'])):
     """
     Результат прогона NetworkRNN.
 
@@ -331,11 +332,12 @@ class NetworkOutput:
             Форма каждого тензора: [batch, T, n_units_i].
         hidden_states: dict[str, dict[str, tf.Tensor]] или None.
         stability_loss: tf.Tensor, scalar.
+        final_state: tuple[StateList, StateList]
+            Конечное состояние (pop_states, syn_states)
+            для продолжения симуляции.
     """
 
-    firing_rates: Dict[str, TensorType]
-    hidden_states: Optional[Dict[str, Dict[str, TensorType]]]
-    stability_loss: TensorType
+    __slots__ = ()
 
 
 class NetworkRNN(tf.keras.layers.Layer):
@@ -350,10 +352,8 @@ class NetworkRNN(tf.keras.layers.Layer):
         self,
         graph: NetworkGraph,
         integrator: BaseIntegrator,
-        return_sequences: bool = True,
         return_hidden_states: bool = False,
         stability_penalty_weight: float = 0.0,
-        stateful: bool = False,
         **kwargs,
     ):
         super().__init__(**kwargs)
@@ -362,9 +362,7 @@ class NetworkRNN(tf.keras.layers.Layer):
         self._integrator = integrator
         self._return_hidden_states = return_hidden_states
         self._stability_penalty_weight = stability_penalty_weight
-        self._stateful = stateful
-        self._current_state: Optional[Tuple[StateList, StateList]] = None
-        
+
         self._build()
 
     def _build(self) -> None:
@@ -372,11 +370,17 @@ class NetworkRNN(tf.keras.layers.Layer):
         batch_size = 1
         
         self._init_pop_states: StateList = []
-        for pop in self._graph._populations.values():
+        self._pop_state_offsets: Dict[str, int] = {}
+        for name in self._graph.population_names:
+            pop = self._graph._populations[name]
+            self._pop_state_offsets[name] = len(self._init_pop_states)
             self._init_pop_states.extend(pop.get_initial_state(batch_size))
         
         self._init_syn_states: StateList = []
-        for entry in self._graph._synapses.values():
+        self._syn_state_offsets: Dict[str, int] = {}
+        for name in self._graph.synapse_names:
+            entry = self._graph._synapses[name]
+            self._syn_state_offsets[name] = len(self._init_syn_states)
             self._init_syn_states.extend(entry.model.get_initial_state(batch_size))
         
         self._total_dynamic_units = sum(
@@ -394,113 +398,139 @@ class NetworkRNN(tf.keras.layers.Layer):
             for entry in self._graph._synapses.values()
         )
 
-    def call(
-        self,
-        t_sequence: TensorType,
-        initial_state: Optional[Tuple[StateList, StateList]] = None,
-        training: bool = False,
-        reset_state: bool = False,
-    ) -> NetworkOutput:
-        """
-        Симулирует сеть на протяжении временной последовательности.
-        
-        Args:
-            t_sequence: tf.Tensor shape [batch, T, 1] или [batch, T]
-                Временная последовательность в мс.
-            initial_state: Optional[Tuple[pop_states, syn_states]]
-                Начальное состояние. Если None, используется нулевое
-                (или _current_state если stateful=True).
-            training: bool — режим обучения.
-            reset_state: bool — сбросить состояние перед прогоном.
-                Полезно для batch-симуляций без stateful mode.
-        
-        Returns:
-            NetworkOutput с firing_rates для каждой динамической популяции.
-        """
-        if t_sequence.shape.rank == 2:
-            t_sequence = t_sequence[:, :, tf.newaxis]
-        
-        n_steps = int(t_sequence.shape[1])
-        
-        if reset_state:
-            self._current_state = None
-        
-        if initial_state is not None:
-            init_pop, init_syn = initial_state
-        elif self._stateful and self._current_state is not None:
-            init_pop, init_syn = self._current_state
-        else:
-            init_pop = list(self._init_pop_states)
-            init_syn = list(self._init_syn_states)
-        
-        pop_states = list(init_pop)
-        syn_states = list(init_syn)
-        stability_acc = tf.zeros([1], dtype=neuraltide.config.get_dtype())
-        
-        pop_states_dict: Dict[str, StateList] = {}
-        idx = 0
-        for name in self._graph.population_names:
-            pop = self._graph._populations[name]
-            n = len(pop.state_size)
-            pop_states_dict[name] = pop_states[idx:idx + n]
-            idx += n
-        
-        dyn_names = self._graph.dynamic_population_names
-        all_rates: Dict[str, List[TensorType]] = {name: [] for name in dyn_names}
-        
-        for step in range(n_steps):
-            t = t_sequence[:, step:step+1, 0]
-            
-            pop_states_tuple = tuple(pop_states)
-            syn_states_tuple = tuple(syn_states)
-            
-            new_pop, new_syn, stability_acc = _step_fn(
-                (pop_states_tuple, syn_states_tuple, stability_acc),
-                t,
-                self._graph,
-                self._integrator
-            )
-            
-            pop_states = list(new_pop)
-            syn_states = list(new_syn)
-            
-            idx = 0
-            for name in self._graph.population_names:
-                pop = self._graph._populations[name]
-                n = len(pop.state_size)
-                pop_states_dict[name] = pop_states[idx:idx + n]
-                idx += n
-            
-            for name in dyn_names:
-                pop = self._graph._populations[name]
-                rate = pop.get_firing_rate(pop_states_dict[name])
-                all_rates[name].append(rate)
-        
-        for name in dyn_names:
-            all_rates[name] = tf.stack(all_rates[name], axis=1)
-        
-        stability_loss = self._stability_penalty_weight * tf.reduce_mean(stability_acc)
-        
-        self._last_final_state = (pop_states, syn_states)
-        
-        if self._stateful:
-            self._current_state = (pop_states, syn_states)
-        
-        return NetworkOutput(
-            firing_rates=all_rates,
-            hidden_states=None,
-            stability_loss=stability_loss,
-        )
-    
-    @property
-    def trainable_variables(self) -> List[tf.Variable]:
-        """Агрегирует trainable_variables из всех популяций и синапсов графа."""
+        self._cached_trainable_vars = self._collect_trainable_vars()
+
+    def _collect_trainable_vars(self) -> List[tf.Variable]:
         vars_ = list(super().trainable_variables)
         for pop in self._graph._populations.values():
             vars_.extend(pop.trainable_variables)
         for entry in self._graph._synapses.values():
             vars_.extend(entry.model.trainable_variables)
         return vars_
+
+    @tf.function
+    def _scan_forward(
+        self,
+        t_sequence: TensorType,
+        init_pop: Tuple[TensorType, ...],
+        init_syn: Tuple[TensorType, ...],
+    ) -> Tuple[Dict[str, TensorType], TensorType, StateList, StateList]:
+        """Сканирует временну́ю ось через tf.scan. Возвращает rates, stability, final states."""
+        init_stability = tf.zeros([1], dtype=neuraltide.config.get_dtype())
+
+        elems = tf.transpose(t_sequence, [1, 0, 2])
+
+        scan_all = tf.scan(
+            lambda carry, t: _step_fn(carry, t, self._graph, self._integrator),
+            elems=elems,
+            initializer=(init_pop, init_syn, init_stability),
+            parallel_iterations=1,
+        )
+
+        all_pop_stacked, all_syn_stacked, all_stability = scan_all
+
+        all_rates = {}
+        for name in self._graph.dynamic_population_names:
+            idx = self._pop_state_offsets[name]
+            stacked_r = all_pop_stacked[idx]
+            pop = self._graph._populations[name]
+            rate = pop.get_firing_rate([stacked_r])
+            all_rates[name] = tf.transpose(rate, [1, 0, 2])
+
+        stability_loss = self._stability_penalty_weight * tf.reduce_mean(all_stability[-1])
+
+        final_pop_states = [s[-1] for s in all_pop_stacked]
+        final_syn_states = [s[-1] for s in all_syn_stacked]
+
+        return all_rates, stability_loss, final_pop_states, final_syn_states
+
+    @tf.function
+    def _scan_forward_states(
+        self,
+        t_sequence: TensorType,
+        init_pop: Tuple[TensorType, ...],
+        init_syn: Tuple[TensorType, ...],
+    ) -> Tuple[
+        Dict[str, TensorType],
+        TensorType,
+        Tuple[TensorType, ...],
+        Tuple[TensorType, ...],
+        List[TensorType],
+        List[TensorType],
+    ]:
+        """Same as _scan_forward but also returns stacked state tensors."""
+        init_stability = tf.zeros([1], dtype=neuraltide.config.get_dtype())
+        elems = tf.transpose(t_sequence, [1, 0, 2])
+
+        scan_all = tf.scan(
+            lambda carry, t: _step_fn(carry, t, self._graph, self._integrator),
+            elems=elems,
+            initializer=(init_pop, init_syn, init_stability),
+            parallel_iterations=1,
+        )
+
+        all_pop_stacked, all_syn_stacked, all_stability = scan_all
+
+        all_rates = {}
+        for name in self._graph.dynamic_population_names:
+            idx = self._pop_state_offsets[name]
+            stacked_r = all_pop_stacked[idx]
+            pop = self._graph._populations[name]
+            rate = pop.get_firing_rate([stacked_r])
+            all_rates[name] = tf.transpose(rate, [1, 0, 2])
+
+        stability_loss = self._stability_penalty_weight * tf.reduce_mean(
+            all_stability[-1])
+
+        final_pop_states = tuple([s[-1] for s in all_pop_stacked])
+        final_syn_states = tuple([s[-1] for s in all_syn_stacked])
+
+        return (all_rates, stability_loss,
+                final_pop_states, final_syn_states,
+                all_pop_stacked, all_syn_stacked)
+
+    @tf.function
+    def call(
+        self,
+        t_sequence: TensorType,
+        initial_state: Optional[Tuple[StateList, StateList]] = None,
+        training: bool = False,
+    ) -> NetworkOutput:
+        """
+        Симулирует сеть на протяжении временно́й последовательности.
+
+        Args:
+            t_sequence: tf.Tensor shape [batch, T, 1] или [batch, T]
+                Временная последовательность в мс.
+            initial_state: Optional[Tuple[pop_states, syn_states]]
+                Начальное состояние. Если None, используется нулевое.
+            training: bool — режим обучения.
+
+        Returns:
+            NetworkOutput с firing_rates, final_state и stability_loss.
+        """
+        if t_sequence.shape.rank == 2:
+            t_sequence = t_sequence[:, :, tf.newaxis]
+
+        if initial_state is not None:
+            init_pop, init_syn = initial_state
+        else:
+            init_pop = list(self._init_pop_states)
+            init_syn = list(self._init_syn_states)
+
+        all_rates, stability_loss, final_pop, final_syn = \
+            self._scan_forward(t_sequence, tuple(init_pop), tuple(init_syn))
+
+        return NetworkOutput(
+            firing_rates=all_rates,
+            hidden_states=None,
+            stability_loss=stability_loss,
+            final_state=(final_pop, final_syn),
+        )
+    
+    @property
+    def trainable_variables(self) -> List[tf.Variable]:
+        return self._cached_trainable_vars
 
     def get_initial_state(self, batch_size: int = 1) -> Tuple[StateList, StateList]:
         """Возвращает начальное состояние сети (по умолчанию нулевое)."""
@@ -513,43 +543,3 @@ class NetworkRNN(tf.keras.layers.Layer):
             init_syn.extend(entry.model.get_initial_state(batch_size))
         
         return init_pop, init_syn
-
-    def get_state(self, force_compute: bool = False) -> Tuple[StateList, StateList]:
-        """
-        Возвращает текущее сохранённое состояние.
-
-        В stateful режиме после вызова call() возвращает состояние
-        на конец последнего прогона. Если stateful=False или
-        состояние не установлено, возвращает None.
-
-        Args:
-            force_compute: если True и состояние не сохранено,
-                          вычислить из последнего прогона (требует
-                          сохранения состояний в call).
-
-        Returns:
-            Tuple[pop_states, syn_states] или None.
-        """
-        if self._current_state is not None:
-            return self._current_state
-        
-        if force_compute and hasattr(self, '_last_final_state'):
-            return self._last_final_state
-        
-        return None
-
-    def set_initial_state(self, state: Tuple[StateList, StateList]) -> None:
-        """
-        Устанавливает внутреннее состояние сети.
-
-        Позволяет продолжить симуляцию с заданного состояния
-        вместо нулевого начального состояния.
-
-        Args:
-            state: Tuple[pop_states, syn_states] — состояние популяций и синапсов.
-        """
-        self._current_state = state
-
-    def reset_state(self) -> None:
-        """Сбрасывает внутреннее состояние в нулевое."""
-        self._current_state = None

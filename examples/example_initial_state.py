@@ -1,10 +1,10 @@
 """
-Пример: Управление начальным состоянием и stateful режим.
+Пример: Управление начальным состоянием.
 
 Демонстрирует:
 1. Установку начальных условий (r=0.5, v=-1.0, w=0.0)
-2. Stateful режим — сохранение состояния между батчами
-3. Сброс состояния для нового эксперимента
+2. Продолжение симуляции через final_state из NetworkOutput
+3. Сброс к нулевому начальному состоянию
 """
 import numpy as np
 import tensorflow as tf
@@ -57,45 +57,45 @@ graph.add_input_population('theta', gen)
 graph.add_population('exc', pop)
 graph.add_synapse('theta->exc', syn, src='theta', tgt='exc')
 
-network = NetworkRNN(graph, integrator=RK4Integrator(), stateful=True)
+network = NetworkRNN(graph, integrator=RK4Integrator())
 print("Network created")
 
 t_values = np.arange(T, dtype=np.float32) * dt
 t_seq = tf.constant(t_values[None, :, None])
 print(f"Time sequence: {t_values.shape}")
 
+# Кастомные начальные условия
 init_pop, init_syn = network.get_initial_state(batch_size)
-print(f"Got initial state: {len(init_pop)} pop states")
+init_pop[0] = tf.constant([[0.5]])    # r = 0.5
+init_pop[1] = tf.constant([[-1.0]])   # v = -1.0
+init_pop[2] = tf.constant([[0.0]])    # w = 0.0
+custom_init = (init_pop, init_syn)
+print(f"Custom init: r={init_pop[0].numpy()}, v={init_pop[1].numpy()}, "
+      f"w={init_pop[2].numpy()}")
 
-init_pop[0] = tf.constant([[0.5]])  # r = 0.5 Hz (relative units)
-init_pop[1] = tf.constant([[-1.0]])  # v = -1.0 (rest is 0)
-init_pop[2] = tf.constant([[0.0]])  # w = 0.0
-
-network.set_initial_state((init_pop, init_syn))
-print(f"Initial state set: r={init_pop[0].numpy()}, v={init_pop[1].numpy()}, w={init_pop[2].numpy()}")
-
-output1 = network(t_seq, training=False)
+# Batch 1: custom start
+output1 = network(t_seq, training=False, initial_state=custom_init)
 rates1 = output1.firing_rates['exc'].numpy()[0, -1, 0]
-final_state = network.get_state()
-r_val = float(final_state[0][0].numpy()[0, 0])
-print(f"Final state from batch 1: r={r_val:.4f}")
+final1 = output1.final_state
+print(f"Batch 1 final r={float(final1[0][0][0, 0]):.4f}")
 
-output2 = network(t_seq, training=False)
+# Batch 2: продолжение из конечного состояния batch 1
+output2 = network(t_seq, training=False, initial_state=final1)
 rates2 = output2.firing_rates['exc'].numpy()[0, -1, 0]
-print(f"Final rate after batch 2: {rates2:.2f} Hz (continuing from batch 1)")
+print(f"Batch 2 final rate: {rates2:.2f} Hz (continuing from batch 1)")
 
-network.reset_state()
-
+# Batch 3: сброс — нулевое начальное состояние
 output3 = network(t_seq, training=False)
 rates3 = output3.firing_rates['exc'].numpy()[0, 0, 0]
-print(f"After reset: start rate = {rates3:.2f} Hz (back to initial)")
+print(f"Batch 3 start rate (reset): {rates3:.2f} Hz")
 
+# Визуализация
 fig, axes = plt.subplots(1, 2, figsize=(12, 4))
 
 axes[0].plot(t_values, output1.firing_rates['exc'].numpy()[0, :, 0],
-             label='Batch 1 (with custom init)', linewidth=1.5)
+             label='Batch 1 (custom init)', linewidth=1.5)
 axes[0].plot(t_values, output2.firing_rates['exc'].numpy()[0, :, 0],
-             label='Batch 2 (stateful)', linewidth=1.5, linestyle='--')
+             label='Batch 2 (continued)', linewidth=1.5, linestyle='--')
 axes[0].axhline(0.5, color='red', linestyle=':', alpha=0.5, label='Initial r=0.5')
 axes[0].set_xlabel('Time (ms)')
 axes[0].set_ylabel('Firing Rate (Hz)')
@@ -104,16 +104,16 @@ axes[0].legend()
 axes[0].grid(True, alpha=0.3)
 
 axes[1].plot(t_values, output2.firing_rates['exc'].numpy()[0, :, 0],
-             label='Batch 2 (stateful)', linewidth=1.5)
+             label='Batch 2 (continued)', linewidth=1.5)
 axes[1].plot(t_values, output3.firing_rates['exc'].numpy()[0, :, 0],
-             label='Batch 3 (after reset)', linewidth=1.5, linestyle='--')
+             label='Batch 3 (reset)', linewidth=1.5, linestyle='--')
 axes[1].set_xlabel('Time (ms)')
 axes[1].set_ylabel('Firing Rate (Hz)')
-axes[1].set_title('Stateful vs Reset')
+axes[1].set_title('Continuation vs Reset')
 axes[1].legend()
 axes[1].grid(True, alpha=0.3)
 
-fig.suptitle("Initial State & Stateful Mode Example")
+fig.suptitle("Initial State Example")
 plt.tight_layout()
 plt.savefig("example_initial_state.png", dpi=150)
 plt.show()

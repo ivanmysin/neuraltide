@@ -106,47 +106,9 @@ class Trainer:
         t_sequence: TensorType,
         initial_state: Optional[Tuple[StateList, StateList]] = None,
     ) -> Dict[str, float]:
-        if self.grad_method == "adjoint":
-            if self.run_eagerly:
-                return self._train_step_adjoint(t_sequence, initial_state)
-            return self._train_step_adjoint(t_sequence, initial_state)
         if self.run_eagerly:
             return self._train_step_eager(t_sequence, initial_state)
         return self._train_step(t_sequence, initial_state)
-
-    def _train_step_adjoint(
-        self,
-        t_sequence: TensorType,
-        initial_state: Optional[Tuple[StateList, StateList]] = None,
-    ) -> Dict[str, float]:
-        with tf.GradientTape() as tape:
-            output = self.network(t_sequence, training=True, initial_state=initial_state)
-            loss = self.loss_fn(output, self.network)
-
-        # Pass stability_loss if available
-        stability_loss = getattr(output, 'stability_loss', None)
-        grads = self._adjoint_computer.compute_gradients(loss, t_sequence, stability_loss)
-
-        trainable_vars = self.network.trainable_variables
-
-        grads_and_vars = []
-        for v in trainable_vars:
-            g = grads.get(v.name)
-            if g is not None:
-                grads_and_vars.append((g, v))
-
-        if not grads_and_vars:
-            return {'loss': loss}
-
-        if self.grad_clip_norm > 0:
-            grads_only = [g for g, v in grads_and_vars]
-            clipped_grads, _ = tf.clip_by_global_norm(grads_only, self.grad_clip_norm)
-            grads_and_vars = [(g, v) for g, (_, v) in zip(clipped_grads, grads_and_vars)]
-
-        self.optimizer.apply_gradients(grads_and_vars)
-        self._apply_constraints()
-
-        return {'loss': loss}
 
     def _train_step_eager(
         self,

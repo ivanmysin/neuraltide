@@ -15,8 +15,7 @@ class HeunIntegrator(BaseIntegrator):
     k1 = derivatives(state)
     k2 = derivatives(state + dt * k1)
     new_state[i]  = state[i] + dt/2 * (k1[i] + k2[i])
-    euler_state[i]= state[i] + dt * k1[i]
-    local_error   = mean(||new_state - euler_state||²)
+    local_error   = mean(||new_state - (state + dt*k1)||²)
     """
 
     def step(
@@ -41,13 +40,8 @@ class HeunIntegrator(BaseIntegrator):
             for i in range(len(state))
         ]
 
-        euler_state = [
-            state[i] + dt * k1[i]
-            for i in range(len(state))
-        ]
-
         errors = [
-            tf.reduce_sum((new_state[i] - euler_state[i]) ** 2)
+            tf.reduce_sum((new_state[i] - state_plus_k1[i]) ** 2)
             for i in range(len(state))
         ]
         local_error = tf.reduce_mean(errors)[tf.newaxis]
@@ -80,13 +74,8 @@ class HeunIntegrator(BaseIntegrator):
             for i in range(len(k1))
         ]
 
-        euler_state = [
-            state[i] + dt * k1[i]
-            for i in range(len(k1))
-        ]
-
         errors = [
-            tf.reduce_sum((new_state[i] - euler_state[i]) ** 2)
+            tf.reduce_sum((new_state[i] - state_plus_k1[i]) ** 2)
             for i in range(len(k1))
         ]
         local_error = tf.reduce_mean(errors)[tf.newaxis]

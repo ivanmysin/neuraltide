@@ -272,7 +272,6 @@ class TestIzhikevichDictIntegration:
         graph.add_population('pop', pop)
 
         network = NetworkRNN(graph, integrator=EulerIntegrator())
-        network.reset_state()
 
         t = tf.constant([[0.0], [0.5], [1.0]], dtype=tf.float32)
         output = network(t, training=False)

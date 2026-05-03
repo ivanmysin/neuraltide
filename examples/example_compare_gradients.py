@@ -27,13 +27,12 @@ from neuraltide.inputs import VonMisesGenerator
 from neuraltide.integrators import RK4Integrator
 from neuraltide.training import MSELoss, StabilityPenalty, CompositeLoss
 from neuraltide.training.adjoint import AdjointSolver
-from neuraltide.utils import seed_everything, print_summary
+from neuraltide.utils import print_summary
 
-seed_everything(42)
 
 # ── Network configuration ─────────────────────────────────────────────────────
-dt   = 0.1     # ms
-T    = 10.0    # ms  (100 steps)
+dt = 0.1     # ms
+T  = 100.0   # ms  (100 steps)
 n_steps = int(T / dt)
 
 pop = IzhikevichMeanField(dt=dt, params={
@@ -155,7 +154,7 @@ print("  Forward : stores states_sequence (plain tensors, no TF graph)")
 print("  Backward: one local GradientTape per step, deleted after each step")
 print("=" * 60)
 
-solver = AdjointSolver(network, network._integrator)
+solver = AdjointSolver(network, network._integrator, use_analytical_adjoint=False)
 
 def run_adjoint():
     grads, variables, out = solver.compute_gradients(t_seq, target, loss_fn)
