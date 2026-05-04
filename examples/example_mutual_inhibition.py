@@ -28,8 +28,8 @@ from copy import deepcopy
 
 dt = 0.1
 T_total = 1000
-transient = 20
-nepochs = 200
+transient = 200
+nepochs = 100
 
 Loss = MSLELoss
 
@@ -42,22 +42,25 @@ print(f"Total: T={T_total}ms, dt={dt}ms, steps={t_all.shape[0]}, "
       f"transient={transient}ms, epochs={nepochs}")
 
 # --- Популяции ---
-pop_params = {
+pop_params_1 = {
     'tau_pop': {'value': [1.6622994,], 'trainable': False},
     'alpha': {'value': [0.38348085,], 'trainable': False},
     'a': {'value': [0.0083115,], 'trainable': False},
     'b': {'value': [0.00320795,], 'trainable': False},
     'w_jump': {'value': [0.00050604,], 'trainable': False},
     'Delta_I': {'value': [0.00632551,], 'trainable': False, 'min': 0.01, 'max': 2.0},
-    'I_ext': {'value': [0.1,], 'trainable': True, 'min': -20.0, 'max': 20.0},
+    'I_ext': {'value': [0.5,], 'trainable': True, 'min': -20.0, 'max': 20.0},
 }
 
-pop1 = IzhikevichMeanField(dt=dt, params=pop_params, name='pop1')
-pop2 = IzhikevichMeanField(dt=dt, params=pop_params, name='pop2')
+pop_params_2 = deepcopy(pop_params_1)
+pop_params_2['I_ext']['value'] = [0.1,]
+
+pop1 = IzhikevichMeanField(dt=dt, params=pop_params_1, name='pop1')
+pop2 = IzhikevichMeanField(dt=dt, params=pop_params_2, name='pop2')
 
 # --- Синапсы ---
 syn_params_1 = {
-    'gsyn_max': {'value': 0.5, 'trainable': True, 'min': 0.0, 'max': 100.0},
+    'gsyn_max': {'value': 10.5, 'trainable': True, 'min': 0.0, 'max': 100.0},
     'tau_d': {'value': 6.02, 'trainable': True, 'min': 2.0, 'max': 15.0},
     'tau_r': {'value': 200.0, 'trainable': True, 'min': 50.0, 'max': 500.0},
     'tau_f': {'value': 20.0, 'trainable': True, 'min': 5.0, 'max': 100.0},
@@ -67,7 +70,7 @@ syn_params_1 = {
 }
 
 syn_params_2 = deepcopy(syn_params_1)
-syn_params_2['gsyn_max']['value'] = 10.5
+syn_params_2['gsyn_max']['value'] = 5.0
 
 syn_1to2 = TsodyksMarkramSynapse(n_pre=1, n_post=1, dt=dt, params=syn_params_1,
                                  name='syn_1to2')
@@ -104,7 +107,7 @@ loss_fn = CompositeLoss([
     (1.0, Loss(target)),
     (1e-3, StabilityPenalty()),
 ])
-optimizer = tf.keras.optimizers.Adam(1e-3)
+optimizer = tf.keras.optimizers.Adam(1e-2)
 trainer = Trainer(network, loss_fn, optimizer, grad_method='bptt')
                   #grad_clip_norm=1.0)
 
