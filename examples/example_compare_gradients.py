@@ -154,7 +154,7 @@ print("  Forward : stores states_sequence (plain tensors, no TF graph)")
 print("  Backward: one local GradientTape per step, deleted after each step")
 print("=" * 60)
 
-solver = AdjointSolver(network, network._integrator, use_analytical_adjoint=False)
+solver = AdjointSolver(network, network._integrator, use_analytical_adjoint=True)
 
 def run_adjoint():
     grads, variables, out = solver.compute_gradients(t_seq, target, loss_fn)
@@ -234,9 +234,9 @@ for unit, (tgt, lbl_t) in enumerate(
     ax = axes[0, unit]
     ax.plot(t_values, tgt, 'g-', lw=2, label=lbl_t)
     ax.plot(t_values, bptt_output.firing_rates['exc'].numpy()[0, :, unit],
-            'b--', lw=1.5, label='BPTT')
+            'b--', lw=2.5, label='BPTT')
     ax.plot(t_values, adj_output.firing_rates['exc'].numpy()[0, :, unit],
-            'r:', lw=1.5, label='Adjoint')
+            'r:', lw=3.5, label='Adjoint')
     ax.set_xlabel('Time (ms)')
     ax.set_ylabel('Firing Rate (Hz)')
     ax.set_title(f'Population {unit}: firing rates')

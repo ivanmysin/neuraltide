@@ -23,12 +23,13 @@ from neuraltide.integrators import RK4Integrator
 from neuraltide.populations import IzhikevichMeanField
 from neuraltide.synapses import TsodyksMarkramSynapse
 from neuraltide.training import Trainer, CompositeLoss, MSELoss, MSLELoss, StabilityPenalty
+from copy import deepcopy
 
 
 dt = 0.1
 T_total = 1000
 transient = 20
-nepochs = 20
+nepochs = 200
 
 Loss = MSLELoss
 
@@ -55,19 +56,22 @@ pop1 = IzhikevichMeanField(dt=dt, params=pop_params, name='pop1')
 pop2 = IzhikevichMeanField(dt=dt, params=pop_params, name='pop2')
 
 # --- Синапсы ---
-syn_params = {
-    'gsyn_max': {'value': 0.1, 'trainable': True, 'min': 0.0, 'max': 100.0},
+syn_params_1 = {
+    'gsyn_max': {'value': 0.5, 'trainable': True, 'min': 0.0, 'max': 100.0},
     'tau_d': {'value': 6.02, 'trainable': True, 'min': 2.0, 'max': 15.0},
     'tau_r': {'value': 200.0, 'trainable': True, 'min': 50.0, 'max': 500.0},
     'tau_f': {'value': 20.0, 'trainable': True, 'min': 5.0, 'max': 100.0},
     'Uinc': {'value': 0.3, 'trainable': True, 'min': 0.1, 'max': 0.6},
     'pconn': {'value': 1.0, 'trainable': False},
-    'e_r': {'value': -0.2, 'trainable': False},
+    'e_r': {'value': -0.15, 'trainable': False},
 }
 
-syn_1to2 = TsodyksMarkramSynapse(n_pre=1, n_post=1, dt=dt, params=syn_params,
+syn_params_2 = deepcopy(syn_params_1)
+syn_params_2['gsyn_max']['value'] = 10.5
+
+syn_1to2 = TsodyksMarkramSynapse(n_pre=1, n_post=1, dt=dt, params=syn_params_1,
                                  name='syn_1to2')
-syn_2to1 = TsodyksMarkramSynapse(n_pre=1, n_post=1, dt=dt, params=syn_params,
+syn_2to1 = TsodyksMarkramSynapse(n_pre=1, n_post=1, dt=dt, params=syn_params_2,
                                  name='syn_2to1')
 
 # --- Граф ---
@@ -78,7 +82,7 @@ graph.add_synapse('pop1->pop2', syn_1to2, src='pop1', tgt='pop2')
 graph.add_synapse('pop2->pop1', syn_2to1, src='pop2', tgt='pop1')
 
 network = NetworkRNN(graph, integrator=RK4Integrator(),
-                     stability_penalty_weight=1e-3)
+                     stability_penalty_weight=1e-2)
 
 # --- Целевой сигнал (von Mises, противофазные осцилляции) ---
 gen_target = VonMisesGenerator(dt=dt, params={
