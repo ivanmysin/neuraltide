@@ -29,7 +29,7 @@ from copy import deepcopy
 dt = 0.1
 T_total = 1000
 transient = 200
-nepochs = 100
+nepochs = 1
 
 Loss = MSLELoss
 
@@ -53,14 +53,14 @@ pop_params_1 = {
 }
 
 pop_params_2 = deepcopy(pop_params_1)
-pop_params_2['I_ext']['value'] = [0.1,]
+pop_params_2['I_ext']['value'] = [0.3,]
 
 pop1 = IzhikevichMeanField(dt=dt, params=pop_params_1, name='pop1')
 pop2 = IzhikevichMeanField(dt=dt, params=pop_params_2, name='pop2')
 
 # --- Синапсы ---
 syn_params_1 = {
-    'gsyn_max': {'value': 10.5, 'trainable': True, 'min': 0.0, 'max': 100.0},
+    'gsyn_max': {'value': 2.5, 'trainable': True, 'min': 0.0, 'max': 100.0},
     'tau_d': {'value': 6.02, 'trainable': True, 'min': 2.0, 'max': 15.0},
     'tau_r': {'value': 200.0, 'trainable': True, 'min': 50.0, 'max': 500.0},
     'tau_f': {'value': 20.0, 'trainable': True, 'min': 5.0, 'max': 100.0},
@@ -70,7 +70,7 @@ syn_params_1 = {
 }
 
 syn_params_2 = deepcopy(syn_params_1)
-syn_params_2['gsyn_max']['value'] = 5.0
+syn_params_2['gsyn_max']['value'] = 30.5
 
 syn_1to2 = TsodyksMarkramSynapse(n_pre=1, n_post=1, dt=dt, params=syn_params_1,
                                  name='syn_1to2')
@@ -167,8 +167,8 @@ print("\nResults exported to optimization_results.json/.csv")
 # --- Визуализация ---
 print("\n=== Visualization ===")
 try:
-    import matplotlib
-    matplotlib.use('Agg')
+    # import matplotlib
+    # matplotlib.use('Agg')
     import matplotlib.pyplot as plt
 
     fig, axes = plt.subplots(2, 1, figsize=(12, 8))
@@ -201,7 +201,8 @@ try:
     plt.tight_layout()
     plt.savefig('optimization_visualization.png', dpi=150)
     print("Saved to optimization_visualization.png")
-    plt.close()
+    plt.show()
+    #plt.close()
 
 except ImportError:
     print("Matplotlib not available")
