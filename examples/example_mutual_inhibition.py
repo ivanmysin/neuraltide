@@ -22,6 +22,8 @@ from copy import deepcopy
 import numpy as np
 import tensorflow as tf
 
+sys.path.append('../')
+
 from neuraltide.core.network import NetworkGraph, NetworkRNN
 from neuraltide.integrators import RK4Integrator
 from neuraltide.populations import IzhikevichMeanField
