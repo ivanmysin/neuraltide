@@ -106,25 +106,25 @@ class TsodyksMarkramSynapse(SynapseModel):
         """
         R, U, A = state
 
-        dtype = neuraltide.config.get_dtype()
-        pconn = tf.cast(self.pconn, dtype)
-        tau_d = tf.maximum(tf.cast(self.tau_d, dtype), 1e-6)
-        tau_f = tf.maximum(tf.cast(self.tau_f, dtype), 1e-6)
-        tau_r = tf.maximum(tf.cast(self.tau_r, dtype), 1e-6)
-        Uinc = tf.cast(self.Uinc, dtype)
+        # dtype = neuraltide.config.get_dtype()
+        # pconn = tf.cast(self.pconn, dtype)
+        # tau_d = tf.maximum(tf.cast(self.tau_d, dtype), 1e-6)
+        # tau_f = tf.maximum(tf.cast(self.tau_f, dtype), 1e-6)
+        # tau_r = tf.maximum(tf.cast(self.tau_r, dtype), 1e-6)
+        # Uinc = tf.cast(self.Uinc, dtype)
 
         firing_probs_T = tf.transpose(pre_firing_rate / 1000.0)
-        s_input = pconn * firing_probs_T
+        s_input = self.pconn * firing_probs_T
 
-        dA_dt = -A / tau_d + U * R * s_input
+        dA_dt = -A / self.tau_d + U * R * s_input
 
-        dU_dt = -U / tau_f + Uinc * (1.0 - U) * s_input
+        dU_dt = -U / self.tau_f + self.Uinc * (1.0 - U) * s_input
 
-        dR_dt = (1.0 - R - A) / tau_r - U * R * s_input
+        dR_dt = (1.0 - R - A) / self.tau_r - U * R * s_input
 
-        dR_dt = neuraltide.config.maybe_check_numerics(dR_dt, 'TsodyksMarkram dR/dt NaN')
-        dU_dt = neuraltide.config.maybe_check_numerics(dU_dt, 'TsodyksMarkram dU/dt NaN')
-        dA_dt = neuraltide.config.maybe_check_numerics(dA_dt, 'TsodyksMarkram dA/dt NaN')
+        # dR_dt = neuraltide.config.maybe_check_numerics(dR_dt, 'TsodyksMarkram dR/dt NaN')
+        # dU_dt = neuraltide.config.maybe_check_numerics(dU_dt, 'TsodyksMarkram dU/dt NaN')
+        # dA_dt = neuraltide.config.maybe_check_numerics(dA_dt, 'TsodyksMarkram dA/dt NaN')
 
         return [dR_dt, dU_dt, dA_dt]
 
@@ -139,21 +139,18 @@ class TsodyksMarkramSynapse(SynapseModel):
 
         Used after numerical integration to compute currents.
         """
-        dtype = neuraltide.config.get_dtype()
-        gsyn_max = tf.cast(self.gsyn_max, dtype)
-        pconn = tf.cast(self.pconn, dtype)
-        e_r = tf.cast(self.e_r, dtype)
+
 
         if len(state) > 0:
             R_new, U_new, A_new = state
-            g_eff = gsyn_max * A_new
+            g_eff = self.gsyn_max * A_new
         else:
             firing_probs_T = tf.transpose(pre_firing_rate / 1000.0)
-            FRpre_normed = pconn * firing_probs_T
-            g_eff = gsyn_max * FRpre_normed
+            FRpre_normed = self.pconn * firing_probs_T
+            g_eff = self.gsyn_max * FRpre_normed
 
         post_v_flat = tf.reshape(post_voltage, [-1])
-        I_pair = g_eff * (e_r - post_v_flat)
+        I_pair = g_eff * (self.e_r - post_v_flat)
         I_syn = tf.reduce_sum(I_pair, axis=0, keepdims=True)
         g_syn = tf.reduce_sum(g_eff, axis=0, keepdims=True)
 
@@ -177,23 +174,18 @@ class TsodyksMarkramSynapse(SynapseModel):
         """
         R, U, A = state
         lam_R, lam_U, lam_A = adjoint_state
-
-        dtype = neuraltide.config.get_dtype()
-        tau_d = tf.maximum(tf.cast(self.tau_d, dtype), 1e-6)
-        tau_f = tf.maximum(tf.cast(self.tau_f, dtype), 1e-6)
-        tau_r = tf.maximum(tf.cast(self.tau_r, dtype), 1e-6)
-        Uinc = tf.cast(self.Uinc, dtype)
+        Uinc = self.Uinc
 
         firing_probs_T = tf.transpose(pre_firing_rate / 1000.0)
         s = self.pconn * firing_probs_T
 
-        dlam_R = (1.0 / tau_r + U * s) * lam_R - U * s * lam_A
-        dlam_U = R * s * lam_R + (1.0 / tau_f + Uinc * s) * lam_U - R * s * lam_A
-        dlam_A = lam_R / tau_r + lam_A / tau_d
+        dlam_R = (1.0 / self.tau_r + U * s) * lam_R - U * s * lam_A
+        dlam_U = R * s * lam_R + (1.0 / self.tau_f + Uinc * s) * lam_U - R * s * lam_A
+        dlam_A = lam_R / self.tau_r + lam_A / self.tau_d
 
-        dlam_R = neuraltide.config.maybe_check_numerics(dlam_R, 'TM adjoint dlam_R NaN')
-        dlam_U = neuraltide.config.maybe_check_numerics(dlam_U, 'TM adjoint dlam_U NaN')
-        dlam_A = neuraltide.config.maybe_check_numerics(dlam_A, 'TM adjoint dlam_A NaN')
+        # dlam_R = neuraltide.config.maybe_check_numerics(dlam_R, 'TM adjoint dlam_R NaN')
+        # dlam_U = neuraltide.config.maybe_check_numerics(dlam_U, 'TM adjoint dlam_U NaN')
+        # dlam_A = neuraltide.config.maybe_check_numerics(dlam_A, 'TM adjoint dlam_A NaN')
 
         return [dlam_R, dlam_U, dlam_A]
 

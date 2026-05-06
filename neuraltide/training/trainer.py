@@ -50,7 +50,7 @@ class Trainer:
         loss_fn: CompositeLoss,
         optimizer: tf.keras.optimizers.Optimizer,
         grad_method: Literal["bptt", "adjoint"] = "bptt",
-        grad_clip_norm: float = 1.0,
+        grad_clip_norm: float = 0.0,
         run_eagerly: bool = False,
     ):
         self.network = network

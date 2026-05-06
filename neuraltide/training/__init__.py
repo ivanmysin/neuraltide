@@ -6,6 +6,7 @@ from neuraltide.training.losses import (
     L2RegularizationLoss,
     ParameterBoundLoss,
     CompositeLoss,
+    AntiPhaseLoss,
 )
 from neuraltide.training.readouts import (
     BaseReadout,
@@ -30,6 +31,7 @@ __all__ = [
     "L2RegularizationLoss",
     "ParameterBoundLoss",
     "CompositeLoss",
+    "AntiPhaseLoss",
     "BaseReadout",
     "IdentityReadout",
     "LinearReadout",

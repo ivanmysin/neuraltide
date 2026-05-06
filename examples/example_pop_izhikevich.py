@@ -14,20 +14,16 @@ The model implements the mean-field Izhikevich equations from Chen & Campbell 20
 
 Mean-field simulation only (no point-neuron simulation).
 """
-import sys
-sys.path.insert(0, '../neuraltide')
+
 import matplotlib
 matplotlib.use('qt5agg')
 import matplotlib.pyplot as plt
 import numpy as np
 import tensorflow as tf
-
 from neuraltide.populations.izhikevich_mf import IzhikevichMeanField
 from neuraltide.integrators import RK4Integrator
-from neuraltide.utils import seed_everything
 import neuraltide.config
 
-seed_everything(42)
 
 DT = 0.05
 T = 200

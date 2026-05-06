@@ -464,15 +464,13 @@ class IzhikevichMeanField(PopulationModel):
         g_syn_tot = total_synaptic_input['g_syn']
         I_syn = total_synaptic_input['I_syn']
 
-        tau_pop = tf.maximum(self.tau_pop, 1e-6)
+        drdt = (self.Delta_I / self.PI + 2.0 * r * v - (self.alpha + g_syn_tot) * r) / self.tau_pop
+        dvdt = (v**2 / (1 + (v/self.v_max)**2) - self.alpha * v - w + self.I_ext + I_syn - (self.PI * r)**2) / self.tau_pop
+        dwdt = (self.a * (self.b * v - w) + self.w_jump * r) / self.tau_pop
 
-        drdt = (self.Delta_I / self.PI + 2.0 * r * v - (self.alpha + g_syn_tot) * r) / tau_pop
-        dvdt = (v**2 / (1 + (v/self.v_max)**2) - self.alpha * v - w + self.I_ext + I_syn - (self.PI * r) ** 2) / tau_pop
-        dwdt = (self.a * (self.b * v - w) + self.w_jump * r) / tau_pop
-
-        drdt = neuraltide.config.maybe_check_numerics(drdt, f'IzhikevichMeanField dr/dt NaN')
-        dvdt = neuraltide.config.maybe_check_numerics(dvdt, f'IzhikevichMeanField dv/dt NaN')
-        dwdt = neuraltide.config.maybe_check_numerics(dwdt, f'IzhikevichMeanField dw/dt NaN')
+        # drdt = neuraltide.config.maybe_check_numerics(drdt, f'IzhikevichMeanField dr/dt NaN')
+        # dvdt = neuraltide.config.maybe_check_numerics(dvdt, f'IzhikevichMeanField dv/dt NaN')
+        # dwdt = neuraltide.config.maybe_check_numerics(dwdt, f'IzhikevichMeanField dw/dt NaN')
 
         return [drdt, dvdt, dwdt]
 
