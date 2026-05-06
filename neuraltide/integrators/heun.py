@@ -25,7 +25,6 @@ class HeunIntegrator(BaseIntegrator):
         total_synaptic_input: Dict[str, TensorType],
     ) -> Tuple[StateList, TensorType]:
         dt = population.dt
-        dtype = neuraltide.config.get_dtype()
 
         k1 = population.derivatives(state, total_synaptic_input)
 

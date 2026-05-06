@@ -240,7 +240,7 @@ class NMDASynapse(SynapseModel):
         gnmda, dgnmda = state
 
         dtype = neuraltide.config.get_dtype()
-        gsyn_max = tf.cast(self.gsyn_max_nmda, dtype)
+
         Mgb = tf.cast(self.Mgb, dtype)
         av_nmda = tf.cast(self.av_nmda, dtype)
         e_r_nmda = tf.cast(self.e_r_nmda, dtype)

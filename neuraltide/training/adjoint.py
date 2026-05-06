@@ -340,7 +340,7 @@ class AdjointSolver(tf.Module):
 
         n_ap = len(self._ap_pop_names)
         n_as = len(self._as_syn_names)
-        n_dynamic = self._ap_n_dynamic
+
 
         def cond(counter, lp, ls, da):
             return counter >= 0
@@ -500,7 +500,7 @@ class AdjointSolver(tf.Module):
                         pop_model = graph._populations[name]
                         off = self._ap_pop_offsets[pi]
                         sz = self._ap_pop_sizes[pi]
-                        pop_state = pop_t[off:off + sz]
+
 
                         scaling = tf.cast(
                             1.0 / (pop_model.dt * 1e-3),
@@ -774,10 +774,10 @@ class AdjointSolver(tf.Module):
     ) -> Tuple[Optional[BaseLoss], List[Tuple[float, BaseLoss]]]:
         from neuraltide.training.losses import StabilityPenalty
 
-        main_terms = [(w, l) for w, l in loss_fn.terms
-                      if not isinstance(l, StabilityPenalty)]
-        stab_terms = [(w, l) for w, l in loss_fn.terms
-                      if isinstance(l, StabilityPenalty)]
+        main_terms = [(w, loss) for w, loss in loss_fn.terms
+                      if not isinstance(loss, StabilityPenalty)]
+        stab_terms = [(w, loss) for w, loss in loss_fn.terms
+                      if isinstance(loss, StabilityPenalty)]
 
         if not main_terms:
             return None, stab_terms

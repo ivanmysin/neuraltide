@@ -9,8 +9,7 @@ def print_summary(network, rich_library: Optional[object] = None) -> None:
     иначе fallback на ASCII.
     """
     try:
-        from rich.console import Console
-        from rich.table import Table
+        import rich  # noqa: F401
         has_rich = True
     except ImportError:
         has_rich = False

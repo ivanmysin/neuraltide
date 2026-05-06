@@ -536,10 +536,10 @@ class IzhikevichMeanField(PopulationModel):
         """
         r = state[0]
         v = state[1]
-        w = state[2]
+        # w = state[2]
 
         g_syn = total_synaptic_input.get('g_syn', tf.zeros_like(r))
-        I_syn = total_synaptic_input.get('I_syn', tf.zeros_like(r))
+        # I_syn = total_synaptic_input.get('I_syn', tf.zeros_like(r))
 
         lambda_r = adjoint_state[0]
         lambda_v = adjoint_state[1]
@@ -610,12 +610,10 @@ class IzhikevichMeanField(PopulationModel):
         Returns 0 for non-trainable parameters (tau_pop, alpha, a, b, w_jump).
         """
         r = state[0]
-        v = state[1]
-
-        g_syn = total_synaptic_input.get('g_syn', tf.zeros_like(r))
-        I_syn = total_synaptic_input.get('I_syn', tf.zeros_like(r))
-
-        #dtype = neuraltide.config.get_dtype()
+        # v = state[1]
+        #
+        # g_syn = total_synaptic_input.get('g_syn', tf.zeros_like(r))
+        # I_syn = total_synaptic_input.get('I_syn', tf.zeros_like(r))
 
         if param_name == 'Delta_I':
             ones = tf.ones_like(r)

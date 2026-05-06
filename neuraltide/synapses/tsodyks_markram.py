@@ -270,7 +270,7 @@ class TsodyksMarkramSynapse(SynapseModel):
         (sum over batch dimension)
         """
         dtype = neuraltide.config.get_dtype()
-        gsyn_max = tf.cast(self.gsyn_max, dtype)
+
         e_r = tf.cast(self.e_r, dtype)
         R, U, A = state
 

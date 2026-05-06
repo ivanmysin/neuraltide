@@ -181,7 +181,6 @@ class CompositeSynapse(SynapseModel):
             try:
                 contrib = syn.compute_current_state_vjp(lam_I, lam_g, syn_state, pre_firing_rate, post_voltage)
             except NotImplementedError:
-                dtype = neuraltide.config.get_dtype()
                 contrib = [tf.zeros_like(s) for s in syn_state]
             result.extend(contrib)
             state_idx += n

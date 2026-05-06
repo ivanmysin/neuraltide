@@ -1,6 +1,6 @@
 from collections import namedtuple
 from dataclasses import dataclass
-from typing import Dict, List, Tuple, Optional, OrderedDict
+from typing import Dict, List, Tuple, Optional
 
 import tensorflow as tf
 
@@ -50,8 +50,8 @@ class NetworkGraph:
 
     def __init__(self, dt: float):
         self.dt = dt
-        self._populations: OrderedDict[str, PopulationModel] = OrderedDict()
-        self._synapses: OrderedDict[str, _SynapseEntry] = OrderedDict()
+        self._populations: Dict[str, PopulationModel] = {}
+        self._synapses: Dict[str, _SynapseEntry] = {}
 
     def add_population(self, name: str, model: PopulationModel) -> None:
         """Регистрирует популяцию (динамическую или InputPopulation)."""

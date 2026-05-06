@@ -55,7 +55,7 @@ class WilsonCowan(PopulationModel):
         state: StateList,
         total_synaptic_input: Dict[str, TensorType],
     ) -> StateList:
-        E, I = state
+        E, I_inh = state
         I_syn = total_synaptic_input['I_syn']
 
         dtype = neuraltide.config.get_dtype()
@@ -72,14 +72,14 @@ class WilsonCowan(PopulationModel):
         I_ext_E = tf.cast(self.I_ext_E, dtype)
         I_ext_I = tf.cast(self.I_ext_I, dtype)
 
-        x_E = w_EE * E - w_IE * I + I_ext_E + I_syn
-        x_I = w_EI * E - w_II * I + I_ext_I
+        x_E = w_EE * E - w_IE * I_inh + I_ext_E + I_syn
+        x_I = w_EI * E - w_II * I_inh + I_ext_I
 
         F_E = self._sigmoid(x_E, a_E, theta_E)
         F_I = self._sigmoid(x_I, a_I, theta_I)
 
         dEdt = (-E + F_E) / tau_E
-        dIdt = (-I + F_I) / tau_I
+        dIdt = (-I_inh + F_I) / tau_I
 
         return [dEdt, dIdt]
 
