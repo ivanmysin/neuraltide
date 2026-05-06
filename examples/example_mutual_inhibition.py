@@ -276,6 +276,7 @@ print(f"\n=== Optimization: {nepochs} epochs ===")
 total_start = time.time()
 history = {'loss': [], 'corr': [], 'rate_pop1': [], 'rate_pop2': []}
 
+
 for epoch in range(nepochs):
     epoch_start = time.time()
     result = trainer.train_step(t_seq_full, initial_state=init_state)
