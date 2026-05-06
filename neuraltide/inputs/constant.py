@@ -1,7 +1,6 @@
 import tensorflow as tf
 from typing import Any, Dict
 
-import neuraltide.config
 from neuraltide.core.base import BaseInputGenerator
 from neuraltide.core.types import TensorType
 

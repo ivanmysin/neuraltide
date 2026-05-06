@@ -15,11 +15,10 @@ Two modes:
     adjoint_derivatives() + parameter_jacobian() — no GradientTape in the loop
 """
 import tensorflow as tf
-from typing import Dict, List, Tuple, Optional, Any
+from typing import Dict, List, Tuple, Optional
 
 import neuraltide
 import neuraltide.config
-from neuraltide.core.base import PopulationModel, SynapseModel
 from neuraltide.core.network import (
     NetworkRNN,
     NetworkOutput,

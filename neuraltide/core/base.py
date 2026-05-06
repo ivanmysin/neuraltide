@@ -1,6 +1,6 @@
 import tensorflow as tf
-from abc import ABC, abstractmethod
-from typing import Dict, List, Tuple, Any, Optional
+from abc import abstractmethod
+from typing import Dict, Tuple, Any, Optional
 
 import neuraltide.config
 from neuraltide.constraints import MinMaxConstraint

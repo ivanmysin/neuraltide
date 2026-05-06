@@ -22,6 +22,7 @@ from neuraltide.training.callbacks import (
     GradientMonitor,
     ExperimentLogger,
 )
+from neuraltide.training.profiling import profile, profile_step
 
 __all__ = [
     "BaseLoss",
@@ -43,4 +44,6 @@ __all__ = [
     "DivergenceDetector",
     "GradientMonitor",
     "ExperimentLogger",
+    "profile",
+    "profile_step",
 ]

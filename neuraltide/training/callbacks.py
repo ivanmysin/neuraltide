@@ -1,5 +1,5 @@
 import tensorflow as tf
-from typing import Dict, List, Optional
+from typing import Dict
 import os
 
 

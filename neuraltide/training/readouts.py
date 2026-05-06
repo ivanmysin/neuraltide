@@ -1,6 +1,6 @@
 import tensorflow as tf
 from abc import ABC, abstractmethod
-from typing import Dict, Optional
+from typing import Dict
 
 import neuraltide
 import neuraltide.config
@@ -134,7 +134,6 @@ class HemodynamicReadout(BaseReadout):
         self.dt = dt
 
     def build(self, input_shape):
-        from scipy.signal import firwin2
         t = tf.range(0, 20, self.dt, dtype=neuraltide.config.get_dtype())
         tau1, tau2, a1, a2 = 2.5, 10.0, 6.0, 16.0
         hrf = (t / tau1) ** a1 * tf.exp(-t / tau1) / (a1 ** a1 * tf.exp(-a1)) \

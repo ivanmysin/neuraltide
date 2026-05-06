@@ -1,8 +1,8 @@
 import csv
 import json
 import os
-from dataclasses import dataclass, asdict
-from typing import Dict, List, Optional, Callable, Literal, Tuple, Union
+from dataclasses import dataclass
+from typing import Dict, List, Optional, Literal, Tuple, Union
 
 import tensorflow as tf
 

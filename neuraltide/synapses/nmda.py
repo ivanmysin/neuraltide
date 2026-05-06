@@ -1,5 +1,5 @@
 import tensorflow as tf
-from typing import Dict, Tuple, List
+from typing import Dict, Tuple
 
 import neuraltide
 import neuraltide.config

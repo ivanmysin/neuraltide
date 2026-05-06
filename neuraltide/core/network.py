@@ -7,10 +7,13 @@ import tensorflow as tf
 import neuraltide
 import neuraltide.config
 from neuraltide.core.base import PopulationModel, SynapseModel, BaseInputGenerator
-from neuraltide.core.state import NetworkState
 from neuraltide.core.types import TensorType, StateList
 from neuraltide.integrators.base import BaseIntegrator
 from neuraltide.populations.input_population import InputPopulation
+
+
+def _tensorarr_shape(t: TensorType) -> List[Optional[int]]:
+    return [d if d is not None else None for d in t.shape.as_list()]
 
 
 @dataclass
@@ -415,19 +418,58 @@ class NetworkRNN(tf.keras.layers.Layer):
         init_pop: Tuple[TensorType, ...],
         init_syn: Tuple[TensorType, ...],
     ) -> Tuple[Dict[str, TensorType], TensorType, StateList, StateList]:
-        """Сканирует временну́ю ось через tf.scan. Возвращает rates, stability, final states."""
-        init_stability = tf.zeros([1], dtype=neuraltide.config.get_dtype())
-
+        """Сканирует временну́ю ось через tf.while_loop + TensorArray."""
+        dtype = neuraltide.config.get_dtype()
+        T = tf.shape(t_sequence)[1]
         elems = tf.transpose(t_sequence, [1, 0, 2])
 
-        scan_all = tf.scan(
-            lambda carry, t: _step_fn(carry, t, self._graph, self._integrator),
-            elems=elems,
-            initializer=(init_pop, init_syn, init_stability),
-            parallel_iterations=1,
+        init_stability = tf.zeros([1], dtype=dtype)
+
+        pop_arrays = [
+            tf.TensorArray(dtype, size=T, clear_after_read=False,
+                           element_shape=_tensorarr_shape(init_pop[i]))
+            for i in range(self._pop_state_count)
+        ]
+        syn_arrays = [
+            tf.TensorArray(dtype, size=T, clear_after_read=False,
+                           element_shape=_tensorarr_shape(init_syn[i]))
+            for i in range(self._syn_state_count)
+        ]
+        stab_array = tf.TensorArray(dtype, size=T, clear_after_read=False,
+                                    element_shape=[1])
+
+        i0 = tf.constant(0)
+
+        def _cond(i, pop_carry, syn_carry, stab_carry,
+                  pop_arrs, syn_arrs, stab_arr):
+            return i < T
+
+        def _body(i, pop_carry, syn_carry, stab_carry,
+                  pop_arrs, syn_arrs, stab_arr):
+            t = elems[i]
+            new_pop, new_syn, new_stab = _step_fn(
+                (pop_carry, syn_carry, stab_carry),
+                t, self._graph, self._integrator,
+            )
+            for j in range(self._pop_state_count):
+                pop_arrs[j] = pop_arrs[j].write(i, new_pop[j])
+            for j in range(self._syn_state_count):
+                syn_arrs[j] = syn_arrs[j].write(i, new_syn[j])
+            stab_arr = stab_arr.write(i, new_stab)
+            return (i + 1, new_pop, new_syn, new_stab,
+                    pop_arrs, syn_arrs, stab_arr)
+
+        loop_vars = (i0, init_pop, init_syn, init_stability,
+                     pop_arrays, syn_arrays, stab_array)
+
+        (*_, final_pop, final_syn, _,
+         pop_arrs, syn_arrs, stab_arr) = tf.while_loop(
+            _cond, _body, loop_vars, parallel_iterations=1,
         )
 
-        all_pop_stacked, all_syn_stacked, all_stability = scan_all
+        all_pop_stacked = tuple(ta.stack() for ta in pop_arrs)
+        all_syn_stacked = tuple(ta.stack() for ta in syn_arrs)
+        all_stability = stab_arr.stack()
 
         all_rates = {}
         for name in self._graph.dynamic_population_names:
@@ -437,7 +479,8 @@ class NetworkRNN(tf.keras.layers.Layer):
             rate = pop.get_firing_rate([stacked_r])
             all_rates[name] = tf.transpose(rate, [1, 0, 2])
 
-        stability_loss = self._stability_penalty_weight * tf.reduce_mean(all_stability[-1])
+        stability_loss = self._stability_penalty_weight * tf.reduce_mean(
+            all_stability[-1])
 
         final_pop_states = [s[-1] for s in all_pop_stacked]
         final_syn_states = [s[-1] for s in all_syn_stacked]
@@ -459,17 +502,57 @@ class NetworkRNN(tf.keras.layers.Layer):
         List[TensorType],
     ]:
         """Same as _scan_forward but also returns stacked state tensors."""
-        init_stability = tf.zeros([1], dtype=neuraltide.config.get_dtype())
+        dtype = neuraltide.config.get_dtype()
+        T = tf.shape(t_sequence)[1]
         elems = tf.transpose(t_sequence, [1, 0, 2])
 
-        scan_all = tf.scan(
-            lambda carry, t: _step_fn(carry, t, self._graph, self._integrator),
-            elems=elems,
-            initializer=(init_pop, init_syn, init_stability),
-            parallel_iterations=1,
+        init_stability = tf.zeros([1], dtype=dtype)
+
+        pop_arrays = [
+            tf.TensorArray(dtype, size=T, clear_after_read=False,
+                           element_shape=_tensorarr_shape(init_pop[i]))
+            for i in range(self._pop_state_count)
+        ]
+        syn_arrays = [
+            tf.TensorArray(dtype, size=T, clear_after_read=False,
+                           element_shape=_tensorarr_shape(init_syn[i]))
+            for i in range(self._syn_state_count)
+        ]
+        stab_array = tf.TensorArray(dtype, size=T, clear_after_read=False,
+                                    element_shape=[1])
+
+        i0 = tf.constant(0)
+
+        def _cond(i, pop_carry, syn_carry, stab_carry,
+                  pop_arrs, syn_arrs, stab_arr):
+            return i < T
+
+        def _body(i, pop_carry, syn_carry, stab_carry,
+                  pop_arrs, syn_arrs, stab_arr):
+            t = elems[i]
+            new_pop, new_syn, new_stab = _step_fn(
+                (pop_carry, syn_carry, stab_carry),
+                t, self._graph, self._integrator,
+            )
+            for j in range(self._pop_state_count):
+                pop_arrs[j] = pop_arrs[j].write(i, new_pop[j])
+            for j in range(self._syn_state_count):
+                syn_arrs[j] = syn_arrs[j].write(i, new_syn[j])
+            stab_arr = stab_arr.write(i, new_stab)
+            return (i + 1, new_pop, new_syn, new_stab,
+                    pop_arrs, syn_arrs, stab_arr)
+
+        loop_vars = (i0, init_pop, init_syn, init_stability,
+                     pop_arrays, syn_arrays, stab_array)
+
+        (*_, final_pop, final_syn, _,
+         pop_arrs, syn_arrs, stab_arr) = tf.while_loop(
+            _cond, _body, loop_vars, parallel_iterations=1,
         )
 
-        all_pop_stacked, all_syn_stacked, all_stability = scan_all
+        all_pop_stacked = tuple(ta.stack() for ta in pop_arrs)
+        all_syn_stacked = tuple(ta.stack() for ta in syn_arrs)
+        all_stability = stab_arr.stack()
 
         all_rates = {}
         for name in self._graph.dynamic_population_names:

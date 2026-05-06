@@ -1,7 +1,6 @@
 from abc import ABC, abstractmethod
-from typing import Dict, Tuple, Union
+from typing import Dict, Tuple
 
-import tensorflow as tf
 
 from neuraltide.core.base import PopulationModel, SynapseModel
 from neuraltide.core.types import TensorType, StateList
