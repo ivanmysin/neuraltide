@@ -230,6 +230,105 @@ class ParameterBoundLoss(BaseLoss):
         return loss
 
 
+class AntiPhaseLoss(BaseLoss):
+    """
+    Loss for mutually inhibitory populations: anti-correlation + activity maintenance.
+
+    Designed for networks where populations should oscillate in anti-phase
+    (e.g. two mutually inhibiting populations). The loss has two terms:
+
+    1. Correlation term: penalises deviation from target_correlation.
+       With target_correlation = -1.0, this pushes the pair toward perfect
+       anti-phase.  Mutual inhibition provides the physical substrate.
+
+    2. Activity term: penalises mean firing rates below activity_target.
+       Prevents the trivial solution where both populations go silent.
+
+    Args:
+        pop_pairs: list of (name_a, name_b) tuples.
+        target_correlation: desired Pearson correlation (−1.0 = full anti-phase).
+        correlation_weight: weight of the correlation term.
+        activity_target: minimum acceptable mean firing rate (Hz).
+        activity_weight: weight of the activity maintenance term.
+        transient_steps: number of initial time steps to exclude.
+        eps: small constant for numerical stability.
+    """
+
+    def __init__(
+        self,
+        pop_pairs: List[Tuple[str, str]],
+        target_correlation: float = -1.0,
+        correlation_weight: float = 1.0,
+        activity_target: float = 20.0,
+        activity_weight: float = 0.5,
+        transient_steps: int = 0,
+        eps: float = 1e-8,
+    ):
+        self.pop_pairs = pop_pairs
+        self.target_correlation = target_correlation
+        self.correlation_weight = correlation_weight
+        self.activity_target = activity_target
+        self.activity_weight = activity_weight
+        self.transient_steps = transient_steps
+        self.eps = eps
+
+        all_pops = set()
+        for a, b in pop_pairs:
+            all_pops.add(a)
+            all_pops.add(b)
+        self.all_populations = sorted(all_pops)
+
+    def __call__(self, predictions: NetworkOutput, model: NetworkRNN) -> TensorType:
+        dtype = neuraltide.config.get_dtype()
+        loss = tf.constant(0.0, dtype=dtype)
+
+        rates = predictions.firing_rates  # dict[str, Tensor[B, T, N]]
+
+        # --- 1. Anti-correlation term ---
+        for pop_a, pop_b in self.pop_pairs:
+            r_a = rates[pop_a]  # [1, T, n_units]
+            r_b = rates[pop_b]
+
+            if self.transient_steps > 0:
+                r_a = r_a[:, self.transient_steps:, :]
+                r_b = r_b[:, self.transient_steps:, :]
+
+            r_a_flat = tf.reshape(r_a, [-1])
+            r_b_flat = tf.reshape(r_b, [-1])
+
+            mean_a = tf.reduce_mean(r_a_flat)
+            mean_b = tf.reduce_mean(r_b_flat)
+            r_a_c = r_a_flat - mean_a
+            r_b_c = r_b_flat - mean_b
+
+            cov = tf.reduce_mean(r_a_c * r_b_c)
+            std_a = tf.sqrt(tf.reduce_mean(r_a_c ** 2) + self.eps)
+            std_b = tf.sqrt(tf.reduce_mean(r_b_c ** 2) + self.eps)
+            corr = cov / (std_a * std_b + self.eps)
+
+            loss += self.correlation_weight * (corr - self.target_correlation) ** 2
+
+        # --- 2. Activity maintenance term ---
+        for pop_name in self.all_populations:
+            r = rates[pop_name]  # [1, T, n_units]
+            if self.transient_steps > 0:
+                r = r[:, self.transient_steps:, :]
+            mean_rate = tf.reduce_mean(r)
+            loss += self.activity_weight * tf.nn.relu(
+                self.activity_target - mean_rate
+            )
+
+        return loss
+
+    def per_step_loss(
+        self,
+        firing_rates: Dict[str, TensorType],
+        target: Dict[str, TensorType],
+    ) -> TensorType:
+        dtype = neuraltide.config.get_dtype()
+        return tf.constant(0.0, dtype=dtype)
+
+
 class CompositeLoss:
     """
     Составная функция потерь: L = Σ weight_i * L_i.
