@@ -14,6 +14,8 @@ Trainable parameters:
 - I_ext (both populations)
 """
 
+import os
+import sys
 import time
 from copy import deepcopy
 
@@ -30,6 +32,56 @@ from neuraltide.training import (
     AntiPhaseLoss,
     StabilityPenalty,
 )
+
+# ── Device selection ────────────────────────────────────────────────
+print("=" * 60)
+print("Device detection")
+
+gpu_devices = tf.config.list_physical_devices("GPU")
+cpu_devices = tf.config.list_physical_devices("CPU")
+
+print(f"  CPUs visible: {len(cpu_devices)}")
+
+if gpu_devices:
+    print(f"  GPUs visible: {len(gpu_devices)}")
+    for i, gpu in enumerate(gpu_devices):
+        details = tf.config.experimental.get_device_details(gpu)
+        name = details.get("device_name", gpu.name)
+        mem_mb = details.get("memory_limit", None)
+        mem_str = f", {mem_mb // (1024*1024)} MiB" if mem_mb else ""
+        print(f"    [{i}] {name}{mem_str}")
+
+    # Allow memory growth — avoids grabbing all VRAM at once
+    for gpu in gpu_devices:
+        try:
+            tf.config.experimental.set_memory_growth(gpu, True)
+        except RuntimeError:
+            pass
+
+    device_type = "GPU"
+    print("  → Running on GPU")
+else:
+    device_type = "CPU"
+    print("  → Running on CPU")
+
+# Force tf.function compilation on the selected device
+if device_type == "GPU":
+    logical_gpus = tf.config.list_logical_devices("GPU")
+    if logical_gpus:
+        device_name = logical_gpus[0].name.replace("physical_device:", "")
+        print(f"  → Logical device: {device_name}")
+else:
+    logical_cpus = tf.config.list_logical_devices("CPU")
+    if logical_cpus:
+        print(f"  → Logical device: {logical_cpus[0].name.replace('physical_device:', '')}")
+
+# Print TF build info
+print(f"  TF version: {tf.__version__}")
+print(f"  tf.config.list_logical_devices():")
+for d in tf.config.list_logical_devices():
+    print(f"    {d.name}  ({d.device_type})")
+print("=" * 60)
+sys.stdout.flush()
 
 # ── Simulation parameters ──────────────────────────────────────────
 dt = 0.1
