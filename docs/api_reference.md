@@ -168,7 +168,6 @@ class NetworkRNN(tf.keras.layers.Layer):
 NetworkRNN(
     graph: NetworkGraph,
     integrator: BaseIntegrator,
-    return_sequences: bool = True,
     return_hidden_states: bool = False,
     stability_penalty_weight: float = 0.0
 )
@@ -189,6 +188,7 @@ class NetworkOutput:
     firing_rates: Dict[str, TensorType]
     hidden_states: Optional[Dict[str, Dict[str, TensorType]]]
     stability_loss: TensorType
+    final_state: Tuple[StateList, StateList]
 ```
 
 ---

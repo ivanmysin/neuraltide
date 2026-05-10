@@ -52,12 +52,26 @@ class NetworkGraph:
         self.dt = dt
         self._populations: Dict[str, PopulationModel] = {}
         self._synapses: Dict[str, _SynapseEntry] = {}
+        # Кэшированные списки для ускорения итераций
+        self._cached_population_names: Optional[List[str]] = None
+        self._cached_synapse_names: Optional[List[str]] = None
+        self._cached_dynamic_population_names: Optional[List[str]] = None
+        self._cached_input_population_names: Optional[List[str]] = None
+        self._pop_info_cache: List[Tuple[str, PopulationModel, int]] = []
+        self._syn_info_cache: List[Tuple[str, _SynapseEntry, int]] = []
+        self._dynamic_pop_indices: List[int] = []
 
     def add_population(self, name: str, model: PopulationModel) -> None:
         """Регистрирует популяцию (динамическую или InputPopulation)."""
         if name in self._populations:
             raise ValueError(f"Population '{name}' already registered.")
         self._populations[name] = model
+        # Сброс кэшей при изменении структуры
+        self._cached_population_names = None
+        self._cached_dynamic_population_names = None
+        self._cached_input_population_names = None
+        self._pop_info_cache = []
+        self._dynamic_pop_indices = []
 
     def add_input_population(
         self,
@@ -89,6 +103,43 @@ class NetworkGraph:
             )
         model._container_name = name
         self._synapses[name] = _SynapseEntry(model=model, src=src, tgt=tgt)
+        # Сброс кэшей при изменении структуры
+        self._cached_synapse_names = None
+        self._syn_info_cache = []
+
+    def _build_caches(self) -> None:
+        """Построение кэшированных структур для ускорения итераций."""
+        if self._cached_population_names is not None:
+            return  # Уже построено
+        
+        self._cached_population_names = list(self._populations.keys())
+        self._cached_synapse_names = list(self._synapses.keys())
+        
+        # Кэш для популяций: (name, model, state_size)
+        self._pop_info_cache = []
+        self._dynamic_pop_indices = []
+        for i, name in enumerate(self._cached_population_names):
+            pop = self._populations[name]
+            n = len(pop.state_size)
+            self._pop_info_cache.append((name, pop, n))
+            if not isinstance(pop, InputPopulation):
+                self._dynamic_pop_indices.append(i)
+        
+        self._cached_dynamic_population_names = [
+            name for name, pop, _ in self._pop_info_cache
+            if not isinstance(pop, InputPopulation)
+        ]
+        self._cached_input_population_names = [
+            name for name, pop, _ in self._pop_info_cache
+            if isinstance(pop, InputPopulation)
+        ]
+        
+        # Кэш для синапсов: (name, entry, state_size)
+        self._syn_info_cache = []
+        for name in self._cached_synapse_names:
+            entry = self._synapses[name]
+            n = len(entry.model.state_size)
+            self._syn_info_cache.append((name, entry, n))
 
     def validate(self) -> None:
         """Проверяет корректность топологии перед построением NetworkRNN."""
@@ -115,30 +166,35 @@ class NetworkGraph:
                     f"Population '{pop_name}' has no incoming synapses.",
                     UserWarning
                 )
+        
+        # Построить кэши после валидации
+        self._build_caches()
 
     @property
     def population_names(self) -> List[str]:
-        return list(self._populations.keys())
+        if self._cached_population_names is None:
+            self._build_caches()
+        return self._cached_population_names  # type: ignore
 
     @property
     def synapse_names(self) -> List[str]:
-        return list(self._synapses.keys())
+        if self._cached_synapse_names is None:
+            self._build_caches()
+        return self._cached_synapse_names  # type: ignore
 
     @property
     def dynamic_population_names(self) -> List[str]:
         """Имена только динамических популяций (без InputPopulation)."""
-        return [
-            name for name, pop in self._populations.items()
-            if not isinstance(pop, InputPopulation)
-        ]
+        if self._cached_dynamic_population_names is None:
+            self._build_caches()
+        return self._cached_dynamic_population_names  # type: ignore
 
     @property
     def input_population_names(self) -> List[str]:
         """Имена только входных популяций."""
-        return [
-            name for name, pop in self._populations.items()
-            if isinstance(pop, InputPopulation)
-        ]
+        if self._cached_input_population_names is None:
+            self._build_caches()
+        return self._cached_input_population_names  # type: ignore
 
 
 def unpack_state(
@@ -159,46 +215,19 @@ def unpack_state(
     """
     pop_states_dict = {}
     idx = 0
-    for name in graph.population_names:
-        pop = graph._populations[name]
-        n = len(pop.state_size)
+    # Use cached info for efficient iteration
+    for name, pop, n in graph._pop_info_cache:
         pop_states_dict[name] = flat_pop_states[idx:idx + n]
         idx += n
     
     syn_states_dict = {}
     idx = 0
-    for name in graph.synapse_names:
-        entry = graph._synapses[name]
-        n = len(entry.model.state_size)
+    # Use cached info for efficient iteration
+    for name, entry, n in graph._syn_info_cache:
         syn_states_dict[name] = flat_syn_states[idx:idx + n]
         idx += n
     
     return pop_states_dict, syn_states_dict
-
-
-def pack_state(
-    pop_states_dict: Dict[str, StateList],
-    syn_states_dict: Dict[str, StateList],
-) -> Tuple[StateList, StateList]:
-    """
-    Pack state dictionaries into flat lists.
-    
-    Args:
-        pop_states_dict: Dict of population states
-        syn_states_dict: Dict of synapse states
-    
-    Returns:
-        (flat_pop_states, flat_syn_states)
-    """
-    flat_pop = []
-    for name in pop_states_dict:
-        flat_pop.extend(pop_states_dict[name])
-    
-    flat_syn = []
-    for name in syn_states_dict:
-        flat_syn.extend(syn_states_dict[name])
-    
-    return flat_pop, flat_syn
 
 
 def get_firing_rates(
@@ -216,9 +245,10 @@ def get_firing_rates(
         Dict of firing rates keyed by population name
     """
     all_rates = {}
-    for name in graph.dynamic_population_names:
-        pop = graph._populations[name]
-        all_rates[name] = pop.get_firing_rate(pop_states_dict[name])
+    # Use cached info for efficient iteration
+    for name, pop, _ in graph._pop_info_cache:
+        if not isinstance(pop, InputPopulation):
+            all_rates[name] = pop.get_firing_rate(pop_states_dict[name])
     return all_rates
 
 
@@ -243,41 +273,41 @@ def _step_fn(
     pop_states, syn_states, stability_acc = states
     dtype = neuraltide.config.get_dtype()
     
+    # Распаковка состояний популяций с использованием кэшированных оффсетов
     pop_states_dict = {}
     idx = 0
-    for name in graph.population_names:
-        pop = graph._populations[name]
-        n = len(pop.state_size)
+    for name, pop, n in graph._pop_info_cache:
         pop_states_dict[name] = pop_states[idx:idx + n]
         idx += n
-    
+
+    # Распаковка состояний синапсов с использованием кэшированных оффсетов
     syn_states_dict = {}
     idx = 0
-    for name in graph.synapse_names:
-        entry = graph._synapses[name]
-        n = len(entry.model.state_size)
+    for name, entry, n in graph._syn_info_cache:
         syn_states_dict[name] = syn_states[idx:idx + n]
         idx += n
-    
-    for name in graph.population_names:
-        pop = graph._populations[name]
-        if isinstance(pop, InputPopulation):
-            pop_states_dict[name] = [t]
-    
+
+    # Обновление состояний input population
+    for name in graph.input_population_names:
+        pop_states_dict[name] = [t]
+
+    # Инициализация синаптических токов для динамических популяций
     syn_I: Dict[str, TensorType] = {}
     syn_g: Dict[str, TensorType] = {}
     for name in graph.dynamic_population_names:
         n = graph._populations[name].n_units
         syn_I[name] = tf.zeros([1, n], dtype=dtype)
         syn_g[name] = tf.zeros([1, n], dtype=dtype)
-    
-    for syn_name, entry in graph._synapses.items():
-        src_pop = graph._populations[entry.src]
-        tgt_pop = graph._populations[entry.tgt]
+
+    # Обработка всех синапсов
+    for syn_name, entry, _ in graph._syn_info_cache:
         src_state = pop_states_dict[entry.src]
         tgt_state = pop_states_dict[entry.tgt]
         syn_state = syn_states_dict[syn_name]
-        
+
+        src_pop = graph._populations[entry.src]
+        tgt_pop = graph._populations[entry.tgt]
+
         pre_rate = src_pop.get_firing_rate(src_state)
 
         tgt_obs = tgt_pop.observables(tgt_state)
@@ -296,13 +326,13 @@ def _step_fn(
         syn_I[entry.tgt] = syn_I[entry.tgt] + current_dict['I_syn']
         syn_g[entry.tgt] = syn_g[entry.tgt] + current_dict['g_syn']
         syn_states_dict[syn_name] = new_syn_state
-    
+
+    # Интегрирование популяций
     stability_error = stability_acc
     new_pop_states_list = []
-    for name in graph.population_names:
-        pop = graph._populations[name]
+    for name, pop, n in graph._pop_info_cache:
         pop_state = pop_states_dict[name]
-        
+
         if isinstance(pop, InputPopulation):
             new_pop_states_list.extend(pop_state)
         else:
@@ -310,9 +340,10 @@ def _step_fn(
             new_pop_state, local_err = integrator.step(pop, pop_state, total_syn)
             new_pop_states_list.extend(new_pop_state)
             stability_error = stability_error + local_err
-    
+
+    # Сборка списка состояний синапсов
     new_syn_states_list = []
-    for name in graph.synapse_names:
+    for name, _, _ in graph._syn_info_cache:
         new_syn_states_list.extend(syn_states_dict[name])
 
     if neuraltide.config.get_debug_numerics():

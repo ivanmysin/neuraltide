@@ -261,19 +261,16 @@ class AdjointSolver(tf.Module):
         pop_states_list = list(pop_tup)
         syn_states_list = list(syn_tup)
 
+        # Use cached offsets for efficient unpacking (duplicates unpack_state logic inline)
         pop_states_dict = {}
         idx = 0
-        for name in graph.population_names:
-            pop = graph._populations[name]
-            n = len(pop.state_size)
+        for name, pop, n in graph._pop_info_cache:
             pop_states_dict[name] = pop_states_list[idx:idx + n]
             idx += n
 
         syn_states_dict = {}
         idx = 0
-        for name in graph.synapse_names:
-            entry = graph._synapses[name]
-            n = len(entry.model.state_size)
+        for name, entry, n in graph._syn_info_cache:
             syn_states_dict[name] = syn_states_list[idx:idx + n]
             idx += n
 
@@ -298,7 +295,8 @@ class AdjointSolver(tf.Module):
             syn_I[name] = tf.zeros([1, n], dtype=dtype)
             syn_g[name] = tf.zeros([1, n], dtype=dtype)
 
-        for syn_name, entry in graph._synapses.items():
+        # Use cached syn_info for efficient iteration
+        for syn_name, entry, _ in graph._syn_info_cache:
             syn_state = syn_states_dict[syn_name]
             pre_rate = pre_rates_dict[entry.src]
             post_v = post_vs_dict[entry.tgt]
