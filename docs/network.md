@@ -215,10 +215,8 @@ NetworkRNN использует `tf.scan` для пошагового интег
 NetworkRNN(
     graph: NetworkGraph,
     integrator: BaseIntegrator,
-    return_sequences: bool = True,
     return_hidden_states: bool = False,
     stability_penalty_weight: float = 0.0,
-    stateful: bool = False,
     **kwargs
 )
 ```
@@ -227,10 +225,8 @@ NetworkRNN(
 |----------|-----|---------|--------------|
 | `graph` | NetworkGraph | Граф сети | — |
 | `integrator` | BaseIntegrator | Интегратор | — |
-| `return_sequences` | bool | Возвращать последовательности | True |
 | `return_hidden_states` | bool | Возвращать скрытые состояния | False |
 | `stability_penalty_weight` | float | Вес штрафа за стабильность | 0.0 |
-| `stateful` | bool | Сохранять состояние между батчами | False |
 
 ### Вызов сети
 
@@ -241,8 +237,7 @@ output = network(t_sequence, initial_state=None, training=False)
 **Аргументы**:
 - `t_sequence`: tf.Tensor shape `[batch, T, 1]` или `[batch, T]` — временная последовательность в мс
 - `initial_state`: Optional[Tuple[pop_states, syn_states]] — начальное состояние. Если None, используется нулевое.
-- `training`: bool — режим (влияет на dropout и т.д.)
-- `reset_state`: bool — сбросить состояние перед прогоном (полезно для не-stateful режима)
+- `training`: bool — режим обучения
 
 **Возвращает**: `NetworkOutput`
 
@@ -254,6 +249,7 @@ class NetworkOutput:
     firing_rates: Dict[str, TensorType]       # {pop_name: [batch, T, n_units]}
     hidden_states: Optional[Dict[str, Dict[str, TensorType]]]  # или None
     stability_loss: TensorType  # скаляр
+    final_state: Tuple[StateList, StateList]  # конечное состояние для продолжения симуляции
 ```
 
 ### Свойства
@@ -278,38 +274,6 @@ init_pop, init_syn = network.get_initial_state(batch_size=2)
 ```
 
 **Возвращает**: `Tuple[StateList, StateList]`
-
-#### `set_initial_state(state)`
-
-Устанавливает начальное состояние сети.
-
-```python
-init_pop, init_syn = network.get_initial_state()
-init_pop[0] = tf.constant([[0.5, 0.5]])  # r = 0.5
-network.set_initial_state((init_pop, init_syn))
-```
-
-**Args**:
-- `state`: Tuple[pop_states, syn_states]
-
-#### `get_state()`
-
-Возвращает текущее сохранённое состояние (после прогона в stateful режиме).
-
-```python
-output = network(t_seq)
-current_state = network.get_state()
-```
-
-**Возвращает**: `Tuple[StateList, StateList]` или `None`
-
-#### `reset_state()`
-
-Сбрасывает состояние в нулевое.
-
-```python
-network.reset_state()
-```
 
 ---
 
@@ -387,36 +351,48 @@ output = network(t_seq)
 
 ## Внутренняя структура (_step_fn)
 
-Функция `_step_fn` выполняет один шаг симуляции:
+Функция `_step_fn` выполняет один шаг симуляции и декорирована `@tf.function` для компиляции в граф TensorFlow:
 
 ```python
 def _step_fn(states, t, graph, integrator):
-    # 1. Распаковка состояний
+    # 1. Распаковка состояний с использованием кэшированных оффсетов
     pop_states_dict = {...}
     syn_states_dict = {...}
-    
+
     # 2. Обновление времени для InputPopulation
-    for name in input_population_names:
+    for name in graph.input_population_names:
         pop_states_dict[name] = [t]
-    
-    # 3. Вычисление синаптических токов
-    for syn_name, entry in synapses:
+
+    # 3. Вычисление синаптических токов с использованием кэша _syn_info_cache
+    for syn_name, entry, _ in graph._syn_info_cache:
         pre_rate = src_pop.get_firing_rate(src_state)
         post_v = tgt_pop.observables(tgt_state)['v_mean']
-        current_dict, new_syn_state = synapse.forward(...)
-        
+        new_syn_state, local_err = integrator.step_synapse(...)
+        current_dict = compute_synapse_current(...)
+
         syn_I[tgt] += current_dict['I_syn']
         syn_g[tgt] += current_dict['g_syn']
-    
-    # 4. Интегрирование популяций
-    for name in dynamic_population_names:
+
+    # 4. Интегрирование популяций с использованием кэша _pop_info_cache
+    for name, pop, _ in graph._pop_info_cache:
+        if isinstance(pop, InputPopulation):
+            continue
         total_syn = {'I_syn': syn_I[name], 'g_syn': syn_g[name]}
         new_pop_state, local_err = integrator.step(pop, pop_state, total_syn)
-    
+
     return (new_pop_states, new_syn_states, stability_error)
 ```
 
-Эта функция вызывается `tf.scan` для всех временных шагов.
+Эта функция вызывается внутри `tf.while_loop` в методах `_scan_forward` и `_scan_forward_states`, которые также декорированы `@tf.function`.
+
+### Кэширование структур
+
+NetworkGraph использует кэши для ускорения итераций:
+- `_pop_info_cache`: список кортежей `(name, pop, state_size)` для всех популяций
+- `_syn_info_cache`: список кортежей `(name, entry, state_size)` для всех синапсов
+- `_dynamic_pop_indices`: индексы динамических популяций в кэше
+
+Кэши автоматически строятся при вызове `validate()` и сбрасываются при добавлении новых популяций/синапсов.
 
 ---
 

@@ -1,7 +1,5 @@
-from typing import Optional
 
-
-def print_summary(network, rich_library: Optional[object] = None) -> None:
+def print_summary(network) -> None:
     """
     Выводит summary модели.
 
