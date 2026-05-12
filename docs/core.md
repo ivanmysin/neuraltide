@@ -248,12 +248,13 @@ params[name] = {
 
 Аналогично PopulationModel, но для генераторов. Broadcast к `n_units`.
 
-#### `call(t)` (abstractmethod)
+#### `call(t, extra_inputs=None)` (abstractmethod)
 
 Вычисляет выход генератора в момент времени t.
 
 **Аргументы**:
-- `t`: текущее время в мс. shape = [batch, 1]
+- `t`: текущее время в мс. shape = [batch, 1], [T], или [batch, T, 1]
+- `extra_inputs`: опционально — дополнительные данные. shape = [batch, n_cols] или [batch, T, n_cols]
 
 **Возвращает**: `tf.Tensor`, shape = [batch, n_units], в Гц
 
@@ -267,6 +268,7 @@ params[name] = {
 
 ```python
 import tensorflow as tf
+from typing import Optional
 from neuraltide.core.base import BaseInputGenerator
 from neuraltide.core.types import TensorType
 
@@ -278,7 +280,7 @@ class MyGenerator(BaseInputGenerator):
         self.amplitude = self._make_param(self._params, 'amplitude')
         self.freq = self._make_param(self._params, 'freq')
     
-    def call(self, t: TensorType) -> TensorType:
+    def call(self, t: TensorType, extra_inputs: Optional[TensorType] = None) -> TensorType:
         # Реализация генератора
         two_pi = tf.constant(2.0 * 3.141592653589793)
         amplitude = tf.reshape(self.amplitude, [1, self.n_units])

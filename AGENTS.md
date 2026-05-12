@@ -45,7 +45,7 @@ Every parameter key can be:
 Trainer accepts `grad_method="bptt"` (default, `tf.scan`-based) or `grad_method="adjoint"`. The adjoint method requires models to implement `adjoint_derivatives()` and `synaptic_coupling()`. Not all built-in models support the adjoint method yet.
 
 ### NetworkRNN uses `tf.scan`, not Keras RNN
-`NetworkRNN` wraps a pure `tf.scan` loop (not `tf.keras.layers.RNN`). Its `call(t_sequence)` returns a `NetworkOutput` with `.firing_rates: dict[str, Tensor]`, `.stability_loss`, and `.final_state`.
+`NetworkRNN` wraps a pure `tf.scan` loop (not `tf.keras.layers.RNN`). Its `call(t_sequence, extra_inputs_seq=None)` returns a `NetworkOutput` with `.firing_rates: dict[str, Tensor]`, `.stability_loss`, and `.final_state`. The optional `extra_inputs_seq` tensor (shape `[batch, T, n_cols]`) is passed to `InputPopulation` generators — useful for position-dependent inputs like place fields.
 
 ### Input time shape
 Time sequence: `tf.Tensor` shape `[batch, T, 1]`. If passed as `[batch, T]`, it is automatically expanded.

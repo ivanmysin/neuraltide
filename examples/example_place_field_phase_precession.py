@@ -32,15 +32,15 @@ from neuraltide.inputs import PlaceFieldGenerator
 
 # ════════════════ Parameters ════════════════
 dt = 0.5          # ms
-T_total = 15000    # ms
+T_total = 30000    # ms
 n_place_cells = 2
 
 # Trajectory parameters
-speed = 0.4        # m/s — average linear speed along the path
+speed = 0.15        # m/s — average linear speed along the path
 r_base = 0.6       # m — base radius of quasi-circular trajectory
 r_mod_ampl = 0.2   # m — amplitude of radius modulation
 r_noise_std = 0.05 # m — std of radius noise
-theta_noise_std = 0.1  # rad — std of angular noise
+theta_noise_std = 0.01  # rad — std of angular noise
 
 # Place field parameters
 center_x = [0.0, -0.5]
@@ -48,7 +48,7 @@ center_y = [-0.6,  0.5]
 radius =   [0.2, 0.15]
 peak_rate = [5.0, 8.0]
 bg_rate =   [0.5,  1.0]
-theta_mod_factor = 0.0
+theta_mod_factor = 1.0
 
 # Phase precession parameters (slope in deg/cm)
 precession_slope = [5.0, 15.0]
@@ -299,7 +299,7 @@ ax2.grid(True, alpha=0.2)
 plt.tight_layout()
 plt.savefig('place_field_cell_theta.png', dpi=150)
 print(f"\nFigure 1 saved as place_field_cell_theta.png  (t = {t_start:.0f}–{t_end:.0f} ms)")
-plt.close(fig1)
+# plt.close(fig1)
 
 # ════════════════ Figure 2: Classic phase precession plot ════════════════
 # x-axis: normalized x-distance through place field  (pos_x - cx) / r
@@ -363,7 +363,7 @@ for i in range(gen.n_units):
 plt.tight_layout()
 plt.savefig('place_field_phase_precession.png', dpi=150)
 print("Figure 2 saved as place_field_phase_precession.png")
-plt.close(fig2)
+# plt.close(fig2)
 
 # ════════════════ Figure 3: Arena map ════════════════
 fig3, axes3 = plt.subplots(1, 2, figsize=(12, 6))
@@ -400,7 +400,8 @@ for ax_idx, title_suffix in enumerate([
 plt.tight_layout()
 plt.savefig('place_field_arena.png', dpi=150)
 print("Figure 3 saved as place_field_arena.png")
-plt.close(fig3)
+# plt.close(fig3)
+plt.show()
 
 print("\nAll figures saved!")
 print("\nKey demonstration:")

@@ -633,3 +633,103 @@ from neuraltide.examples.example_mutual_inhibition import *
 trainer.export_results('results.json')
 trainer.export_results('results.csv', format='csv')
 ```
+
+---
+
+## Пример 10: PlaceFieldGenerator с фазовой прецессией через extra_inputs_seq
+
+Полный пример: `examples/example_place_field_phase_precession.py`
+
+Демонстрирует передачу внешних пространственных координат `(x, y)` в генератор через `extra_inputs_seq` параметр `NetworkRNN.call()`.
+
+```python
+import numpy as np
+import tensorflow as tf
+from neuraltide.core.network import NetworkGraph, NetworkRNN
+from neuraltide.integrators import RK4Integrator
+from neuraltide.populations import IzhikevichMeanField
+from neuraltide.synapses import StaticSynapse
+from neuraltide.inputs import PlaceFieldGenerator
+
+n_place_cells = 6
+dt = 0.5
+
+# PlaceFieldGenerator с фазовой прецессией
+gen = PlaceFieldGenerator(dt=dt, params={
+    'center_x': [0.4, -0.5, 0.2, -0.3, 0.6, -0.1],
+    'center_y': [0.3,  0.4, -0.5, 0.1, -0.2, 0.5],
+    'radius':   [0.35, 0.4, 0.3, 0.35, 0.3, 0.35],
+    'peak_rate': [25.0, 30.0, 20.0, 22.0, 18.0, 15.0],
+    'background_rate': [2.0]*6,
+    'theta_modulation_factor': 0.0,
+    'precession_slope': [30.0, 35.0, 25.0, -20.0, 40.0, 28.0],
+    'precession_init_phase': [0.0, 45.0, 90.0, 135.0, 180.0, 225.0],
+    'R': 0.6, 'freq': 8.0,
+}, arena_size=((-1.0, 1.0), (-1.0, 1.0)), arena_radius=1.0)
+
+# Readout-популяция
+pop = IzhikevichMeanField(dt=dt, params={
+    'tau_pop': [1.0]*6, 'alpha': [0.5]*6, 'a': [0.02]*6,
+    'b': [0.2]*6, 'w_jump': [0.1]*6, 'Delta_I': [0.05]*6, 'I_ext': [0.0]*6,
+})
+
+# Диагональный синапс: каждая place cell → своя readout unit
+syn = StaticSynapse(n_pre=6, n_post=6, dt=dt, params={
+    'gsyn_max': [[1.0 if i==j else 0.0 for j in range(6)] for i in range(6)],
+    'pconn': 1.0, 'e_r': 5.0,
+})
+
+graph = NetworkGraph(dt=dt)
+graph.add_input_population('place', gen)
+graph.add_population('readout', pop)
+graph.add_synapse('place->readout', syn, src='place', tgt='readout')
+
+network = NetworkRNN(graph, integrator=RK4Integrator())
+
+# Время
+T_total = 5000
+t_values = np.arange(0, T_total, dt, dtype=np.float32)
+t_seq = tf.constant(t_values[None, :, None])  # [1, T, 1]
+
+# Координаты (x, y) — только они, время отдельно в t_seq
+n_steps = len(t_values)
+r_traj = 0.7
+theta = 2.0 * np.pi * np.arange(n_steps) / n_steps * 2
+pos_x = r_traj * np.cos(theta)
+pos_y = r_traj * np.sin(theta)
+extra_inputs_seq = tf.constant(
+    np.stack([pos_x, pos_y], axis=-1).astype(np.float32)[None, :, :]
+)  # [1, T, 2]
+
+# Запуск с пространственным входом
+output = network(t_seq, extra_inputs_seq=extra_inputs_seq)
+rates = output.firing_rates['readout'].numpy()[0]  # [T, n_units]
+
+print(f"Readout shape: {rates.shape}")  # [T, 6]
+
+# Без extra_inputs_seq генератор использует встроенную круговую траекторию
+output_default = network(t_seq, extra_inputs_seq=None)
+```
+
+### Поток данных
+
+```
+extra_inputs_seq [batch, T, 2]  ──┐
+                                   ├──→ InputPopulation ──→ PlaceFieldGenerator.call(t, extra_inputs=extra)
+t_sequence      [batch, T, 1]  ──┘           │
+                                              ▼
+                                     firing_rate [batch, n_units]
+                                              │
+                                              ▼
+                                     StaticSynapse ──→ IzhikevichMeanField
+                                              │
+                                              ▼
+                                     output.firing_rates['readout']
+```
+
+### Примечания
+
+- `extra_inputs_seq` опционален (по умолчанию `None`). При `None` генераторы получают `[batch, 0]` тензор.
+- Если `extra_inputs_seq` имеет rank 2, он автоматически расширяется до `[batch, T, 1]`.
+- `extra_inputs` передаётся **только** во `InputPopulation`-генераторы, не в динамические популяции.
+- Генераторы `SinusoidalGenerator`, `ConstantRateGenerator`, `VonMisesGenerator` игнорируют `extra_inputs`.

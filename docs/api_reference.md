@@ -174,7 +174,7 @@ NetworkRNN(
 ```
 
 **Методы**:
-- `call(t_sequence, initial_state=None, training=False) -> NetworkOutput`
+- `call(t_sequence, extra_inputs_seq=None, initial_state=None, training=False) -> NetworkOutput`
 - `get_initial_state(batch_size=1) -> Tuple[StateList, StateList]`
 
 **Свойства**:
@@ -268,6 +268,10 @@ FokkerPlanckPopulation(
 class InputPopulation(PopulationModel):
 ```
 
+Псевдо-популяция, оборачивающая `BaseInputGenerator`. Не имеет собственной динамики.
+
+**Состояние**: `[t_current, extra_inputs]` — тензоры формы `[1, 1]` (время в мс) и `[1, n_cols]` (данные из `extra_inputs_seq`).
+
 **Конструктор**:
 ```python
 InputPopulation(
@@ -275,6 +279,9 @@ InputPopulation(
     **kwargs
 )
 ```
+
+**Методы**:
+- `get_firing_rate(state) -> TensorType` — вызывает `generator(state[0], extra_inputs=state[1])`
 
 ---
 

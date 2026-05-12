@@ -319,8 +319,9 @@ class LeakyIF(FokkerPlanckPopulation):
 
 - Не имеет уравнений динамики (`derivatives()` возвращает `[]`)
 - Не обновляется интегратором
-- Состояние: `[t_current]`, shape [1, 1] — текущее время в мс
-- `get_firing_rate(state)` вызывает `generator(state[0])`
+- Состояние: `[t_current, extra_inputs]` — тензоры формы `[1, 1]` (время в мс) и `[1, n_cols]` (дополнительные данные — координаты, параметры стимула и т.д.)
+- `get_firing_rate(state)` вызывает `generator(state[0], extra_inputs=state[1])`
+- Состояние обновляется напрямую в `NetworkRNN._step_fn`: `new_state = [t, extra_inputs]`, где `extra_inputs` — срез `extra_inputs_seq[:, i, :]` на шаге `i`
 - Не может быть целью синапса (только источником)
 
 ### Конструктор

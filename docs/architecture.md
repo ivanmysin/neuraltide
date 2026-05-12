@@ -112,7 +112,7 @@ network = NetworkRNN(graph, integrator=RK4Integrator())
 
 # Симуляция
 t_seq = tf.constant(np.arange(0, 1000, 0.5)[None, :, None])
-output = network(t_seq)
+output = network(t_seq, extra_inputs_seq=None)
 ```
 
 ## Параметры: система _make_param
@@ -165,8 +165,9 @@ config.set_dtype(tf.float64)  # по умолчанию tf.float32
 ## Симуляция через tf.scan
 
 NetworkRNN использует `tf.scan` для эффективной симуляции на временной оси. На каждом шаге:
+0. Обновляются состояния `InputPopulation` — `[t, extra_inputs_seq[:, i, :]]`
 1. Вычисляются синаптические токи от всех проекций
-2. Обновляются состояния популяций через интегратор
+2. Обновляются состояния динамических популяций через интегратор
 3. Обновляются состояния синапсов
 
 Это обеспечивает:

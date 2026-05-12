@@ -231,11 +231,12 @@ NetworkRNN(
 ### Вызов сети
 
 ```python
-output = network(t_sequence, initial_state=None, training=False)
+output = network(t_sequence, extra_inputs_seq=None, initial_state=None, training=False)
 ```
 
 **Аргументы**:
 - `t_sequence`: tf.Tensor shape `[batch, T, 1]` или `[batch, T]` — временная последовательность в мс
+- `extra_inputs_seq`: Optional tf.Tensor shape `[batch, T, n_cols]` — дополнительные входные данные, передаваемые во все `InputPopulation`-генераторы (например, координаты `(x, y)` для PlaceFieldGenerator). Если `None` — генераторы получают нулевой `extra_inputs` формы `[batch, T, 0]`. Если задан как `[batch, T]` — автоматически расширяется до `[batch, T, 1]`
 - `initial_state`: Optional[Tuple[pop_states, syn_states]] — начальное состояние. Если None, используется нулевое.
 - `training`: bool — режим обучения
 
@@ -315,6 +316,63 @@ init_pop[1] = tf.constant([[0.1, 0.1]])  # v = 0.1
 
 # Запуск с пользовательским состоянием
 output = network(t_seq, initial_state=(init_pop, init_syn))
+```
+
+### Симуляция с внешними входными данными (extra_inputs_seq)
+
+```python
+import numpy as np
+import tensorflow as tf
+from neuraltide.inputs import PlaceFieldGenerator
+from neuraltide.populations import IzhikevichMeanField
+from neuraltide.synapses import StaticSynapse
+
+# Создание генератора, работающего с пространственными координатами
+gen = PlaceFieldGenerator(dt=0.5, params={
+    'center_x': [0.4, -0.5], 'center_y': [0.3, 0.4],
+    'radius': [0.35, 0.4], 'peak_rate': [25.0, 30.0],
+    'background_rate': [2.0, 3.0], 'theta_modulation_factor': 0.0,
+    'precession_slope': [30.0, 35.0], 'precession_init_phase': [0.0, 90.0],
+    'R': 0.6, 'freq': 8.0,
+}, arena_size=((-1.0, 1.0), (-1.0, 1.0)), arena_radius=1.0)
+
+pop = IzhikevichMeanField(dt=0.5, params={
+    'tau_pop': [1.0, 1.0], 'alpha': [0.5, 0.5], 'a': [0.02, 0.02],
+    'b': [0.2, 0.2], 'w_jump': [0.1, 0.1], 'Delta_I': [0.05, 0.05],
+    'I_ext': [0.0, 0.0],
+})
+syn = StaticSynapse(n_pre=2, n_post=2, dt=0.5, params={
+    'gsyn_max': [[1.0, 0.0], [0.0, 1.0]], 'pconn': 1.0, 'e_r': 5.0,
+})
+
+graph = NetworkGraph(dt=0.5)
+graph.add_input_population('place', gen)
+graph.add_population('readout', pop)
+graph.add_synapse('place->readout', syn, src='place', tgt='readout')
+
+network = NetworkRNN(graph, integrator=RK4Integrator())
+
+# Время
+T = 5000
+t_values = np.arange(0, T, 0.5, dtype=np.float32)
+t_seq = tf.constant(t_values[None, :, None])  # [1, T/dt, 1]
+
+# Траектория: позиции (x, y) передаются через extra_inputs_seq
+n_steps = len(t_values)
+r_traj = 0.7
+theta = 2.0 * np.pi * np.arange(n_steps) / n_steps * 2  # 2 оборота
+pos_x = 0.7 * np.cos(theta)
+pos_y = 0.7 * np.sin(theta)
+extra_inputs_seq = tf.constant(
+    np.stack([pos_x, pos_y], axis=-1).astype(np.float32)[None, :, :]
+)  # [1, T/dt, 2]
+
+# Запуск с extra_inputs_seq
+output = network(t_seq, extra_inputs_seq=extra_inputs_seq)
+print(output.firing_rates['readout'].shape)  # [1, T/0.5, 2]
+
+# Без extra_inputs_seq генератор использует встроенную траекторию по умолчанию
+output_default = network(t_seq, extra_inputs_seq=None)
 ```
 
 ### Мониторинг стабильности
