@@ -32,14 +32,21 @@ from neuraltide.inputs import PlaceFieldGenerator
 
 # ════════════════ Parameters ════════════════
 dt = 0.5          # ms
-T_total = 5000    # ms
+T_total = 15000    # ms
 n_place_cells = 2
 
+# Trajectory parameters
+speed = 0.4        # m/s — average linear speed along the path
+r_base = 0.6       # m — base radius of quasi-circular trajectory
+r_mod_ampl = 0.2   # m — amplitude of radius modulation
+r_noise_std = 0.05 # m — std of radius noise
+theta_noise_std = 0.1  # rad — std of angular noise
+
 # Place field parameters
-center_x = [0.4, -0.5]
-center_y = [0.3,  0.4]
-radius =   [0.35, 0.4]
-peak_rate = [25.0, 30.0]
+center_x = [0.0, -0.5]
+center_y = [-0.6,  0.5]
+radius =   [0.2, 0.15]
+peak_rate = [5.0, 8.0]
 bg_rate =   [0.5,  1.0]
 theta_mod_factor = 0.0
 
@@ -118,20 +125,30 @@ print(f"Graph synapses: {graph.synapse_names}")
 n_steps = int(T_total / dt)
 t_values = np.arange(n_steps, dtype=np.float32) * dt
 
+# n_cycles derived from speed:  speed = 2π·r_base·n_cycles / T_total_sec
+T_total_sec = T_total / 1000.0
+n_cycles = speed * T_total_sec / (2.0 * np.pi * r_base)
+
 # Trajectory: noisy quasi-circular path with variable radius
 arena_center_x = 0.0
 arena_center_y = 0.0
-n_cycles = 2
 np.random.seed(42)
-r_base = 0.6
-r_mod = 0.2 * np.sin(2.0 * np.pi * np.arange(n_steps, dtype=np.float32) / n_steps * 0.5)
-r_noise = 0.05 * np.random.randn(n_steps).astype(np.float32)
+r_mod = r_mod_ampl * np.sin(2.0 * np.pi * np.arange(n_steps, dtype=np.float32) / n_steps * 0.5)
+r_noise = r_noise_std * np.random.randn(n_steps).astype(np.float32)
 r_traj = r_base + r_mod + r_noise
-theta_noise = 0.1 * np.random.randn(n_steps).astype(np.float32)
+theta_noise = theta_noise_std * np.random.randn(n_steps).astype(np.float32)
 theta_traj = (2.0 * np.pi * np.arange(n_steps, dtype=np.float32) / n_steps * n_cycles
               + theta_noise)
 pos_x = arena_center_x + r_traj * np.cos(theta_traj)
 pos_y = arena_center_y + r_traj * np.sin(theta_traj)
+
+# Compute actual path length and average speed for diagnostics
+path_deltas = np.sqrt(np.diff(pos_x)**2 + np.diff(pos_y)**2)
+actual_path = np.sum(path_deltas)
+actual_speed = actual_path / T_total_sec
+print(f"\nTrajectory: r_base={r_base:.2f} m, speed param={speed:.2f} m/s")
+print(f"  n_cycles = {n_cycles:.2f}, actual path = {actual_path:.2f} m, "
+      f"actual speed = {actual_speed:.2f} m/s")
 
 # ════════════════ Build extra_inputs_seq — only (x, y) ════════════════
 # Time is provided via t_sequence (first argument to network.call).
@@ -285,64 +302,63 @@ print(f"\nFigure 1 saved as place_field_cell_theta.png  (t = {t_start:.0f}–{t_
 plt.close(fig1)
 
 # ════════════════ Figure 2: Classic phase precession plot ════════════════
-# x-axis: signed normalized distance through place field
+# x-axis: normalized x-distance through place field  (pos_x - cx) / r
 #   (0 = center, negative = entering, positive = exiting)
-# y-axis: theta phase (radians, mod 2π)
+# y-axis: preferred theta LFP phase — the LFP phase at which the cell fires
+#   maximally.  Rate peaks when cos(2πft + φ₀ + dphi) = 1 → LFP phase
+#   2πft = -(φ₀ + dphi) mod 2π.  This is purely spatial and directly reveals
+#   the precession tilt.
+# Rows = cells, columns = readout / direct generator
 
-# Velocity from noisy trajectory for signed-distance projection
-vx = np.gradient(pos_x, dt)
-vy = np.gradient(pos_y, dt)
-speed = np.sqrt(vx**2 + vy**2) + 1e-8
-vx_norm = vx / speed
-vy_norm = vy / speed
+fig2, axes2 = plt.subplots(gen.n_units, 2, figsize=(16, 5 * gen.n_units))
 
-freq_rad = 2.0 * np.pi * freq_theta / 1000.0
+for i in range(gen.n_units):
+    cx_i = gen.center_x.numpy()[i]
+    cy_i = gen.center_y.numpy()[i]
+    r_i = gen.radius.numpy()[i]
+    slope_rad_i = gen.precession_slope_rad.numpy()[i]
+    phi0_rad_i = gen.precession_init_phase.numpy()[i]
 
-fig2, axes2 = plt.subplots(1, 2, figsize=(16, 7))
+    norm_x = (pos_x - cx_i) / r_i
 
-for ax_idx, (rates, title_suffix) in enumerate([
-    (readout_rates, 'via extra_inputs_seq'),
-    (direct_rates, 'generator direct'),
-]):
-    ax = axes2[ax_idx]
+    # Precession-induced phase shift (matches generator: dphi = -slope * (pos_x - cx))
+    dphi = -slope_rad_i * (pos_x - cx_i)
 
-    for i in range(gen.n_units):
-        cx_i = gen.center_x.numpy()[i]
-        cy_i = gen.center_y.numpy()[i]
-        r_i = gen.radius.numpy()[i]
-        slope_rad_i = gen.precession_slope_rad.numpy()[i]
-        phi0_rad_i = gen.precession_init_phase.numpy()[i]
+    # Preferred LFP theta phase: -(φ₀ + dphi) mod 2π
+    pref_phase = (-phi0_rad_i - dphi) % (2.0 * np.pi)
 
-        dx = pos_x - cx_i
-        dy = pos_y - cy_i
-        # Signed distance: project (pos - center) onto velocity direction
-        signed_dist = (dx * vx_norm + dy * vy_norm) / r_i
+    dist_raw = np.sqrt((pos_x - cx_i)**2 + (pos_y - cy_i)**2)
+    inside = dist_raw < r_i
 
-        # Theta phase with phase precession (matches generator internals)
-        dphi = -slope_rad_i * dx / r_i
-        theta_phase = (freq_rad * t_values + phi0_rad_i + dphi) % (2.0 * np.pi)
+    # Total precession shift across the field (degrees)
+    dphi_total = 2.0 * slope_rad_i * r_i * 180.0 / np.pi
 
-        dist_raw = np.sqrt(dx**2 + dy**2)
-        inside = dist_raw < r_i
+    for col_idx, (rates, title_suffix) in enumerate([
+        (readout_rates, 'Readout (network)'),
+        (direct_rates, 'Generator (direct)'),
+    ]):
+        ax = axes2[i, col_idx] if gen.n_units > 1 else axes2[col_idx]
 
-        # Colour by firing rate (normalized 0–1)
         rate_norm = rates[:, i] / (rates[:, i].max() + 1e-8)
 
-        ax.scatter(signed_dist[inside], theta_phase[inside],
+        ax.scatter(norm_x[inside], pref_phase[inside],
                    s=8, alpha=0.4, c=rate_norm[inside],
-                   cmap='plasma', vmin=0, vmax=1,
-                   label=f'cell {i}  slope={precession_slope[i]:+.0f} deg/cm')
+                   cmap='plasma', vmin=0, vmax=1)
 
-    ax.set_xlabel('Signed distance through place field (normalized by radius)',
-                  fontsize=11)
-    ax.set_ylabel('Theta phase (rad)', fontsize=11)
-    ax.set_title(f'Phase Precession — {title_suffix}', fontsize=12, fontweight='bold')
-    ax.set_xlim(-1.5, 1.5)
-    ax.set_ylim(-0.1, 2.0 * np.pi + 0.1)
-    ax.set_yticks([0, np.pi / 2, np.pi, 3 * np.pi / 2, 2 * np.pi])
-    ax.set_yticklabels(['0', 'π/2', 'π', '3π/2', '2π'])
-    ax.legend(fontsize=7, loc='upper right')
-    ax.grid(True, alpha=0.2)
+        ax.set_xlabel('Normalized x-distance  (pos_x − cx) / r', fontsize=10)
+        ax.set_ylabel('Preferred theta phase (rad)', fontsize=10)
+        ax.set_title(
+            f'Cell {i} — {title_suffix}\n'
+            f'center=({cx_i:.2f},{cy_i:.2f})  '
+            f'slope={precession_slope[i]:+.0f} deg/cm  '
+            f'φ₀={precession_init_phase[i]:.0f}°  '
+            f'Δφ_across_field={dphi_total:.0f}°',
+            fontsize=11, fontweight='bold')
+        ax.set_xlim(-1.5, 1.5)
+        ax.set_ylim(-0.1, 2.0 * np.pi + 0.1)
+        ax.set_yticks([0, np.pi / 2, np.pi, 3 * np.pi / 2, 2 * np.pi])
+        ax.set_yticklabels(['0', 'π/2', 'π', '3π/2', '2π'])
+        ax.grid(True, alpha=0.2)
 
 plt.tight_layout()
 plt.savefig('place_field_phase_precession.png', dpi=150)
@@ -388,7 +404,8 @@ plt.close(fig3)
 
 print("\nAll figures saved!")
 print("\nKey demonstration:")
-print("  1. Noisy quasi-circular trajectory with variable radius (r_base=0.6, ±0.2 mod, ±0.05 noise)")
+print(f"  1. Noisy quasi-circular trajectory: r_base={r_base:.1f} m, speed={speed:.1f} m/s"
+      f" ({n_cycles:.1f} cycles)")
 print("  2. Position (x, y) passed via extra_inputs_seq → InputPopulation → PlaceFieldGenerator")
 print("  3. PlaceFieldGenerator computes rate with phase precession using those coordinates")
 print("  4. Rate flows through StaticSynapse → IzhikevichMeanField readout")
