@@ -1,5 +1,5 @@
 import tensorflow as tf
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 from neuraltide.core.base import BaseInputGenerator
 from neuraltide.core.types import TensorType
@@ -43,10 +43,11 @@ class ConstantRateGenerator(BaseInputGenerator):
 
         self.rate = self._make_param(self._params, 'rate')
 
-    def call(self, t: TensorType) -> TensorType:
+    def call(self, t: TensorType, extra_inputs: Optional[TensorType] = None) -> TensorType:
         """
         Args:
             t: текущее время в мс. shape = [batch, 1].
+            extra_inputs: дополнительные входные данные (игнорируется).
 
         Returns:
             tf.Tensor, shape = [batch, n_units], в Гц.

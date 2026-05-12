@@ -227,9 +227,10 @@ class AdjointSolver(tf.Module):
         Dict[str, TensorType],
         TensorType,
     ]:
+        extra = tf.zeros([1, 0], dtype=dtype)
         new_pop, new_syn, _ = _step_fn(
             (pop_tup, syn_tup, tf.constant([0.0], dtype=dtype)),
-            t_val, self._graph, self._integrator)
+            t_val, extra, self._graph, self._integrator)
         npl = list(new_pop)
         nsl = list(new_syn)
 
@@ -725,9 +726,10 @@ class AdjointSolver(tf.Module):
         t_val: TensorType,
         dtype: tf.DType,
     ) -> Tuple[Tuple[TensorType, ...], Tuple[TensorType, ...], TensorType]:
+        extra = tf.zeros([1, 0], dtype=dtype)
         return _step_fn(
             (pop_tup, syn_tup, stab_acc),
-            t_val, self._graph, self._integrator)
+            t_val, extra, self._graph, self._integrator)
 
     # ── Compute gradients ────────────────────────────────────────────────────
 

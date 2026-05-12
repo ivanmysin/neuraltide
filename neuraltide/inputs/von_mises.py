@@ -1,6 +1,6 @@
 import tensorflow as tf
 import numpy as np
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 import neuraltide.config
 from neuraltide.core.base import BaseInputGenerator
@@ -108,10 +108,11 @@ class VonMisesGenerator(BaseInputGenerator):
                          1.0 / (3 * R - 4 * R**2 + R**3), kappa)
         return kappa
 
-    def call(self, t: TensorType) -> TensorType:
+    def call(self, t: TensorType, extra_inputs: Optional[TensorType] = None) -> TensorType:
         """
         Args:
             t: текущее время в мс. shape = [batch, 1].
+            extra_inputs: дополнительные входные данные (игнорируется).
 
         Returns:
             tf.Tensor, shape = [batch, n_units], в Гц.

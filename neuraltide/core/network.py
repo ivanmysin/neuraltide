@@ -255,6 +255,7 @@ def get_firing_rates(
 def _step_fn(
     states: Tuple[StateList, StateList, TensorType],
     t: TensorType,
+    extra_inputs: TensorType,
     graph: NetworkGraph,
     integrator: BaseIntegrator,
 ) -> Tuple[StateList, StateList, TensorType]:
@@ -264,6 +265,7 @@ def _step_fn(
     Args:
         states: (pop_states, syn_states, stability_error) - текущие состояния
         t: текущее время
+        extra_inputs: доп. входные данные (x, y, и т.д.) для Input generators
         graph: NetworkGraph
         integrator: BaseIntegrator
     
@@ -289,7 +291,7 @@ def _step_fn(
 
     # Обновление состояний input population
     for name in graph.input_population_names:
-        pop_states_dict[name] = [t]
+        pop_states_dict[name] = [t, extra_inputs]
 
     # Инициализация синаптических токов для динамических популяций
     syn_I: Dict[str, TensorType] = {}
@@ -405,10 +407,12 @@ class NetworkRNN(tf.keras.layers.Layer):
         
         self._init_pop_states: StateList = []
         self._pop_state_offsets: Dict[str, int] = {}
+        self._pop_state_shapes: List[tf.TensorShape] = []
         for name in self._graph.population_names:
             pop = self._graph._populations[name]
             self._pop_state_offsets[name] = len(self._init_pop_states)
             self._init_pop_states.extend(pop.get_initial_state(batch_size))
+            self._pop_state_shapes.extend(pop.state_size)
         
         self._init_syn_states: StateList = []
         self._syn_state_offsets: Dict[str, int] = {}
@@ -442,10 +446,10 @@ class NetworkRNN(tf.keras.layers.Layer):
             vars_.extend(entry.model.trainable_variables)
         return vars_
 
-    @tf.function
     def _scan_forward(
         self,
         t_sequence: TensorType,
+        extra_inputs_seq: TensorType,
         init_pop: Tuple[TensorType, ...],
         init_syn: Tuple[TensorType, ...],
     ) -> Tuple[Dict[str, TensorType], TensorType, StateList, StateList]:
@@ -453,12 +457,13 @@ class NetworkRNN(tf.keras.layers.Layer):
         dtype = neuraltide.config.get_dtype()
         T = tf.shape(t_sequence)[1]
         elems = tf.transpose(t_sequence, [1, 0, 2])
+        extra_elems = tf.transpose(extra_inputs_seq, [1, 0, 2])
 
         init_stability = tf.zeros([1], dtype=dtype)
 
         pop_arrays = [
             tf.TensorArray(dtype, size=T, clear_after_read=False,
-                           element_shape=_tensorarr_shape(init_pop[i]))
+                           element_shape=self._pop_state_shapes[i])
             for i in range(self._pop_state_count)
         ]
         syn_arrays = [
@@ -478,9 +483,10 @@ class NetworkRNN(tf.keras.layers.Layer):
         def _body(i, pop_carry, syn_carry, stab_carry,
                   pop_arrs, syn_arrs, stab_arr):
             t = elems[i]
+            extra = extra_elems[i]  # [batch, n_cols]
             new_pop, new_syn, new_stab = _step_fn(
                 (pop_carry, syn_carry, stab_carry),
-                t, self._graph, self._integrator,
+                t, extra, self._graph, self._integrator,
             )
             for j in range(self._pop_state_count):
                 pop_arrs[j] = pop_arrs[j].write(i, new_pop[j])
@@ -493,9 +499,24 @@ class NetworkRNN(tf.keras.layers.Layer):
         loop_vars = (i0, init_pop, init_syn, init_stability,
                      pop_arrays, syn_arrays, stab_array)
 
+        pop_state_inv = tuple(
+            tf.TensorShape(s) if not isinstance(s, tf.TensorShape) else s
+            for s in self._pop_state_shapes
+        )
+        shape_inv = (
+            tf.TensorShape([]),
+            pop_state_inv,
+            tuple(t.shape for t in init_syn),
+            tf.TensorShape([1]),
+            [tf.TensorShape(None)] * len(pop_arrays),
+            [tf.TensorShape(None)] * len(syn_arrays),
+            tf.TensorShape(None),
+        )
+
         (*_, final_pop, final_syn, _,
          pop_arrs, syn_arrs, stab_arr) = tf.while_loop(
             _cond, _body, loop_vars, parallel_iterations=1,
+            shape_invariants=shape_inv,
         )
 
         all_pop_stacked = tuple(ta.stack() for ta in pop_arrs)
@@ -518,12 +539,13 @@ class NetworkRNN(tf.keras.layers.Layer):
 
         return all_rates, stability_loss, final_pop_states, final_syn_states
 
-    @tf.function
     def _scan_forward_states(
         self,
         t_sequence: TensorType,
         init_pop: Tuple[TensorType, ...],
         init_syn: Tuple[TensorType, ...],
+        *,
+        extra_inputs_seq: Optional[TensorType] = None,
     ) -> Tuple[
         Dict[str, TensorType],
         TensorType,
@@ -537,11 +559,21 @@ class NetworkRNN(tf.keras.layers.Layer):
         T = tf.shape(t_sequence)[1]
         elems = tf.transpose(t_sequence, [1, 0, 2])
 
+        if extra_inputs_seq is None:
+            extra_seq = tf.zeros(
+                [tf.shape(t_sequence)[0], tf.shape(t_sequence)[1], 0],
+                dtype=dtype)
+        else:
+            if extra_inputs_seq.shape.rank == 2:
+                extra_inputs_seq = extra_inputs_seq[:, :, tf.newaxis]
+            extra_seq = extra_inputs_seq
+        extra_elements = tf.transpose(extra_seq, [1, 0, 2])
+
         init_stability = tf.zeros([1], dtype=dtype)
 
         pop_arrays = [
             tf.TensorArray(dtype, size=T, clear_after_read=False,
-                           element_shape=_tensorarr_shape(init_pop[i]))
+                           element_shape=self._pop_state_shapes[i])
             for i in range(self._pop_state_count)
         ]
         syn_arrays = [
@@ -561,9 +593,10 @@ class NetworkRNN(tf.keras.layers.Layer):
         def _body(i, pop_carry, syn_carry, stab_carry,
                   pop_arrs, syn_arrs, stab_arr):
             t = elems[i]
+            extra = extra_elements[i]  # [batch, n_cols]
             new_pop, new_syn, new_stab = _step_fn(
                 (pop_carry, syn_carry, stab_carry),
-                t, self._graph, self._integrator,
+                t, extra, self._graph, self._integrator,
             )
             for j in range(self._pop_state_count):
                 pop_arrs[j] = pop_arrs[j].write(i, new_pop[j])
@@ -574,11 +607,26 @@ class NetworkRNN(tf.keras.layers.Layer):
                     pop_arrs, syn_arrs, stab_arr)
 
         loop_vars = (i0, init_pop, init_syn, init_stability,
-                     pop_arrays, syn_arrays, stab_array)
+                      pop_arrays, syn_arrays, stab_array)
+
+        pop_state_inv = tuple(
+            tf.TensorShape(s) if not isinstance(s, tf.TensorShape) else s
+            for s in self._pop_state_shapes
+        )
+        shape_inv = (
+            tf.TensorShape([]),
+            pop_state_inv,
+            tuple(t.shape for t in init_syn),
+            tf.TensorShape([1]),
+            [tf.TensorShape(None)] * len(pop_arrays),
+            [tf.TensorShape(None)] * len(syn_arrays),
+            tf.TensorShape(None),
+        )
 
         (*_, final_pop, final_syn, _,
-         pop_arrs, syn_arrs, stab_arr) = tf.while_loop(
+          pop_arrs, syn_arrs, stab_arr) = tf.while_loop(
             _cond, _body, loop_vars, parallel_iterations=1,
+            shape_invariants=shape_inv,
         )
 
         all_pop_stacked = tuple(ta.stack() for ta in pop_arrs)
@@ -607,8 +655,8 @@ class NetworkRNN(tf.keras.layers.Layer):
     def call(
         self,
         t_sequence: TensorType,
+        extra_inputs_seq: Optional[TensorType] = None,
         initial_state: Optional[Tuple[StateList, StateList]] = None,
-        training: bool = False,
     ) -> NetworkOutput:
         """
         Симулирует сеть на протяжении временно́й последовательности.
@@ -616,15 +664,24 @@ class NetworkRNN(tf.keras.layers.Layer):
         Args:
             t_sequence: tf.Tensor shape [batch, T, 1] или [batch, T]
                 Временная последовательность в мс.
+            extra_inputs_seq: tf.Tensor shape [batch, T, n_cols]
+                Дополнительные входные данные, например координаты (x, y).
+                Поддерживается любое количество столбцов.
             initial_state: Optional[Tuple[pop_states, syn_states]]
                 Начальное состояние. Если None, используется нулевое.
-            training: bool — режим обучения.
 
         Returns:
             NetworkOutput с firing_rates, final_state и stability_loss.
         """
         if t_sequence.shape.rank == 2:
             t_sequence = t_sequence[:, :, tf.newaxis]
+
+        if extra_inputs_seq is not None:
+            if extra_inputs_seq.shape.rank == 2:
+                extra_inputs_seq = extra_inputs_seq[:, :, tf.newaxis]
+        else:
+            extra_inputs_seq = tf.zeros([tf.shape(t_sequence)[0], tf.shape(t_sequence)[1], 0],
+                                        dtype=neuraltide.config.get_dtype())
 
         if initial_state is not None:
             init_pop, init_syn = initial_state
@@ -633,7 +690,7 @@ class NetworkRNN(tf.keras.layers.Layer):
             init_syn = list(self._init_syn_states)
 
         all_rates, stability_loss, final_pop, final_syn = \
-            self._scan_forward(t_sequence, tuple(init_pop), tuple(init_syn))
+            self._scan_forward(t_sequence, extra_inputs_seq, tuple(init_pop), tuple(init_syn))
 
         return NetworkOutput(
             firing_rates=all_rates,

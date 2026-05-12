@@ -200,18 +200,48 @@ class PopulationModel(tf.keras.layers.Layer):
     @abstractmethod
     def parameter_spec(self) -> Dict[str, Dict[str, Any]]:
         """
-        Спецификация параметров модели для summary и сериализации.
+        Спецификация параметров генератора для summary и сериализации.
+        """
+        raise NotImplementedError
+
+    @abstractmethod
+    def call(
+        self,
+        t: TensorType,
+        extra_inputs: Optional[TensorType] = None,
+    ) -> TensorType:
+        """
+        Compute the generator output for the given time sequence.
+
+        Args:
+            t: time in ms. shape = [batch, T, 1] or [batch, T].
+            extra_inputs: extra data (e.g. 2D coordinates).
+                          shape = [batch, T, n_extra_cols].
+                          First column always matches t.
+                          If None, use internal trajectory.
 
         Returns:
-            {
-                'param_name': {
-                    'shape':      tuple,
-                    'trainable':  bool,
-                    'constraint': str or None,
-                    'units':      str,
-                },
-                ...
-            }
+            tf.Tensor, shape = [batch, n_units].
+        """
+        raise NotImplementedError
+
+    @abstractmethod
+    def call(
+        self,
+        t: TensorType,
+        extra_inputs: Optional[TensorType] = None,
+    ) -> TensorType:
+        """
+        Вычисляет выходной сигнал генератора для данной временной последовательности.
+
+        Args:
+            t: время в мс. shape = [batch, T].
+            extra_inputs: дополнительные входные данные (например, координаты).
+                          shape = [batch, T, n_extra_cols].
+                          Если None — генератор использует внутреннюю траекторию.
+
+        Returns:
+            tf.Tensor, shape = [batch, n_units].
         """
         raise NotImplementedError
 

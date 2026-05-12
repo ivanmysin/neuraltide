@@ -89,7 +89,7 @@ sys.stdout.flush()
 dt = 0.1
 T_total = 1000
 transient = 200
-nepochs = 80
+nepochs = 10
 log_every = 5
 
 n_transient_steps = int(transient / dt)

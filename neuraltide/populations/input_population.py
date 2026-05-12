@@ -18,9 +18,9 @@ class InputPopulation(PopulationModel):
     Семантика:
         - Не имеет уравнений динамики (derivatives() возвращает []).
         - Не обновляется интегратором.
-        - Состояние: [t_current], shape [1, 1] — текущее время в мс.
-        - NetworkRNNCell обновляет состояние напрямую: new_state = [t].
-        - get_firing_rate(state) вызывает generator(state[0]).
+        - Состояние: [t_current, extra_inputs], shape [1, 1] и [1, n_cols].
+        - NetworkRNN обновляет состояние напрямую: new_state = [t, extra].
+        - get_firing_rate(state) вызывает generator(state[0], state[1]).
         - Не может быть целью синапса (только источником).
     """
 
@@ -31,17 +31,26 @@ class InputPopulation(PopulationModel):
             **kwargs
         )
         self.generator = generator
-        self.state_size = [tf.TensorShape([1, 1])]
+        self._has_extra = True
+        self.state_size = [
+            tf.TensorShape([1, 1]),
+            tf.TensorShape([1, None]),  # extra inputs, variable cols
+        ]
 
     def get_initial_state(self, batch_size: int = 1) -> StateList:
-        return [tf.zeros([1, 1], dtype=neuraltide.config.get_dtype())]
+        dtype = neuraltide.config.get_dtype()
+        return [
+            tf.zeros([1, 1], dtype=dtype),
+            tf.zeros([1, 0], dtype=dtype),
+        ]
 
     def derivatives(self, state, total_synaptic_input) -> list:
         return []
 
     def get_firing_rate(self, state: StateList) -> TensorType:
         t = state[0]
-        rate = self.generator(t)
+        extra = state[1] if len(state) > 1 else None
+        rate = self.generator(t, extra_inputs=extra)
         return tf.reshape(rate, [1, self.n_units])
 
     def observables(self, state: StateList) -> Dict[str, TensorType]:
