@@ -211,8 +211,7 @@ class PlaceFieldGenerator(BaseInputGenerator):
 
     @staticmethod
     def _i0_np(kappa):
-        from scipy.special import i0
-        return i0(kappa).astype(np.float64)
+        return tf.math.bessel_i0(kappa)
 
     @staticmethod
     def _r2kappa_np(R):
