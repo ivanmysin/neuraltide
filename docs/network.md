@@ -236,7 +236,7 @@ output = network(t_sequence, extra_inputs_seq=None, initial_state=None, training
 
 **Аргументы**:
 - `t_sequence`: tf.Tensor shape `[batch, T, 1]` или `[batch, T]` — временная последовательность в мс
-- `extra_inputs_seq`: Optional tf.Tensor shape `[batch, T, n_cols]` — дополнительные входные данные, передаваемые во все `InputPopulation`-генераторы (например, координаты `(x, y)` для PlaceFieldGenerator). Если `None` — генераторы получают нулевой `extra_inputs` формы `[batch, T, 0]`. Если задан как `[batch, T]` — автоматически расширяется до `[batch, T, 1]`
+- `extra_inputs_seq`: Optional tf.Tensor shape `[batch, T, n_cols]` — дополнительные входные данные, передаваемые во все `InputPopulation`-генераторы (например, координаты `(x, y)` в см для PlaceFieldGenerator). Если `None` — генераторы получают нулевой `extra_inputs` формы `[batch, T, 0]` (PlaceFieldGenerator возвращает фоновую частоту). Если задан как `[batch, T]` — автоматически расширяется до `[batch, T, 1]`
 - `initial_state`: Optional[Tuple[pop_states, syn_states]] — начальное состояние. Если None, используется нулевое.
 - `training`: bool — режим обучения
 
@@ -327,14 +327,15 @@ from neuraltide.inputs import PlaceFieldGenerator
 from neuraltide.populations import IzhikevichMeanField
 from neuraltide.synapses import StaticSynapse
 
-# Создание генератора, работающего с пространственными координатами
+# Создание генератора, работающего с пространственными координатами (см)
 gen = PlaceFieldGenerator(dt=0.5, params={
-    'center_x': [0.4, -0.5], 'center_y': [0.3, 0.4],
-    'radius': [0.35, 0.4], 'peak_rate': [25.0, 30.0],
+    'center_x': [40.0, -50.0], 'center_y': [30.0, 40.0],
+    'radius': [35.0, 40.0], 'peak_rate': [25.0, 30.0],
     'background_rate': [2.0, 3.0], 'theta_modulation_factor': 0.0,
     'precession_slope': [30.0, 35.0], 'precession_init_phase': [0.0, 90.0],
+    'phase_outside': 0.0,
     'R': 0.6, 'freq': 8.0,
-}, arena_size=((-1.0, 1.0), (-1.0, 1.0)), arena_radius=1.0)
+})
 
 pop = IzhikevichMeanField(dt=0.5, params={
     'tau_pop': [1.0, 1.0], 'alpha': [0.5, 0.5], 'a': [0.02, 0.02],
@@ -357,12 +358,12 @@ T = 5000
 t_values = np.arange(0, T, 0.5, dtype=np.float32)
 t_seq = tf.constant(t_values[None, :, None])  # [1, T/dt, 1]
 
-# Траектория: позиции (x, y) передаются через extra_inputs_seq
+# Траектория: позиции (x, y) в см передаются через extra_inputs_seq
 n_steps = len(t_values)
-r_traj = 0.7
+r_traj = 70.0  # см
 theta = 2.0 * np.pi * np.arange(n_steps) / n_steps * 2  # 2 оборота
-pos_x = 0.7 * np.cos(theta)
-pos_y = 0.7 * np.sin(theta)
+pos_x = r_traj * np.cos(theta)
+pos_y = r_traj * np.sin(theta)
 extra_inputs_seq = tf.constant(
     np.stack([pos_x, pos_y], axis=-1).astype(np.float32)[None, :, :]
 )  # [1, T/dt, 2]
