@@ -32,7 +32,7 @@ from neuraltide.inputs import PlaceFieldGenerator
 
 # ════════════════ Parameters ════════════════
 dt = 0.5          # ms
-T_total = 30000    # ms
+T_total = 300    # ms
 n_place_cells = 2
 
 # Trajectory parameters
@@ -44,7 +44,7 @@ theta_noise_std = 0.01  # rad — std of angular noise
 
 # Place field parameters
 center_x = [0.0, -0.5]
-center_y = [-0.6,  0.5]
+center_y = [-0.75,  0.55]
 radius =   [0.2, 0.15]
 peak_rate = [5.0, 8.0]
 bg_rate =   [0.5,  1.0]

@@ -110,6 +110,7 @@ class PlaceFieldGenerator(BaseInputGenerator):
         bg_np = np.atleast_1d(np.array(bg_raw, dtype=np.float64))
         if bg_np.shape == ():
             bg_np = np.array([bg_np.item()], dtype=np.float64)
+
         self.background_rate = self.add_weight(
             shape=(self.n_units,),
             initializer=tf.keras.initializers.Constant(bg_np),
@@ -265,7 +266,7 @@ class PlaceFieldGenerator(BaseInputGenerator):
         i0k = _bcast(self.i0_kappa)
         fq = _bcast(self.freq)
         bg_rate = _bcast(self.background_rate)
-        tmf = _bcast(self.theta_modulation_factor)
+        # tmf = _bcast(self.theta_modulation_factor)
 
         # -- Position from extra_inputs or default circular trajectory --
         if extra_inputs is None:
@@ -308,28 +309,22 @@ class PlaceFieldGenerator(BaseInputGenerator):
 
         # -- Phase precession shift (rad) --
         # slope is rad/arena_unit, pos_x-cx is arena_units → product is radians
-        dphi = -slp_rad * (pos_x - cx)
+        dphi = slp_rad * (pos_x - cx)
 
         # -- Theta modulation inside field (with precession) --
-        theta_inside = (two_pi * fq * t
-                        / tf.constant(1000.0, dtype=dtype) + ph + dphi)
+        theta_inside = (two_pi * fq * t * 0.001 + ph + dphi)
         theta_mod_inside = (tf.exp(kap * tf.cos(theta_inside))
-                            / tf.maximum(i0k, 1e-8))
+                            / tf.maximum(i0k, 1e-5))
 
         # -- Theta modulation outside field --
-        theta_outside = (two_pi * fq * t
-                         / tf.constant(1000.0, dtype=dtype) + ph)
+        theta_outside = (two_pi * fq * t * 0.001 + ph)
         theta_mod_outside = (tf.exp(kap * tf.cos(theta_outside))
-                              / tf.maximum(i0k, 1e-8))
+                              / tf.maximum(i0k, 1e-5))
 
         # -- Composite rate --
-        rate_outside = tmf * theta_mod_outside
-        rate = (bg_rate
-                + spatial * (rate_peak * theta_mod_inside
-                             + (1.0 - spatial) * rate_outside))
+        rate = (rate_peak * spatial * theta_mod_inside + bg_rate * (1.0 - spatial) * theta_mod_outside)
 
         rate = tf.nn.relu(rate)
-        rate = tf.cast(rate, dtype)
         return rate
 
     @property
