@@ -236,7 +236,7 @@ output = network(t_sequence, extra_inputs_seq=None, initial_state=None, training
 
 **Аргументы**:
 - `t_sequence`: tf.Tensor shape `[batch, T, 1]` или `[batch, T]` — временная последовательность в мс
-- `extra_inputs_seq`: Optional tf.Tensor shape `[batch, T, n_cols]` — дополнительные входные данные, передаваемые во все `InputPopulation`-генераторы (например, координаты `(x, y)` в см для PlaceFieldGenerator). Если `None` — генераторы получают нулевой `extra_inputs` формы `[batch, T, 0]` (PlaceFieldGenerator возвращает фоновую частоту). Если задан как `[batch, T]` — автоматически расширяется до `[batch, T, 1]`
+- `extra_inputs_seq`: Optional tf.Tensor shape `[batch, T, n_cols]` — дополнительные входные данные, передаваемые во все `InputPopulation`-генераторы (например, координаты `(x, y, vx, vy)` для PlaceFieldGenerator). Если `None` — генераторы получают нулевой `extra_inputs` формы `[batch, T, 0]` (PlaceFieldGenerator возвращает фоновую частоту). Если задан как `[batch, T]` — автоматически расширяется до `[batch, T, 1]`
 - `initial_state`: Optional[Tuple[pop_states, syn_states]] — начальное состояние. Если None, используется нулевое.
 - `training`: bool — режим обучения
 
@@ -358,15 +358,17 @@ T = 5000
 t_values = np.arange(0, T, 0.5, dtype=np.float32)
 t_seq = tf.constant(t_values[None, :, None])  # [1, T/dt, 1]
 
-# Траектория: позиции (x, y) в см передаются через extra_inputs_seq
+# Траектория: позиции (x, y) + скорость (vx, vy) в см/мс передаются через extra_inputs_seq
 n_steps = len(t_values)
 r_traj = 70.0  # см
 theta = 2.0 * np.pi * np.arange(n_steps) / n_steps * 2  # 2 оборота
 pos_x = r_traj * np.cos(theta)
 pos_y = r_traj * np.sin(theta)
+vx = np.gradient(pos_x, 0.5)   # см/мс
+vy = np.gradient(pos_y, 0.5)
 extra_inputs_seq = tf.constant(
-    np.stack([pos_x, pos_y], axis=-1).astype(np.float32)[None, :, :]
-)  # [1, T/dt, 2]
+    np.stack([pos_x, pos_y, vx, vy], axis=-1).astype(np.float32)[None, :, :]
+)  # [1, T/dt, 4]
 
 # Запуск с extra_inputs_seq
 output = network(t_seq, extra_inputs_seq=extra_inputs_seq)

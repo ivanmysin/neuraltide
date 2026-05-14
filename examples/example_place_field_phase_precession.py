@@ -163,6 +163,11 @@ pos_y = r_traj * np.sin(theta_traj)   # cm
 path_deltas = np.sqrt(np.diff(pos_x)**2 + np.diff(pos_y)**2)
 actual_path = np.sum(path_deltas)
 actual_speed = actual_path / T_total_sec
+
+# Velocity: cm/ms (dx/dt, dt in ms)
+vx = np.gradient(pos_x, dt).astype(np.float32)
+vy = np.gradient(pos_y, dt).astype(np.float32)
+
 print("Trajectory diagnostics:")
 print(f"  n_cycles     = {n_cycles:.2f} over {T_total_sec:.1f} s")
 print(f"  actual path  = {actual_path:.0f} cm")
@@ -173,7 +178,8 @@ print()
 
 # ════════════════ Run generator ════════════════
 t_seq = tf.constant(t_values[np.newaxis, :, np.newaxis], dtype=tf.float32)    # [1, T, 1]
-extra_xy = np.stack([pos_x, pos_y], axis=-1).astype(np.float32)[np.newaxis, :, :]  # [1, T, 2]
+# extra_inputs: [batch, T, 4] — x, y, vx, vy
+extra_xy = np.stack([pos_x, pos_y, vx, vy], axis=-1).astype(np.float32)[np.newaxis, :, :]  # [1, T, 4]
 extra_inputs = tf.constant(extra_xy)
 
 rates = gen(t_seq, extra_inputs=extra_inputs).numpy()[0]  # [T, n_units]
@@ -223,9 +229,11 @@ inside_mask = dists_to_cell0 < r0
 t_hr = np.arange(0, T_total, dt, dtype=np.float32)
 pos_x_hr = np.interp(t_hr, t_values, pos_x).astype(np.float32)
 pos_y_hr = np.interp(t_hr, t_values, pos_y).astype(np.float32)
+vx_hr = np.interp(t_hr, t_values, vx).astype(np.float32)
+vy_hr = np.interp(t_hr, t_values, vy).astype(np.float32)
 
 t_hr_seq = tf.constant(t_hr[np.newaxis, :, np.newaxis])
-extra_hr = tf.constant(np.stack([pos_x_hr, pos_y_hr], axis=-1)[np.newaxis, :, :])
+extra_hr = tf.constant(np.stack([pos_x_hr, pos_y_hr, vx_hr, vy_hr], axis=-1)[np.newaxis, :, :])
 rates_hr = gen(t_hr_seq, extra_inputs=extra_hr).numpy()[0]
 
 init_phase0 = precession_init_phase[cell_id]
@@ -264,7 +272,7 @@ for cell_id in range(n_place_cells):
 
 plt.tight_layout()
 plt.savefig('place_field_cell_theta.png', dpi=150)
-print(f"\nFigure 1 saved as place_field_cell_theta.png )")
+print("\nFigure 1 saved as place_field_cell_theta.png")
 
 # ════════════════ Figure 2: Phase precession plot ════════════════
 # x-axis: normalized x-distance through place field (pos_x - cx) / r
@@ -283,24 +291,28 @@ for i in range(gen.n_units):
     slope_rad_i = gen.precession_slope_rad.numpy()[i]
     phi0_rad_i = gen.precession_init_phase.numpy()[i]
 
-    norm_x = (pos_x - cx_i) / r_i
-    dphi = -slope_rad_i * (pos_x - cx_i)
+    # Velocity-projected signed distance (matches generator when n_cols >= 4)
+    dx_raw = pos_x - cx_i
+    dy_raw = pos_y - cy_i
+    v_norm = np.sqrt(vx**2 + vy**2) + 1e-8
+    signed_dist = (dx_raw * vx + dy_raw * vy) / v_norm
+    dphi = -slope_rad_i * signed_dist
     pref_phase = (-phi0_rad_i - dphi) % (2.0 * np.pi)
 
-    dist_raw = np.sqrt((pos_x - cx_i)**2 + (pos_y - cy_i)**2)
+    dist_raw = np.sqrt(dx_raw**2 + dy_raw**2)
     inside = dist_raw < r_i
 
     rate_norm = rates[:, i] / (rates[:, i].max() + 1e-8)
 
     dphi_total = 2.0 * slope_rad_i * r_i * 180.0 / np.pi
 
-    ax.scatter(norm_x[inside], pref_phase[inside],
+    ax.scatter(signed_dist[inside] / r_i, pref_phase[inside],
                s=8, alpha=0.4, c=rate_norm[inside],
                cmap='plasma', vmin=0, vmax=1)
-    ax.scatter(norm_x[~inside], pref_phase[~inside],
+    ax.scatter(signed_dist[~inside] / r_i, pref_phase[~inside],
                s=3, alpha=0.15, c='gray')
 
-    ax.set_xlabel('Normalized x-distance  (pos_x − cx) / r', fontsize=10)
+    ax.set_xlabel('Signed distance / r  (pos−cx)·v/|v| / r', fontsize=10)
     ax.set_ylabel('Preferred theta phase (rad)', fontsize=10)
     ax.set_title(
         f'Cell {i}\n'
@@ -356,10 +368,11 @@ print()
 print("All figures saved!")
 print()
 print("Key points:")
-print(f"  1. Arena: {arena_radius:.0f} cm radius, trajectory: quasi-circular "
-      f"(r_base={r_base:.0f} cm, {n_cycles:.1f} cycles)")
-print("  2. Position (x, y) in cm passed directly to PlaceFieldGenerator.call()")
-print("  3. Phase precession: dphi = -slope * (x - cx) shifts theta phase inside field")
+print("  1. Arena: {:.0f} cm radius, trajectory: quasi-circular ".format(arena_radius)
+      + f"(r_base={r_base:.0f} cm, {n_cycles:.1f} cycles)")
+print("  2. Position (x,y) + velocity (vx,vy) passed to PlaceFieldGenerator.call()")
+print("  3. Phase precession: dphi = -slope * ((px-cx)*vx + (py-cy)*vy) / |v|")
+print("     → signed projection on velocity direction (distinguishes entry/exit)")
 print("  4. Outside field: rate = bg_rate * (1 - tmf + tmf * theta_mod_outside)")
 print("  5. theta_modulation_factor = 1 -> full theta modulation outside field")
 print(f"  6. phase_outside = {phase_outside}° — separate theta phase outside field")

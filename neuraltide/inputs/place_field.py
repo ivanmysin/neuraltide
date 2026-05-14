@@ -50,6 +50,12 @@ class PlaceFieldGenerator(BaseInputGenerator):
         extra_inputs shape = [batch, T, n_cols], n_cols >= 2.
         Колонка 0: координата X (см).
         Колонка 1: координата Y (см).
+        Колонка 2 (опционально): скорость VX (см/мс).
+        Колонка 3 (опционально): скорость VY (см/мс).
+        Если n_cols >= 4 — фазовая прецессия использует проекцию
+        вектора (pos-cx, pos-cy) на направление скорости
+        (различает заход в поле и выход из него).
+        Если n_cols == 2 или 3 — fallback: dphi = -slope * (px - cx).
 
     Пример:
         gen = PlaceFieldGenerator(
@@ -188,9 +194,13 @@ class PlaceFieldGenerator(BaseInputGenerator):
             R_array = np.array([R_array.item()])
         R_array = np.broadcast_to(R_array, [self.n_units])
         kappa_np = self._r2kappa_np(R_array)
+        i0k_np = self._i0_np(kappa_np)
         self.kappa = tf.constant(kappa_np, dtype=neuraltide.config.get_dtype())
-        self.i0_kappa = tf.constant(self._i0_np(kappa_np), dtype=neuraltide.config.get_dtype())
+        self.i0_kappa = tf.constant(i0k_np, dtype=neuraltide.config.get_dtype())
         self.freq = self._make_param(self._params, 'freq')
+
+        self._R_mean = float(np.mean(R_array))
+        self._kappa_mean = float(np.mean(kappa_np))
 
 
     @property
@@ -233,9 +243,14 @@ class PlaceFieldGenerator(BaseInputGenerator):
         """
         Args:
             t: время в мс, shape [batch, T, 1], [batch, T] или [T].
-            extra_inputs: координаты (x, y) в см, shape [batch, T, n_cols]
-                          или [batch, n_cols]. Колонка 0 = x, 1 = y.
-                          Если None или n_cols < 2 — spatial=0 (нет позиции).
+            extra_inputs: координаты и скорость. shape [batch, T, n_cols]
+                          или [batch, n_cols].
+                Колонка 0 = x (см), 1 = y (см)
+                Колонка 2 = vx (см/мс), 3 = vy (см/мс) — опционально.
+                Если n_cols >= 4, dphi использует проекцию на скорость
+                (различает заход/выход).
+                Если n_cols == 2 или 3 — fallback по x.
+                Если None или n_cols < 2 — spatial=0 (нет позиции).
 
         Returns:
             tf.Tensor, shape [batch, T, n_units], в Гц.
@@ -290,7 +305,20 @@ class PlaceFieldGenerator(BaseInputGenerator):
             dx = (px - cx) / r
             dy = (py - cy) / r
             spatial = tf.exp(-0.5 * (dx ** 2 + dy ** 2))
-            dphi = -slp_rad * (px - cx)  # приращение фазы зависит только от x !!!
+
+            has_vel = tf.greater_equal(extra_cols, 4)
+
+            def _dphi_with_vel():
+                vx = tf.broadcast_to(e[:, :, 2:3], [batch_n, T_n, 1])
+                vy = tf.broadcast_to(e[:, :, 3:4], [batch_n, T_n, 1])
+                v_norm = tf.sqrt(vx ** 2 + vy ** 2)
+                signed_dist = ((px - cx) * vx + (py - cy) * vy) / tf.maximum(v_norm, 1e-6)
+                return -slp_rad * signed_dist
+
+            def _dphi_no_vel():
+                return -slp_rad * (px - cx)
+
+            dphi = tf.cond(has_vel, _dphi_with_vel, _dphi_no_vel)
             return px, py, spatial, dphi
 
         def _no_position():

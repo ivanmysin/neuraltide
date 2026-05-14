@@ -345,9 +345,14 @@ spatial = exp(-0.5 * ((x-cx)/r)^2 + ((y-cy)/r)^2)
 theta_inside  = exp(kappa * cos(2π·freq·t/1000 + ph0 + dphi)) / I0(kappa)
 theta_outside = exp(kappa * cos(2π·freq·t/1000 + ph_out)) / I0(kappa)
 
-dphi = -slope_rad * (x - cx)   — фазовая прецессия
+dphi = -slope_rad * signed_dist
+signed_dist = ((px-cx)*vx + (py-cy)*vy) / |v|   (если есть скорость, n_cols >= 4)
+            = (px - cx)                           (fallback, n_cols == 2 или 3)
 tmf  = theta_modulation_factor (0 → нет модуляции вне поля, 1 → полная)
 ```
+
+Скорость `(vx, vy)` должна быть в **см/мс** (совместимо с шагом dt в мс).
+Использование скорости позволяет различать заход в поле места и выход из него.
 
 ### Особенности
 
@@ -395,7 +400,11 @@ def call(self, t: TensorType, extra_inputs: Optional[TensorType] = None) -> Tens
 - `extra_inputs`: опционально, форма `[batch, T, n_cols]` или `[batch, n_cols]`
   - Колонка 0: x-координата (см)
   - Колонка 1: y-координата (см)
-  - Если `None` или `n_cols < 2` — spatial=0, работает как фоновая частота
+  - Колонка 2 (опционально): vx — скорость по X (см/мс)
+  - Колонка 3 (опционально): vy — скорость по Y (см/мс)
+  - Если `n_cols >= 4` — фазовая прецессия использует проекцию на направление скорости
+  - Если `n_cols == 2` или `3` — fallback: `dphi = -slope * (x - cx)`
+  - Если `None` или `n_cols < 2` — spatial=0 (чисто фоновая частота)
 - Возвращает: `[batch, T, n_units]` в Hz
 
 ### Пример (прямой вызов)
@@ -414,11 +423,13 @@ gen = PlaceFieldGenerator(dt=0.5, params={
     'R': 0.6, 'freq': 8.0,
 })
 
-# Время (мс) + координаты (см)
+# Время (мс) + координаты (см) + скорость (см/мс)
 t = tf.constant(np.arange(0, 1000, 0.5, dtype=np.float32)[None, :, None])
 x = 70.0 * tf.cos(2*np.pi * tf.range(2000, dtype=tf.float32) / 2000 * 2)
 y = 70.0 * tf.sin(2*np.pi * tf.range(2000, dtype=tf.float32) / 2000 * 2)
-extra = tf.stack([x, y], axis=-1)[None, :, :]  # [1, T, 2]
+vx = tf.experimental.numpy.diff(x, prepend=x[0]) / 0.5  # см/мс
+vy = tf.experimental.numpy.diff(y, prepend=y[0]) / 0.5
+extra = tf.stack([x, y, vx, vy], axis=-1)[None, :, :]  # [1, T, 4]
 
 rates = gen(t, extra_inputs=extra)  # [1, T, 2]
 ```
@@ -622,12 +633,15 @@ network = NetworkRNN(graph, integrator=RK4Integrator())
 # Время отдельно, координаты — в extra_inputs_seq
 t_seq = tf.constant(np.arange(0, 5000, 0.5, dtype=np.float32)[None, :, None])
 
-# extra_inputs_seq: [batch=1, T, 2] — колонки x, y (см)
+# extra_inputs_seq: [batch=1, T, 4] — колонки x, y, vx, vy (см, см/мс)
 n_steps = t_seq.shape[1]
 pos_x = 70.0 * np.cos(2 * np.pi * np.arange(n_steps) / n_steps * 2)
 pos_y = 70.0 * np.sin(2 * np.pi * np.arange(n_steps) / n_steps * 2)
+dt = 0.5
+vx = np.gradient(pos_x, dt)  # см/мс
+vy = np.gradient(pos_y, dt)
 extra_inputs_seq = tf.constant(
-    np.stack([pos_x, pos_y], axis=-1).astype(np.float32)[None, :, :]
+    np.stack([pos_x, pos_y, vx, vy], axis=-1).astype(np.float32)[None, :, :]
 )
 
 output = network(t_seq, extra_inputs_seq=extra_inputs_seq)
