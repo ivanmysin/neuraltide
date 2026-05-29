@@ -13,9 +13,9 @@ from neuraltide.training.losses import CompositeLoss
 from neuraltide.core.types import TensorType, StateList
 
 try:
-    from neuraltide.training.adjoint import compute_gradients as adjoint_compute_gradients
+    from neuraltide.training.adjoint import AdjointSolver
 except ImportError:
-    adjoint_compute_gradients = None
+    AdjointSolver = None
 
 
 @dataclass
@@ -59,12 +59,18 @@ class Trainer:
         self.grad_method = grad_method
         self.grad_clip_norm = grad_clip_norm
         self.run_eagerly = run_eagerly
+        self._adjoint_solver = None
 
-        if grad_method == "adjoint" and adjoint_compute_gradients is None:
+        if grad_method == "adjoint" and AdjointSolver is None:
             raise ImportError("adjoint method not available")
 
         if not run_eagerly:
             self._train_step = tf.function(self._train_step)
+
+    def _get_adjoint_solver(self):
+        if self._adjoint_solver is None:
+            self._adjoint_solver = AdjointSolver(self.network)
+        return self._adjoint_solver
 
     def _apply_constraints(self):
         for v in self.network.trainable_variables:
@@ -75,16 +81,15 @@ class Trainer:
     def _train_step(
         self,
         t_sequence: TensorType,
+        inputs: TensorType,
         initial_state: Optional[Tuple[StateList, StateList]] = None,
     ) -> Dict[str, float]:
         with tf.GradientTape() as tape:
-            output = self.network(t_sequence, training=True, initial_state=initial_state)
+            output = self.network(t_sequence, inputs=inputs,
+                                  training=True, initial_state=initial_state)
             loss = self.loss_fn(output, self.network)
 
-        if self.grad_method == "adjoint":
-            grads = adjoint_compute_gradients(self.network, t_sequence, self.loss_fn)
-        else:
-            grads = tape.gradient(loss, self.network.trainable_variables)
+        grads = tape.gradient(loss, self.network.trainable_variables)
 
         grads_and_vars = [(g, v) for g, v in zip(grads, self.network.trainable_variables) if g is not None]
         
@@ -104,25 +109,25 @@ class Trainer:
     def train_step(
         self,
         t_sequence: TensorType,
+        inputs: TensorType,
         initial_state: Optional[Tuple[StateList, StateList]] = None,
     ) -> Dict[str, float]:
         if self.run_eagerly:
-            return self._train_step_eager(t_sequence, initial_state)
-        return self._train_step(t_sequence, initial_state)
+            return self._train_step_eager(t_sequence, inputs, initial_state)
+        return self._train_step(t_sequence, inputs, initial_state)
 
     def _train_step_eager(
         self,
         t_sequence: TensorType,
+        inputs: TensorType,
         initial_state: Optional[Tuple[StateList, StateList]] = None,
     ) -> Dict[str, float]:
         with tf.GradientTape() as tape:
-            output = self.network(t_sequence, training=True, initial_state=initial_state)
+            output = self.network(t_sequence, inputs=inputs,
+                                  training=True, initial_state=initial_state)
             loss = self.loss_fn(output, self.network)
 
-        if self.grad_method == "adjoint":
-            grads = adjoint_compute_gradients(self.network, t_sequence, self.loss_fn)
-        else:
-            grads = tape.gradient(loss, self.network.trainable_variables)
+        grads = tape.gradient(loss, self.network.trainable_variables)
 
         grads_and_vars = [(g, v) for g, v in zip(grads, self.network.trainable_variables) if g is not None]
         
@@ -142,6 +147,7 @@ class Trainer:
     def fit(
         self,
         t_sequence: TensorType,
+        inputs: TensorType,
         epochs: int,
         callbacks: Optional[List] = None,
         verbose: int = 1,
@@ -151,7 +157,8 @@ class Trainer:
         history = TrainingHistory(loss_history=[], epochs=epochs)
 
         for epoch in range(epochs):
-            step_result = self.train_step(t_sequence, initial_state=initial_state)
+            step_result = self.train_step(t_sequence, inputs,
+                                          initial_state=initial_state)
             loss_val = float(step_result['loss'])
 
             if verbose > 0:
@@ -167,13 +174,14 @@ class Trainer:
         self._last_history = history
         return history
 
-    def predict(self, t_sequence: TensorType) -> NetworkOutput:
+    def predict(self, t_sequence: TensorType, inputs: TensorType) -> NetworkOutput:
         """Предсказание без обучения."""
-        return self.network(t_sequence, training=False)
+        return self.network(t_sequence, inputs=inputs, training=False)
 
     def predict_with_state(
         self,
         t_sequence: TensorType,
+        inputs: TensorType,
         initial_state: Optional[Tuple[StateList, StateList]] = None,
         return_final_state: bool = False,
     ) -> NetworkOutput:
@@ -182,6 +190,7 @@ class Trainer:
 
         Args:
             t_sequence: tf.Tensor shape [batch, T, 1] — временная последовательность.
+            inputs: tf.Tensor shape [batch, T, total_input_units] — входы.
             initial_state: начальное состояние (pop_states, syn_states).
             return_final_state: вернуть финальное состояние в output.hidden_states.
 
@@ -190,14 +199,15 @@ class Trainer:
         """
         return self.network(
             t_sequence,
+            inputs=inputs,
             initial_state=initial_state,
             training=False,
-            reset_state=False,
         )
 
     def train_step_with_state(
         self,
         t_sequence: TensorType,
+        inputs: TensorType,
         initial_state: Optional[Tuple[StateList, StateList]] = None,
     ) -> Dict[str, any]:
         """
@@ -205,19 +215,18 @@ class Trainer:
 
         Args:
             t_sequence: tf.Tensor shape [batch, T, 1].
+            inputs: tf.Tensor shape [batch, T, total_input_units].
             initial_state: начальное состояние (pop_states, syn_states).
 
         Returns:
             dict с 'loss' и опционально 'final_state'.
         """
         with tf.GradientTape() as tape:
-            output = self.network(t_sequence, initial_state=initial_state, training=True)
+            output = self.network(t_sequence, inputs=inputs,
+                                  initial_state=initial_state, training=True)
             loss = self.loss_fn(output, self.network)
 
-        if self.grad_method == "adjoint":
-            grads = adjoint_compute_gradients(self.network, t_sequence, self.loss_fn)
-        else:
-            grads = tape.gradient(loss, self.network.trainable_variables)
+        grads = tape.gradient(loss, self.network.trainable_variables)
 
         grads_and_vars = [(g, v) for g, v in zip(grads, self.network.trainable_variables) if g is not None]
         

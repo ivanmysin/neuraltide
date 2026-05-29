@@ -56,9 +56,9 @@ def synapse_params():
 class TestAdjointVsAutograd:
     """Test comparison between adjoint and autograd methods."""
 
-    def _make_target(self, network, t_seq):
+    def _make_target(self, network, inputs, t_seq):
         """Run network and create target from output (shifted to have nonzero grad)."""
-        output = network(t_seq)
+        output = network(t_seq, inputs=inputs)
         target = {k: v + 0.5 for k, v in output.firing_rates.items()}
         return target
 
@@ -77,29 +77,29 @@ class TestAdjointVsAutograd:
         })
 
         graph = NetworkGraph(dt=dt)
-        graph.add_input_population('theta', gen)
+        graph.declare_input('theta', n_units=gen.n_units)
         graph.add_population('exc', pop)
         graph.add_synapse('theta->exc', syn, src='theta', tgt='exc')
 
         network_autograd = NetworkRNN(graph, RK4Integrator())
         network_adjoint = NetworkRNN(graph, RK4Integrator())
-        integrator = RK4Integrator()
 
         T = 50
         t_values = np.arange(T, dtype=np.float32) * dt
         t_seq = tf.constant(t_values[None, :, None])
+        inputs = graph.pack_inputs({'theta': gen(t_seq)})
 
-        target = self._make_target(network_autograd, t_seq)
+        target = self._make_target(network_autograd, inputs, t_seq)
         mse = MSELoss(target)
 
         with tf.GradientTape() as tape:
-            output = network_autograd(t_seq)
+            output = network_autograd(t_seq, inputs=inputs)
             loss = mse(output, network_autograd)
         autograd_grads = tape.gradient(loss, network_autograd.trainable_variables)
 
         from neuraltide.training.adjoint import AdjointSolver
-        adj_comp = AdjointSolver(network_adjoint, integrator)
-        adj_grads_list, _, _ = adj_comp.compute_gradients(t_seq, target, mse)
+        adj_comp = AdjointSolver(network_adjoint, network_adjoint._integrator)
+        adj_grads_list, _, _ = adj_comp.compute_gradients(t_seq, inputs, target, mse)
 
         adj_dict = {
             v.name: g
@@ -183,7 +183,7 @@ class TestAdjointVsAutograd:
         })
 
         graph = NetworkGraph(dt=dt)
-        graph.add_input_population('theta', gen)
+        graph.declare_input('theta', n_units=gen.n_units)
         graph.add_population('exc', pop_exc)
         graph.add_population('inh', pop_inh)
         graph.add_synapse('theta->exc', syn_in, src='theta', tgt='exc')
@@ -191,23 +191,23 @@ class TestAdjointVsAutograd:
         graph.add_synapse('inh->exc', syn_inh_exc, src='inh', tgt='exc')
 
         network = NetworkRNN(graph, RK4Integrator())
-        integrator = RK4Integrator()
 
         T = 50
         t_values = np.arange(T, dtype=np.float32) * dt
         t_seq = tf.constant(t_values[None, :, None])
+        inputs = graph.pack_inputs({'theta': gen(t_seq)})
 
-        target = self._make_target(network, t_seq)
+        target = self._make_target(network, inputs, t_seq)
         mse = MSELoss(target)
 
         with tf.GradientTape() as tape:
-            output = network(t_seq)
+            output = network(t_seq, inputs=inputs)
             loss = mse(output, network)
         autograd_grads = tape.gradient(loss, network.trainable_variables)
 
         from neuraltide.training.adjoint import AdjointSolver
-        adj_comp = AdjointSolver(network, integrator)
-        adj_grads_list, _, _ = adj_comp.compute_gradients(t_seq, target, mse)
+        adj_comp = AdjointSolver(network, network._integrator)
+        adj_grads_list, _, _ = adj_comp.compute_gradients(t_seq, inputs, target, mse)
 
         adj_dict = {v.name: g for v, g in zip(network.trainable_variables, adj_grads_list) if g is not None}
         auto_dict = {v.name: g for v, g in zip(network.trainable_variables, autograd_grads) if g is not None}
@@ -240,7 +240,7 @@ class TestAdjointVsAutograd:
         })
 
         graph = NetworkGraph(dt=dt)
-        graph.add_input_population('theta', gen)
+        graph.declare_input('theta', n_units=gen.n_units)
         graph.add_population('exc', pop)
         graph.add_synapse('theta->exc', syn, src='theta', tgt='exc')
 
@@ -249,13 +249,14 @@ class TestAdjointVsAutograd:
         T = 50
         t_values = np.arange(T, dtype=np.float32) * dt
         t_seq = tf.constant(t_values[None, :, None])
+        inputs = graph.pack_inputs({'theta': gen(t_seq)})
 
-        target = self._make_target(network, t_seq)
+        target = self._make_target(network, inputs, t_seq)
         mse = MSELoss(target)
 
         from neuraltide.training.adjoint import AdjointSolver
         adj_comp = AdjointSolver(network, network._integrator)
-        grads_list, _, _ = adj_comp.compute_gradients(t_seq, target, mse)
+        grads_list, _, _ = adj_comp.compute_gradients(t_seq, inputs, target, mse)
 
         syn_params = {v.name for v in syn.trainable_variables}
         for v, g in zip(network.trainable_variables, grads_list):
@@ -301,24 +302,24 @@ class TestLongSequence:
         })
 
         graph = NetworkGraph(dt=dt)
-        graph.add_input_population('theta', gen)
+        graph.declare_input('theta', n_units=gen.n_units)
         graph.add_population('exc', pop)
         graph.add_synapse('theta->exc', syn, src='theta', tgt='exc')
 
         network = NetworkRNN(graph, RK4Integrator())
-        integrator = RK4Integrator()
 
         T = 1000
         t_values = np.arange(T, dtype=np.float32) * dt
         t_seq = tf.constant(t_values[None, :, None])
+        inputs = graph.pack_inputs({'theta': gen(t_seq)})
 
-        output = network(t_seq)
+        output = network(t_seq, inputs=inputs)
         target = {k: v + 0.5 for k, v in output.firing_rates.items()}
         mse = MSELoss(target)
 
         from neuraltide.training.adjoint import AdjointSolver
-        adj_comp = AdjointSolver(network, integrator)
-        grads_list, _, _ = adj_comp.compute_gradients(t_seq, target, mse)
+        adj_comp = AdjointSolver(network, network._integrator)
+        grads_list, _, _ = adj_comp.compute_gradients(t_seq, inputs, target, mse)
 
         assert len(grads_list) > 0, "Should compute gradients"
         for v, g in zip(network.trainable_variables, grads_list):
@@ -361,25 +362,25 @@ class TestNMDAWithAdjoint:
         })
 
         graph = NetworkGraph(dt=dt)
-        graph.add_input_population('theta', gen)
+        graph.declare_input('theta', n_units=gen.n_units)
         graph.add_population('exc', pop)
         graph.add_synapse('theta->exc_ampa', syn_ampa, src='theta', tgt='exc')
         graph.add_synapse('theta->exc_nmda', syn_nmda, src='theta', tgt='exc')
 
         network = NetworkRNN(graph, RK4Integrator())
-        integrator = RK4Integrator()
 
         T = 50
         t_values = np.arange(T, dtype=np.float32) * dt
         t_seq = tf.constant(t_values[None, :, None])
+        inputs = graph.pack_inputs({'theta': gen(t_seq)})
 
-        output = network(t_seq)
+        output = network(t_seq, inputs=inputs)
         target = {k: v + 0.5 for k, v in output.firing_rates.items()}
         mse = MSELoss(target)
 
         from neuraltide.training.adjoint import AdjointSolver
-        adj_comp = AdjointSolver(network, integrator)
-        grads_list, _, _ = adj_comp.compute_gradients(t_seq, target, mse)
+        adj_comp = AdjointSolver(network, network._integrator)
+        grads_list, _, _ = adj_comp.compute_gradients(t_seq, inputs, target, mse)
 
         assert len(grads_list) > 0, "Should compute gradients"
         trainable = network.trainable_variables

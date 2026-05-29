@@ -6,10 +6,9 @@ import tensorflow as tf
 
 import neuraltide
 import neuraltide.config
-from neuraltide.core.base import PopulationModel, SynapseModel, BaseInputGenerator
+from neuraltide.core.base import PopulationModel, SynapseModel
 from neuraltide.core.types import TensorType, StateList
 from neuraltide.integrators.base import BaseIntegrator
-from neuraltide.populations.input_population import InputPopulation
 
 
 def _tensorarr_shape(t: TensorType) -> List[Optional[int]]:
@@ -37,14 +36,18 @@ def compute_synapse_current(
 
 class NetworkGraph:
     """
-    Описание топологии сети: популяции и синаптические проекции.
+    Описание топологии сети: популяции, внешние входы и синаптические проекции.
 
-    Популяции двух видов:
-        - Динамические: IzhikevichMeanField, WilsonCowan и т.д.
-        - Входные: InputPopulation (оборачивает BaseInputGenerator).
+    Популяции:
+        Динамические: IzhikevichMeanField, WilsonCowan и т.д.
+
+    Внешние входы:
+        Объявляются через declare_input(name, n_units).
+        Не являются объектами PopulationModel, не имеют состояния.
+        Входные частоты разрядов передаются извне через inputs= в call().
 
     Синаптические проекции:
-        Любой тип SynapseModel от любой популяции (включая InputPopulation)
+        Любой тип SynapseModel от любой популяции или объявленного входа
         к любой динамической популяции.
     """
 
@@ -52,11 +55,15 @@ class NetworkGraph:
         self.dt = dt
         self._populations: Dict[str, PopulationModel] = {}
         self._synapses: Dict[str, _SynapseEntry] = {}
+        # Внешние входы
+        self._external_inputs: Dict[str, int] = {}  # name -> n_units
+        self._input_names: List[str] = []  # ordered by declaration
+        self._input_offsets: Dict[str, int] = {}  # name -> offset in stacked tensor
+        self._total_input_units: int = 0
         # Кэшированные списки для ускорения итераций
         self._cached_population_names: Optional[List[str]] = None
         self._cached_synapse_names: Optional[List[str]] = None
         self._cached_dynamic_population_names: Optional[List[str]] = None
-        self._cached_input_population_names: Optional[List[str]] = None
         self._pop_info_cache: List[Tuple[str, PopulationModel, int]] = []
         self._syn_info_cache: List[Tuple[str, _SynapseEntry, int]] = []
         self._dynamic_pop_indices: List[int] = []
@@ -69,18 +76,26 @@ class NetworkGraph:
         # Сброс кэшей при изменении структуры
         self._cached_population_names = None
         self._cached_dynamic_population_names = None
-        self._cached_input_population_names = None
         self._pop_info_cache = []
         self._dynamic_pop_indices = []
 
-    def add_input_population(
-        self,
-        name: str,
-        generator: BaseInputGenerator,
-    ) -> None:
-        """Регистрирует входной генератор как псевдо-популяцию."""
-        pop = InputPopulation(generator=generator, name=name + '_input_pop')
-        self.add_population(name, pop)
+    def declare_input(self, name: str, n_units: int) -> None:
+        """Объявляет внешний входной источник (не.population).
+
+        Args:
+            name: уникальное имя входа (используется как src в add_synapse)
+            n_units: число входных каналов (должно совпадать с generator.n_units)
+        """
+        if name in self._external_inputs:
+            raise ValueError(f"Input '{name}' already declared.")
+        if name in self._populations:
+            raise ValueError(
+                f"Input name '{name}' conflicts with population name."
+            )
+        self._external_inputs[name] = n_units
+        self._input_names.append(name)
+        self._input_offsets[name] = self._total_input_units
+        self._total_input_units += n_units
 
     def add_synapse(
         self,
@@ -89,17 +104,25 @@ class NetworkGraph:
         src: str,
         tgt: str,
     ) -> None:
-        """Регистрирует синаптическую проекцию."""
+        """Регистрирует синаптическую проекцию.
+
+        src может быть именем популяции или объявленного внешнего входа.
+        """
         if name in self._synapses:
             raise ValueError(f"Synapse '{name}' already registered.")
-        if src not in self._populations:
+        if src not in self._populations and src not in self._external_inputs:
             raise ValueError(f"Synapse '{name}': src '{src}' not registered.")
         if tgt not in self._populations:
             raise ValueError(f"Synapse '{name}': tgt '{tgt}' not registered.")
-        if isinstance(self._populations[tgt], InputPopulation):
+        # Validate n_pre matches source
+        if src in self._external_inputs:
+            expected_n = self._external_inputs[src]
+        else:
+            expected_n = self._populations[src].n_units
+        if model.n_pre != expected_n:
             raise ValueError(
-                f"Synapse '{name}': InputPopulation '{tgt}' "
-                f"cannot be a synaptic target."
+                f"Synapse '{name}': n_pre={model.n_pre} "
+                f"!= source '{src}' n_units={expected_n}."
             )
         model._container_name = name
         self._synapses[name] = _SynapseEntry(model=model, src=src, tgt=tgt)
@@ -122,16 +145,10 @@ class NetworkGraph:
             pop = self._populations[name]
             n = len(pop.state_size)
             self._pop_info_cache.append((name, pop, n))
-            if not isinstance(pop, InputPopulation):
-                self._dynamic_pop_indices.append(i)
+            self._dynamic_pop_indices.append(i)
         
         self._cached_dynamic_population_names = [
-            name for name, pop, _ in self._pop_info_cache
-            if not isinstance(pop, InputPopulation)
-        ]
-        self._cached_input_population_names = [
-            name for name, pop, _ in self._pop_info_cache
-            if isinstance(pop, InputPopulation)
+            name for name, _, _ in self._pop_info_cache
         ]
         
         # Кэш для синапсов: (name, entry, state_size)
@@ -144,21 +161,24 @@ class NetworkGraph:
     def validate(self) -> None:
         """Проверяет корректность топологии перед построением NetworkRNN."""
         for syn_name, entry in self._synapses.items():
-            src_pop = self._populations[entry.src]
-            tgt_pop = self._populations[entry.tgt]
-            if entry.model.n_pre != src_pop.n_units:
+            # Validate n_pre against source (population or external input)
+            if entry.src in self._external_inputs:
+                src_n = self._external_inputs[entry.src]
+            else:
+                src_pop = self._populations[entry.src]
+                src_n = src_pop.n_units
+            if entry.model.n_pre != src_n:
                 raise ValueError(
                     f"Synapse '{syn_name}': n_pre={entry.model.n_pre} "
-                    f"!= src '{entry.src}' n_units={src_pop.n_units}."
+                    f"!= src '{entry.src}' n_units={src_n}."
                 )
+            tgt_pop = self._populations[entry.tgt]
             if entry.model.n_post != tgt_pop.n_units:
                 raise ValueError(
                     f"Synapse '{syn_name}': n_post={entry.model.n_post} "
                     f"!= tgt '{entry.tgt}' n_units={tgt_pop.n_units}."
                 )
         for pop_name, pop in self._populations.items():
-            if isinstance(pop, InputPopulation):
-                continue
             has_input = any(e.tgt == pop_name for e in self._synapses.values())
             if not has_input:
                 import warnings
@@ -184,17 +204,52 @@ class NetworkGraph:
 
     @property
     def dynamic_population_names(self) -> List[str]:
-        """Имена только динамических популяций (без InputPopulation)."""
+        """Имена динамических популяций."""
         if self._cached_dynamic_population_names is None:
             self._build_caches()
         return self._cached_dynamic_population_names  # type: ignore
 
     @property
-    def input_population_names(self) -> List[str]:
-        """Имена только входных популяций."""
-        if self._cached_input_population_names is None:
-            self._build_caches()
-        return self._cached_input_population_names  # type: ignore
+    def input_names(self) -> List[str]:
+        """Имена объявленных внешних входов (в порядке объявления)."""
+        return list(self._input_names)
+
+    @property
+    def input_offsets(self) -> Dict[str, int]:
+        """Offsets каждого входа в стекированном тензоре."""
+        return dict(self._input_offsets)
+
+    @property
+    def total_input_units(self) -> int:
+        """Общее число входных каналов."""
+        return self._total_input_units
+
+    def pack_inputs(self, input_dict: Dict[str, TensorType]) -> TensorType:
+        """Складывает именованные входные тензоры в один.
+
+        Args:
+            input_dict: {name: tensor[batch, T, n_units_i]}
+
+        Returns:
+            Tensor[batch, T, total_input_units] — сконкатенированный
+            в порядке declare_input().
+        """
+        parts = []
+        for name in self._input_names:
+            if name not in input_dict:
+                raise ValueError(
+                    f"Input '{name}' not provided. "
+                    f"Expected: {self._input_names}"
+                )
+            t = input_dict[name]
+            expected = self._external_inputs[name]
+            if t.shape[-1] != expected:
+                raise ValueError(
+                    f"Input '{name}': last dim is {t.shape[-1]}, "
+                    f"expected {expected}"
+                )
+            parts.append(t)
+        return tf.concat(parts, axis=-1)
 
 
 def unpack_state(
@@ -245,17 +300,15 @@ def get_firing_rates(
         Dict of firing rates keyed by population name
     """
     all_rates = {}
-    # Use cached info for efficient iteration
     for name, pop, _ in graph._pop_info_cache:
-        if not isinstance(pop, InputPopulation):
-            all_rates[name] = pop.get_firing_rate(pop_states_dict[name])
+        all_rates[name] = pop.get_firing_rate(pop_states_dict[name])
     return all_rates
 
 
 def _step_fn(
     states: Tuple[StateList, StateList, TensorType],
     t: TensorType,
-    extra_inputs: TensorType,
+    input_rates: Optional[Dict[str, TensorType]],
     graph: NetworkGraph,
     integrator: BaseIntegrator,
 ) -> Tuple[StateList, StateList, TensorType]:
@@ -265,7 +318,8 @@ def _step_fn(
     Args:
         states: (pop_states, syn_states, stability_error) - текущие состояния
         t: текущее время
-        extra_inputs: доп. входные данные (x, y, и т.д.) для Input generators
+        input_rates: {name: tensor[batch, n_units]} — предвычисленные
+            частоты разрядов для внешних входов на данном шаге.
         graph: NetworkGraph
         integrator: BaseIntegrator
     
@@ -289,10 +343,6 @@ def _step_fn(
         syn_states_dict[name] = syn_states[idx:idx + n]
         idx += n
 
-    # Обновление состояний input population
-    for name in graph.input_population_names:
-        pop_states_dict[name] = [t, extra_inputs]
-
     # Инициализация синаптических токов для динамических популяций
     syn_I: Dict[str, TensorType] = {}
     syn_g: Dict[str, TensorType] = {}
@@ -302,15 +352,21 @@ def _step_fn(
         syn_g[name] = tf.zeros([1, n], dtype=dtype)
 
     # Обработка всех синапсов
+    if input_rates is None:
+        input_rates = {}
     for syn_name, entry, _ in graph._syn_info_cache:
-        src_state = pop_states_dict[entry.src]
         tgt_state = pop_states_dict[entry.tgt]
         syn_state = syn_states_dict[syn_name]
 
-        src_pop = graph._populations[entry.src]
         tgt_pop = graph._populations[entry.tgt]
 
-        pre_rate = src_pop.get_firing_rate(src_state)
+        # Получение пресинаптической частоты разрядов
+        if entry.src in graph._external_inputs:
+            pre_rate = input_rates[entry.src]
+        else:
+            src_pop = graph._populations[entry.src]
+            src_state = pop_states_dict[entry.src]
+            pre_rate = src_pop.get_firing_rate(src_state)
 
         tgt_obs = tgt_pop.observables(tgt_state)
         post_v = tgt_obs.get('v_mean')
@@ -335,13 +391,10 @@ def _step_fn(
     for name, pop, n in graph._pop_info_cache:
         pop_state = pop_states_dict[name]
 
-        if isinstance(pop, InputPopulation):
-            new_pop_states_list.extend(pop_state)
-        else:
-            total_syn = {'I_syn': syn_I[name], 'g_syn': syn_g[name]}
-            new_pop_state, local_err = integrator.step(pop, pop_state, total_syn)
-            new_pop_states_list.extend(new_pop_state)
-            stability_error = stability_error + local_err
+        total_syn = {'I_syn': syn_I[name], 'g_syn': syn_g[name]}
+        new_pop_state, local_err = integrator.step(pop, pop_state, total_syn)
+        new_pop_states_list.extend(new_pop_state)
+        stability_error = stability_error + local_err
 
     # Сборка списка состояний синапсов
     new_syn_states_list = []
@@ -424,7 +477,6 @@ class NetworkRNN(tf.keras.layers.Layer):
         self._total_dynamic_units = sum(
             pop.n_units
             for name, pop in self._graph._populations.items()
-            if not isinstance(pop, InputPopulation)
         )
         
         self._pop_state_count = sum(
@@ -449,7 +501,7 @@ class NetworkRNN(tf.keras.layers.Layer):
     def _scan_forward(
         self,
         t_sequence: TensorType,
-        extra_inputs_seq: TensorType,
+        inputs: TensorType,
         init_pop: Tuple[TensorType, ...],
         init_syn: Tuple[TensorType, ...],
     ) -> Tuple[Dict[str, TensorType], TensorType, StateList, StateList]:
@@ -457,7 +509,16 @@ class NetworkRNN(tf.keras.layers.Layer):
         dtype = neuraltide.config.get_dtype()
         T = tf.shape(t_sequence)[1]
         elems = tf.transpose(t_sequence, [1, 0, 2])
-        extra_elems = tf.transpose(extra_inputs_seq, [1, 0, 2])
+
+        # Pre-transpose inputs: [batch, T, total] -> [T, batch, total]
+        inputs_T = tf.transpose(inputs, [1, 0, 2])
+
+        # Build dict of transposed slices per input name
+        input_seqs = {}
+        for name in self._graph._input_names:
+            offset = self._graph._input_offsets[name]
+            size = self._graph._external_inputs[name]
+            input_seqs[name] = inputs_T[:, :, offset:offset + size]
 
         init_stability = tf.zeros([1], dtype=dtype)
 
@@ -483,10 +544,11 @@ class NetworkRNN(tf.keras.layers.Layer):
         def _body(i, pop_carry, syn_carry, stab_carry,
                   pop_arrs, syn_arrs, stab_arr):
             t = elems[i]
-            extra = extra_elems[i]  # [batch, n_cols]
+            # Slice inputs at this time step
+            input_step = {name: seq[i] for name, seq in input_seqs.items()}
             new_pop, new_syn, new_stab = _step_fn(
                 (pop_carry, syn_carry, stab_carry),
-                t, extra, self._graph, self._integrator,
+                t, input_step, self._graph, self._integrator,
             )
             for j in range(self._pop_state_count):
                 pop_arrs[j] = pop_arrs[j].write(i, new_pop[j])
@@ -545,7 +607,7 @@ class NetworkRNN(tf.keras.layers.Layer):
         init_pop: Tuple[TensorType, ...],
         init_syn: Tuple[TensorType, ...],
         *,
-        extra_inputs_seq: Optional[TensorType] = None,
+        inputs: Optional[TensorType] = None,
     ) -> Tuple[
         Dict[str, TensorType],
         TensorType,
@@ -559,15 +621,20 @@ class NetworkRNN(tf.keras.layers.Layer):
         T = tf.shape(t_sequence)[1]
         elems = tf.transpose(t_sequence, [1, 0, 2])
 
-        if extra_inputs_seq is None:
-            extra_seq = tf.zeros(
+        if inputs is None:
+            inputs = tf.zeros(
                 [tf.shape(t_sequence)[0], tf.shape(t_sequence)[1], 0],
                 dtype=dtype)
-        else:
-            if extra_inputs_seq.shape.rank == 2:
-                extra_inputs_seq = extra_inputs_seq[:, :, tf.newaxis]
-            extra_seq = extra_inputs_seq
-        extra_elements = tf.transpose(extra_seq, [1, 0, 2])
+
+        # Pre-transpose inputs: [batch, T, total] -> [T, batch, total]
+        inputs_T = tf.transpose(inputs, [1, 0, 2])
+
+        # Build dict of transposed slices per input name
+        input_seqs = {}
+        for name in self._graph._input_names:
+            offset = self._graph._input_offsets[name]
+            size = self._graph._external_inputs[name]
+            input_seqs[name] = inputs_T[:, :, offset:offset + size]
 
         init_stability = tf.zeros([1], dtype=dtype)
 
@@ -593,10 +660,11 @@ class NetworkRNN(tf.keras.layers.Layer):
         def _body(i, pop_carry, syn_carry, stab_carry,
                   pop_arrs, syn_arrs, stab_arr):
             t = elems[i]
-            extra = extra_elements[i]  # [batch, n_cols]
+            # Slice inputs at this time step
+            input_step = {name: seq[i] for name, seq in input_seqs.items()}
             new_pop, new_syn, new_stab = _step_fn(
                 (pop_carry, syn_carry, stab_carry),
-                t, extra, self._graph, self._integrator,
+                t, input_step, self._graph, self._integrator,
             )
             for j in range(self._pop_state_count):
                 pop_arrs[j] = pop_arrs[j].write(i, new_pop[j])
@@ -655,7 +723,7 @@ class NetworkRNN(tf.keras.layers.Layer):
     def call(
         self,
         t_sequence: TensorType,
-        extra_inputs_seq: Optional[TensorType] = None,
+        inputs: Optional[TensorType] = None,
         initial_state: Optional[Tuple[StateList, StateList]] = None,
     ) -> NetworkOutput:
         """
@@ -664,9 +732,9 @@ class NetworkRNN(tf.keras.layers.Layer):
         Args:
             t_sequence: tf.Tensor shape [batch, T, 1] или [batch, T]
                 Временная последовательность в мс.
-            extra_inputs_seq: tf.Tensor shape [batch, T, n_cols]
-                Дополнительные входные данные, например координаты (x, y).
-                Поддерживается любое количество столбцов.
+            inputs: tf.Tensor shape [batch, T, total_input_units]
+                Предвычисленные частоты разрядов внешних входов,
+                сложенные через pack_inputs().
             initial_state: Optional[Tuple[pop_states, syn_states]]
                 Начальное состояние. Если None, используется нулевое.
 
@@ -676,12 +744,26 @@ class NetworkRNN(tf.keras.layers.Layer):
         if t_sequence.shape.rank == 2:
             t_sequence = t_sequence[:, :, tf.newaxis]
 
-        if extra_inputs_seq is not None:
-            if extra_inputs_seq.shape.rank == 2:
-                extra_inputs_seq = extra_inputs_seq[:, :, tf.newaxis]
+        # Validate inputs
+        if self._graph.total_input_units > 0:
+            if inputs is None:
+                raise ValueError(
+                    f"Network has {len(self._graph._external_inputs)} "
+                    f"declared inputs ({self._graph._input_names}) "
+                    f"but no inputs provided."
+                )
+            expected_last = self._graph.total_input_units
+            if inputs.shape[-1] != expected_last:
+                raise ValueError(
+                    f"inputs last dim is {inputs.shape[-1]}, "
+                    f"expected {expected_last} "
+                    f"(total_input_units from declare_input calls)"
+                )
         else:
-            extra_inputs_seq = tf.zeros([tf.shape(t_sequence)[0], tf.shape(t_sequence)[1], 0],
-                                        dtype=neuraltide.config.get_dtype())
+            if inputs is None:
+                inputs = tf.zeros(
+                    [tf.shape(t_sequence)[0], tf.shape(t_sequence)[1], 0],
+                    dtype=neuraltide.config.get_dtype())
 
         if initial_state is not None:
             init_pop, init_syn = initial_state
@@ -690,7 +772,7 @@ class NetworkRNN(tf.keras.layers.Layer):
             init_syn = list(self._init_syn_states)
 
         all_rates, stability_loss, final_pop, final_syn = \
-            self._scan_forward(t_sequence, extra_inputs_seq, tuple(init_pop), tuple(init_syn))
+            self._scan_forward(t_sequence, inputs, tuple(init_pop), tuple(init_syn))
 
         return NetworkOutput(
             firing_rates=all_rates,

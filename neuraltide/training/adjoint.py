@@ -28,7 +28,6 @@ from neuraltide.core.network import (
 )
 from neuraltide.core.types import TensorType, StateList
 from neuraltide.integrators.base import BaseIntegrator
-from neuraltide.populations.input_population import InputPopulation
 from neuraltide.training.losses import BaseLoss, CompositeLoss
 
 
@@ -160,6 +159,7 @@ class AdjointSolver(tf.Module):
     def forward_pass(
         self,
         t_sequence: TensorType,
+        inputs: Optional[TensorType] = None,
         initial_state: Optional[Tuple[StateList, StateList]] = None,
     ) -> Tuple[
         NetworkOutput,
@@ -168,6 +168,11 @@ class AdjointSolver(tf.Module):
     ]:
         if t_sequence.shape.rank == 2:
             t_sequence = t_sequence[:, :, tf.newaxis]
+
+        if inputs is None:
+            inputs = tf.zeros(
+                [tf.shape(t_sequence)[0], tf.shape(t_sequence)[1], 0],
+                dtype=neuraltide.config.get_dtype())
 
         batch_size = int(t_sequence.shape[0])
 
@@ -179,7 +184,7 @@ class AdjointSolver(tf.Module):
         (all_rates, stability_loss,
          final_pop, final_syn,
          pop_stacked, syn_stacked) = self._network._scan_forward_states(
-            t_sequence, tuple(init_pop), tuple(init_syn))
+            t_sequence, tuple(init_pop), tuple(init_syn), inputs=inputs)
 
         final_state = (list(final_pop), list(final_syn))
 
@@ -217,6 +222,7 @@ class AdjointSolver(tf.Module):
         pop_tup: Tuple[TensorType, ...],
         syn_tup: Tuple[TensorType, ...],
         t_val: TensorType,
+        input_rates_step: Dict[str, TensorType],
         target_dict: Dict[str, TensorType],
         loss_fn_obj: BaseLoss,
         T_val: TensorType,
@@ -227,10 +233,9 @@ class AdjointSolver(tf.Module):
         Dict[str, TensorType],
         TensorType,
     ]:
-        extra = tf.zeros([1, 0], dtype=dtype)
         new_pop, new_syn, _ = _step_fn(
             (pop_tup, syn_tup, tf.constant([0.0], dtype=dtype)),
-            t_val, extra, self._graph, self._integrator)
+            t_val, input_rates_step, self._graph, self._integrator)
         npl = list(new_pop)
         nsl = list(new_syn)
 
@@ -250,6 +255,7 @@ class AdjointSolver(tf.Module):
         self,
         pop_tup: Tuple[TensorType, ...],
         syn_tup: Tuple[TensorType, ...],
+        input_rates_step: Dict[str, TensorType],
         dtype: tf.DType,
     ) -> Tuple[
         Dict[str, TensorType],
@@ -262,7 +268,6 @@ class AdjointSolver(tf.Module):
         pop_states_list = list(pop_tup)
         syn_states_list = list(syn_tup)
 
-        # Use cached offsets for efficient unpacking (duplicates unpack_state logic inline)
         pop_states_dict = {}
         idx = 0
         for name, pop, n in graph._pop_info_cache:
@@ -280,14 +285,10 @@ class AdjointSolver(tf.Module):
         for name in graph.population_names:
             pop = graph._populations[name]
             state = pop_states_dict[name]
-            if isinstance(pop, InputPopulation):
-                pre_rates_dict[name] = tf.zeros([1, pop.n_units], dtype=dtype)
-                post_vs_dict[name] = tf.zeros([1, pop.n_units], dtype=dtype)
-            else:
-                pre_rates_dict[name] = pop.get_firing_rate(state)
-                obs = pop.observables(state)
-                post_vs_dict[name] = obs.get(
-                    'v_mean', tf.zeros([1, pop.n_units], dtype=dtype))
+            pre_rates_dict[name] = pop.get_firing_rate(state)
+            obs = pop.observables(state)
+            post_vs_dict[name] = obs.get(
+                'v_mean', tf.zeros([1, pop.n_units], dtype=dtype))
 
         syn_I: Dict[str, TensorType] = {}
         syn_g: Dict[str, TensorType] = {}
@@ -296,10 +297,13 @@ class AdjointSolver(tf.Module):
             syn_I[name] = tf.zeros([1, n], dtype=dtype)
             syn_g[name] = tf.zeros([1, n], dtype=dtype)
 
-        # Use cached syn_info for efficient iteration
         for syn_name, entry, _ in graph._syn_info_cache:
             syn_state = syn_states_dict[syn_name]
-            pre_rate = pre_rates_dict[entry.src]
+            # Get pre-synaptic firing rate
+            if entry.src in graph._external_inputs:
+                pre_rate = input_rates_step[entry.src]
+            else:
+                pre_rate = pre_rates_dict[entry.src]
             post_v = post_vs_dict[entry.tgt]
             current_dict = entry.model.compute_current(
                 syn_state, pre_rate, post_v)
@@ -316,6 +320,7 @@ class AdjointSolver(tf.Module):
         pop_full: Tuple[TensorType, ...],
         syn_full: Tuple[TensorType, ...],
         t_sequence: TensorType,
+        inputs_T: TensorType,
         target: Dict[str, TensorType],
         loss_fn_obj: BaseLoss,
         T_val: TensorType,
@@ -351,14 +356,21 @@ class AdjointSolver(tf.Module):
             syn_t = tuple(s[t] for s in syn_full)
             t_val = tf.squeeze(t_sequence[:, t, :], axis=1)
 
+            # Slice inputs at this time step
+            input_step = {}
+            for name in graph._input_names:
+                offset = graph._input_offsets[name]
+                size = graph._external_inputs[name]
+                input_step[name] = inputs_T[t, :, offset:offset + size]
+
             target_t = {name: t_tensor[:, t, :]
                         for name, t_tensor in target.items()}
 
             syn_I, syn_g, pre_rates, post_vs = self._compute_synaptic_context(
-                pop_t, syn_t, dtype)
+                pop_t, syn_t, input_step, dtype)
 
             new_pop, new_syn, y_dict, l_t1 = self._forward_only(
-                pop_t, syn_t, t_val, target_t,
+                pop_t, syn_t, t_val, input_step, target_t,
                 loss_fn_obj, T_val, dtype,
             )
 
@@ -374,9 +386,6 @@ class AdjointSolver(tf.Module):
                 sz = self._ap_pop_sizes[pi]
                 name = self._ap_pop_names[pi]
                 pop_model = graph._populations[name]
-
-                if isinstance(pop_model, InputPopulation):
-                    continue
 
                 ps = pop_t[off:off + sz]
                 pl = list(new_lp[off:off + sz])
@@ -422,9 +431,6 @@ class AdjointSolver(tf.Module):
 
                 pop_model = graph._populations[tgt_name]
                 syn_model = entry.model
-
-                if isinstance(pop_model, InputPopulation):
-                    continue
 
                 ps_off = self._ap_pop_offsets[tgt_pi]
                 ps_sz = self._ap_pop_sizes[tgt_pi]
@@ -516,8 +522,6 @@ class AdjointSolver(tf.Module):
                     if param_name == '':
                         continue
                     pop_model = graph._populations[comp_name]
-                    if isinstance(pop_model, InputPopulation):
-                        continue
                     pi_idx = self._ap_pop_names.index(comp_name)
                     off = self._ap_pop_offsets[pi_idx]
                     sz = self._ap_pop_sizes[pi_idx]
@@ -608,6 +612,7 @@ class AdjointSolver(tf.Module):
         pop_full: Tuple[TensorType, ...],
         syn_full: Tuple[TensorType, ...],
         t_sequence: TensorType,
+        inputs_T: TensorType,
         target: Dict[str, TensorType],
         loss_fn_obj: BaseLoss,
         T_val: TensorType,
@@ -632,6 +637,13 @@ class AdjointSolver(tf.Module):
             syn_t = tuple(s[t] for s in syn_full)
             t_val = tf.squeeze(t_sequence[:, t, :], axis=1)
 
+            # Slice inputs at this time step
+            input_step = {}
+            for name in self._graph._input_names:
+                offset = self._graph._input_offsets[name]
+                size = self._graph._external_inputs[name]
+                input_step[name] = inputs_T[t, :, offset:offset + size]
+
             target_t = {name: t_tensor[:, t, :]
                         for name, t_tensor in target.items()}
 
@@ -644,7 +656,7 @@ class AdjointSolver(tf.Module):
                 tape.watch(syn_list)
 
                 new_pop, new_syn, y_dict, l_t1 = self._forward_only(
-                    pop_t, syn_t, t_val, target_t,
+                    pop_t, syn_t, t_val, input_step, target_t,
                     loss_fn_obj, T_val, dtype,
                 )
 
@@ -683,6 +695,7 @@ class AdjointSolver(tf.Module):
     def backward_pass(
         self,
         t_sequence: TensorType,
+        inputs: TensorType,
         state_info: Tuple[StateList, StateList, List[TensorType], List[TensorType]],
         target: Dict[str, TensorType],
         loss_fn: BaseLoss,
@@ -698,14 +711,17 @@ class AdjointSolver(tf.Module):
         pop_full, syn_full = self._build_state_full(
             init_pop, init_syn, pop_stacked, syn_stacked)
 
+        # Pre-transpose inputs: [batch, T, total] -> [T, batch, total]
+        inputs_T = tf.transpose(inputs, [1, 0, 2])
+
         if self._use_analytical_adjoint:
             dtheta_step_list = self._analytical_backward_loop(
-                pop_full, syn_full, t_sequence, target,
+                pop_full, syn_full, t_sequence, inputs_T, target,
                 loss_fn, tf.constant(T, dtype=tf.int32), dtype,
             )
         else:
             dtheta_step_list = self._compiled_backward_loop(
-                pop_full, syn_full, t_sequence, target,
+                pop_full, syn_full, t_sequence, inputs_T, target,
                 loss_fn, tf.constant(T, dtype=tf.int32), dtype,
             )
 
@@ -726,20 +742,25 @@ class AdjointSolver(tf.Module):
         t_val: TensorType,
         dtype: tf.DType,
     ) -> Tuple[Tuple[TensorType, ...], Tuple[TensorType, ...], TensorType]:
-        extra = tf.zeros([1, 0], dtype=dtype)
+        # Provide zero input rates for all external inputs
+        input_step = {}
+        for name in self._graph._input_names:
+            n = self._graph._external_inputs[name]
+            input_step[name] = tf.zeros([1, n], dtype=dtype)
         return _step_fn(
             (pop_tup, syn_tup, stab_acc),
-            t_val, extra, self._graph, self._integrator)
+            t_val, input_step, self._graph, self._integrator)
 
     # ── Compute gradients ────────────────────────────────────────────────────
 
     def compute_gradients(
         self,
         t_sequence: TensorType,
+        inputs: TensorType,
         target: Dict[str, TensorType],
         loss_fn: BaseLoss,
     ) -> Tuple[List[TensorType], List[tf.Variable], NetworkOutput]:
-        output, _, state_info = self.forward_pass(t_sequence)
+        output, _, state_info = self.forward_pass(t_sequence, inputs)
 
         variables = self._network.trainable_variables
 
@@ -751,7 +772,7 @@ class AdjointSolver(tf.Module):
 
         if main_loss_obj is not None:
             main_grads = self.backward_pass(
-                t_sequence, state_info, target, main_loss_obj
+                t_sequence, inputs, state_info, target, main_loss_obj
             )
         else:
             main_grads = [tf.zeros_like(v) for v in variables]
