@@ -24,7 +24,7 @@ NeuralTide — это библиотека для построения и сим
 │ IzhikevichMF   │    │ StaticSynapse   │    │ SinusoidalGen   │
 │ WilsonCowan    │    │ NMDASynapse     │    │ ConstantRateGen │
 │ FokkerPlanck   │    │ TsodyksMarkram  │    │ VonMisesGen     │
-│ InputPopulation│    │ CompositeSynapse│   │                 │
+│                │    │ CompositeSynapse│    │ PlaceFieldGen   │
 └─────────────────┘    └─────────────────┘    └─────────────────┘
                                 │
          ┌──────────────────────┼──────────────────────┐
@@ -50,7 +50,6 @@ NeuralTide — это библиотека для построения и сим
 ```python
 pop = IzhikevichMeanField(
     dt=0.5,
-    n_units=4,
     params={
         'tau_pop': [1.0, 1.0, 1.0, 1.0],
         'alpha': [0.5, 0.5, 0.5, 0.5],
@@ -61,7 +60,7 @@ pop = IzhikevichMeanField(
 
 ### 2. Создание входных генераторов
 
-Генераторы создают внешние входные сигналы. Они оборачиваются в InputPopulation и подключаются к динамическим популяциям через синапсы.
+Генераторы создают внешние входные сигналы. Вместо оборачивания в `InputPopulation`, входы объявляются через `declare_input()`, а частоты предвычисляются через `pack_inputs()`.
 
 ```python
 gen = VonMisesGenerator(
@@ -100,19 +99,26 @@ syn = TsodyksMarkramSynapse(
 
 ```python
 graph = NetworkGraph(dt=0.5)
-graph.add_input_population('theta', gen)      # входная популяция
-graph.add_population('exc', pop)              # динамическая популяция
+graph.declare_input('theta', n_units=gen.n_units)  # объявление входа
+graph.add_population('exc', pop)                    # динамическая популяция
 graph.add_synapse('theta->exc', syn, src='theta', tgt='exc')
 ```
 
-### 5. Создание и запуск NetworkRNN
+### 5. Предвычисление входных данных
+
+```python
+# Вычисление частот разрядов для каждого входа
+inputs = graph.pack_inputs({'theta': gen(t_seq)})
+```
+
+### 6. Создание и запуск NetworkRNN
 
 ```python
 network = NetworkRNN(graph, integrator=RK4Integrator())
 
 # Симуляция
 t_seq = tf.constant(np.arange(0, 1000, 0.5)[None, :, None])
-output = network(t_seq, extra_inputs_seq=None)
+output = network(t_seq, inputs=inputs)
 ```
 
 ## Параметры: система _make_param
@@ -165,7 +171,6 @@ config.set_dtype(tf.float64)  # по умолчанию tf.float32
 ## Симуляция через tf.scan
 
 NetworkRNN использует `tf.scan` для эффективной симуляции на временной оси. На каждом шаге:
-0. Обновляются состояния `InputPopulation` — `[t, extra_inputs_seq[:, i, :]]`
 1. Вычисляются синаптические токи от всех проекций
 2. Обновляются состояния динамических популяций через интегратор
 3. Обновляются состояния синапсов

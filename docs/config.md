@@ -107,7 +107,7 @@ class PopulationConfig:
 class SynapseConfig:
     name: str                              # Имя синапса
     synapse_class: str                     # Имя класса из SYNAPSE_REGISTRY
-    src: str                               # Имя исходной популяции
+    src: str                               # Имя исходной популяции или входа
     tgt: str                               # Имя целевой популяции
     dt: float                              # Шаг интегрирования
     params: Dict[str, Any]                 # Параметры синапса
@@ -119,7 +119,7 @@ class SynapseConfig:
 ```python
 @dataclass
 class InputConfig:
-    name: str              # Имя входной популяции
+    name: str              # Имя входа
     generator_class: str  # Имя класса из INPUT_REGISTRY
     params: Dict[str, Any] # Параметры генератора
 ```
@@ -140,7 +140,7 @@ class NetworkConfig:
 
 ### build_network_from_config(config)
 
-Строит NetworkRNN из конфигурации.
+Строит NetworkRNN из конфигурации. Возвращает кортеж `(network, generators)`.
 
 ```python
 from neuraltide.config.schema import (
@@ -195,7 +195,11 @@ config = NetworkConfig(
     ]
 )
 
-network = build_network_from_config(config)
+# Возвращает (network, generators)
+network, generators = build_network_from_config(config)
+
+# Предвычисление входных частот
+inputs = graph.pack_inputs({name: gen(t_seq) for name, gen in generators.items()})
 ```
 
 ### Пример: полная конфигурация сети E-I с NMDA
@@ -303,7 +307,7 @@ config = NetworkConfig(
     ]
 )
 
-network = build_network_from_config(config)
+network, generators = build_network_from_config(config)
 ```
 
 ---
@@ -364,5 +368,5 @@ config = NetworkConfig(
     synapses=[SynapseConfig(**s) for s in config_dict['synapses']],
 )
 
-network = build_network_from_config(config)
+network, generators = build_network_from_config(config)
 ```

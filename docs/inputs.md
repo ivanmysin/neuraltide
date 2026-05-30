@@ -8,6 +8,8 @@ NeuralTide предоставляет несколько типов генера
 
 Все генераторы являются подклассами `BaseInputGenerator` и поддерживают векторизацию.
 
+> **Примечание**: `InputPopulation` deprecated. Используйте `NetworkGraph.declare_input()` и предвычисленные входы вместо оборачивания генераторов в `InputPopulation`.
+
 ---
 
 ## Общие принципы
@@ -38,11 +40,17 @@ output = generator(t)  # Returns: shape [batch, n_units] в Гц
 
 ### Интеграция с NetworkGraph
 
-Генераторы оборачиваются в InputPopulation:
+Генераторы подключаются к сети через объявление входа и предвычисление частот:
 
 ```python
 graph = NetworkGraph(dt=0.5)
-graph.add_input_population('my_input', generator)
+graph.declare_input('my_input', n_units=gen.n_units)
+
+# Предвычисление частот разрядов
+inputs = graph.pack_inputs({'my_input': gen(t_seq)})
+
+# Запуск сети
+output = network(t_seq, inputs=inputs)
 ```
 
 ---
@@ -431,8 +439,16 @@ rates = gen(t, extra_inputs=extra)  # [1, T, 2]
 
 ### Использование через NetworkRNN
 
-При интеграции в сеть координаты передаются через `extra_inputs_seq` в `NetworkRNN.call()`.
-См. [Использование генераторов в сети](#пример-позиционно-зависимый-вход-через-extra_inputs_seq) ниже.
+При интеграции в сеть координаты сначала передаются в генератор для вычисления частот, затем частоты упаковываются через `pack_inputs()`:
+
+```python
+# Вычисление входных частот с учётом координат
+rates = gen(t_seq, extra_inputs=extra)
+inputs = graph.pack_inputs({'place': rates})
+
+# Запуск сети
+output = network(t_seq, inputs=inputs)
+```
 
 ---
 
@@ -535,7 +551,7 @@ syn = StaticSynapse(n_pre=1, n_post=1, dt=0.5, params={
 
 # Построение сети
 graph = NetworkGraph(dt=0.5)
-graph.add_input_population('input', gen)
+graph.declare_input('input', n_units=gen.n_units)
 graph.add_population('exc', pop)
 graph.add_synapse('input->exc', syn, src='input', tgt='exc')
 
@@ -543,7 +559,8 @@ network = NetworkRNN(graph, integrator=RK4Integrator())
 
 # Запуск
 t_seq = tf.constant(np.arange(0, 1000, 0.5)[None, :, None])
-output = network(t_seq)
+inputs = graph.pack_inputs({'input': gen(t_seq)})
+output = network(t_seq, inputs=inputs)
 print(output.firing_rates['exc'].shape)  # [1, 2000, 1]
 ```
 
@@ -574,16 +591,23 @@ syn2 = StaticSynapse(n_pre=1, n_post=2, dt=0.5, params={
 })
 
 graph = NetworkGraph(dt=0.5)
-graph.add_input_population('sin_input', gen1)
-graph.add_input_population('vm_input', gen2)
+graph.declare_input('sin_input', n_units=gen1.n_units)
+graph.declare_input('vm_input', n_units=gen2.n_units)
 graph.add_population('exc', pop)
 graph.add_synapse('sin->exc', syn1, src='sin_input', tgt='exc')
 graph.add_synapse('vm->exc', syn2, src='vm_input', tgt='exc')
+
+# Упаковка входов
+inputs = graph.pack_inputs({
+    'sin_input': gen1(t_seq),
+    'vm_input': gen2(t_seq),
+})
+output = network(t_seq, inputs=inputs)
 ```
 
-### Пример: позиционно-зависимый вход через extra_inputs_seq
+### Пример: позиционно-зависимый вход через pack_inputs
 
-PlaceFieldGenerator использует координаты `(x, y)` из `extra_inputs_seq`, передаваемого в `NetworkRNN.call()`. Остальные генераторы (Sinusoidal, ConstantRate, VonMises) игнорируют `extra_inputs`.
+PlaceFieldGenerator использует координаты `(x, y)`, которые передаются в генератор для вычисления частот, затем частоты упаковываются через `pack_inputs()`.
 
 ```python
 import numpy as np
@@ -613,23 +637,27 @@ syn = StaticSynapse(n_pre=2, n_post=2, dt=0.5, params={
 })
 
 graph = NetworkGraph(dt=0.5)
-graph.add_input_population('place', gen)
+graph.declare_input('place', n_units=gen.n_units)
 graph.add_population('readout', pop)
 graph.add_synapse('place->readout', syn, src='place', tgt='readout')
 
 network = NetworkRNN(graph, integrator=RK4Integrator())
 
-# Время отдельно, координаты — в extra_inputs_seq
+# Время
 t_seq = tf.constant(np.arange(0, 5000, 0.5, dtype=np.float32)[None, :, None])
 
-# extra_inputs_seq: [batch=1, T, 2] — колонки x, y (см)
+# Координаты (см)
 n_steps = t_seq.shape[1]
 pos_x = 70.0 * np.cos(2 * np.pi * np.arange(n_steps) / n_steps * 2)
 pos_y = 70.0 * np.sin(2 * np.pi * np.arange(n_steps) / n_steps * 2)
-extra_inputs_seq = tf.constant(
+extra = tf.constant(
     np.stack([pos_x, pos_y], axis=-1).astype(np.float32)[None, :, :]
 )
 
-output = network(t_seq, extra_inputs_seq=extra_inputs_seq)
+# Вычисление частот с учётом координат, затем упаковка
+rates = gen(t_seq, extra_inputs=extra)
+inputs = graph.pack_inputs({'place': rates})
+
+output = network(t_seq, inputs=inputs)
 print(output.firing_rates['readout'].shape)  # [1, n_steps, 2]
 ```
