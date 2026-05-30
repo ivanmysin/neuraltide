@@ -147,8 +147,8 @@ class Trainer:
     def fit(
         self,
         t_sequence: TensorType,
-        inputs: TensorType,
-        epochs: int,
+        inputs: Optional[TensorType] = None,
+        epochs: int = 10,
         callbacks: Optional[List] = None,
         verbose: int = 1,
         initial_state: Optional[Tuple[StateList, StateList]] = None,

@@ -55,7 +55,7 @@ pop = IzhikevichMeanField(dt=dt, params={
 })
 
 graph = NetworkGraph(dt=dt)
-graph.add_input_population('theta', gen)
+graph.declare_input('theta', n_units=gen.n_units)
 graph.add_population('main', pop)
 graph.add_synapse('theta->main', syn, src='theta', tgt='main')
 
@@ -63,8 +63,9 @@ network = NetworkRNN(graph, integrator=RK4Integrator())
 
 t_values = np.arange(0, T, dt, dtype=np.float32)
 t_seq = tf.constant(t_values[None, :, None], dtype=tf.float32)
+inputs = graph.pack_inputs({'theta': gen(t_seq)})
 
-output = network(t_seq, training=False)
+output = network(t_seq, inputs=inputs, training=False)
 
 R_hist = []
 U_hist = []
@@ -95,17 +96,16 @@ integrator = network._integrator
 for step in range(len(t_values)):
     t = t_seq[:, step:step+1, 0]
 
-    for name in graph.input_population_names:
+    for name in graph.input_names:
         pop_states_dict[name] = [t]
 
     tgt_pop = graph._populations['main']
-    src_pop = graph._populations['theta']
 
     tgt_obs = tgt_pop.observables(pop_states_dict['main'])
     post_v = tgt_obs.get('v_mean', tf.zeros([1, tgt_pop.n_units], dtype=tf.float32))
 
     syn_entry = graph._synapses['theta->main']
-    pre_rate = src_pop.get_firing_rate(pop_states_dict['theta'])
+    pre_rate = gen(t)
     syn_state = syn_states_dict['theta->main']
 
     new_syn_state, local_err = integrator.step_synapse(
@@ -120,7 +120,7 @@ for step in range(len(t_values)):
 
     new_pop, new_syn, _ = _step_fn(
         (tuple(pop_states), tuple(syn_states), tf.zeros([1], dtype=tf.float32)),
-        t, graph, network._integrator
+        t, {'theta': pre_rate}, graph, network._integrator
     )
 
     pop_states = list(new_pop)
