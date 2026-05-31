@@ -39,13 +39,13 @@ pop = IzhikevichMeanField(dt=dt, params={
     'a':        {'value': 0.02, 'trainable': False},
     'b':        {'value': 0.2,  'trainable': False},
     'w_jump':   {'value': 0.1,  'trainable': False},
-    'Delta_I':  {'value': 0.01,  'trainable': True, 'min': 0.01, 'max': 2.0},
+    'Delta_I':  {'value': 0.001,  'trainable': True, 'min': 0.0001, 'max': 2.0},
     'I_ext':    {'value': 0.0,  'trainable': True},
 })
 
 # === 4. Синапс ===
 syn = TsodyksMarkramSynapse(n_pre=1, n_post=1, dt=dt, params={
-    'gsyn_max': {'value': [[0.1]], 'trainable': True, 'min': 0.0},
+    'gsyn_max': {'value': [[10.0]], 'trainable': True, 'min': 0.0},
     'tau_f':    {'value': 20.0, 'trainable': False},
     'tau_d':    {'value': 5.0,  'trainable': False},
     'tau_r':    {'value': 200.0, 'trainable': False},
