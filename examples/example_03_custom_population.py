@@ -85,7 +85,7 @@ syn = TsodyksMarkramSynapse(n_pre=1, n_post=n_units, dt=dt, params={
 })
 
 graph = NetworkGraph(dt=dt)
-graph.add_input_population('input', gen)
+graph.declare_input('input', n_units=gen.n_units)
 graph.add_population('rate', pop)
 graph.add_synapse('input->rate', syn, src='input', tgt='rate')
 
@@ -93,6 +93,8 @@ network = NetworkRNN(graph, integrator=EulerIntegrator())
 
 t_values = tf.range(T, dtype=tf.float32) * dt
 t_seq = tf.constant(t_values[None, :, None])
+T_dim = t_seq.shape[1]
+inputs = graph.pack_inputs({'input': tf.broadcast_to(gen(t_seq)[:, tf.newaxis, :], [1, T_dim, gen.n_units])})
 
 target_data = 10.0 + 5.0 * tf.sin(2 * 3.14159 * 2.0 * t_values / 1000.0)
 target = {
@@ -108,6 +110,6 @@ loss_fn = CompositeLoss([
 
 trainer = Trainer(network, loss_fn,
                   optimizer=tf.keras.optimizers.Adam(1e-3))
-history = trainer.fit(t_seq, epochs=100, verbose=1)
+history = trainer.fit(t_seq, inputs=inputs, epochs=100, verbose=1)
 
 print("Custom population model trained successfully!")

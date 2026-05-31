@@ -1,3 +1,5 @@
+import warnings
+
 import tensorflow as tf
 
 import neuraltide
@@ -9,6 +11,10 @@ from neuraltide.core.types import TensorType, StateList, Dict
 class InputPopulation(PopulationModel):
     """
     Псевдо-популяция без динамики. Оборачивает BaseInputGenerator.
+
+    .. deprecated::
+        Используйте ``NetworkGraph.declare_input()`` и предвычисленные
+        входы вместо InputPopulation.
 
     Назначение:
         Позволяет подключать внешние входные сигналы к сети через
@@ -25,6 +31,12 @@ class InputPopulation(PopulationModel):
     """
 
     def __init__(self, generator: BaseInputGenerator, **kwargs):
+        warnings.warn(
+            "InputPopulation is deprecated. Use NetworkGraph.declare_input() "
+            "and pre-computed inputs instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         super().__init__(
             n_units=generator.n_units,
             dt=generator.dt,

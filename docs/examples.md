@@ -2,6 +2,8 @@
 
 В этом разделе приведены типичные сценарии использования NeuralTide.
 
+> Базовый пример смотрите в [`examples/example_simple.py`](../examples/example_simple.py).
+
 ---
 
 ## Пример 1: Простая сеть — один вход, одна популяция
@@ -59,7 +61,7 @@ syn = StaticSynapse(
 
 # Построение графа
 graph = NetworkGraph(dt=dt)
-graph.add_input_population('input', gen)
+graph.declare_input('input', n_units=gen.n_units)
 graph.add_population('exc', pop)
 graph.add_synapse('input->exc', syn, src='input', tgt='exc')
 
@@ -71,7 +73,10 @@ print_summary(network)
 t_values = np.arange(0, T, dt, dtype=np.float32)
 t_seq = tf.constant(t_values[None, :, None])
 
-output = network(t_seq)
+# Предвычисление входных частот
+inputs = graph.pack_inputs({'input': gen(t_seq)})
+
+output = network(t_seq, inputs=inputs)
 print(f"Output shape: {output.firing_rates['exc'].shape}")
 # (1, 2000, 1)
 ```
@@ -140,7 +145,7 @@ syn_inh_exc = StaticSynapse(n_pre=2, n_post=2, dt=dt, params={
 
 # Построение графа
 graph = NetworkGraph(dt=dt)
-graph.add_input_population('input', gen)
+graph.declare_input('input', n_units=gen.n_units)
 graph.add_population('exc', pop_exc)
 graph.add_population('inh', pop_inh)
 graph.add_synapse('input->exc', syn_in_exc, src='input', tgt='exc')
@@ -152,7 +157,8 @@ network = NetworkRNN(graph, integrator=RK4Integrator())
 # Симуляция
 t_values = np.arange(0, T, dt, dtype=np.float32)
 t_seq = tf.constant(t_values[None, :, None])
-output = network(t_seq)
+inputs = graph.pack_inputs({'input': gen(t_seq)})
+output = network(t_seq, inputs=inputs)
 
 print(f"Exc rates shape: {output.firing_rates['exc'].shape}")
 print(f"Inh rates shape: {output.firing_rates['inh'].shape}")
@@ -213,7 +219,7 @@ syn = TsodyksMarkramSynapse(
 )
 
 graph = NetworkGraph(dt=dt)
-graph.add_input_population('theta', gen)
+graph.declare_input('theta', n_units=gen.n_units)
 graph.add_population('exc', pop)
 graph.add_synapse('theta->exc', syn, src='theta', tgt='exc')
 
@@ -222,7 +228,8 @@ network = NetworkRNN(graph, integrator=RK4Integrator())
 # Симуляция
 t_values = np.arange(0, T, dt, dtype=np.float32)
 t_seq = tf.constant(t_values[None, :, None])
-output = network(t_seq)
+inputs = graph.pack_inputs({'theta': gen(t_seq)})
+output = network(t_seq, inputs=inputs)
 
 # Результат
 rates = output.firing_rates['exc'].numpy()
@@ -271,7 +278,7 @@ syn_nmda = NMDASynapse(
 )
 
 graph = NetworkGraph(dt=dt)
-graph.add_input_population('input', gen)
+graph.declare_input('input', n_units=gen.n_units)
 graph.add_population('exc', pop)
 graph.add_synapse('input->exc', syn_nmda, src='input', tgt='exc')
 
@@ -280,7 +287,8 @@ network = NetworkRNN(graph, integrator=RK4Integrator())
 # Симуляция
 t_values = np.arange(0, 1000, dt, dtype=np.float32)
 t_seq = tf.constant(t_values[None, :, None])
-output = network(t_seq)
+inputs = graph.pack_inputs({'input': gen(t_seq)})
+output = network(t_seq, inputs=inputs)
 
 print(f"NMDA output shape: {output.firing_rates['exc'].shape}")
 ```
@@ -337,7 +345,7 @@ composite = CompositeSynapse(
 )
 
 graph = NetworkGraph(dt=dt)
-graph.add_input_population('input', gen)
+graph.declare_input('input', n_units=gen.n_units)
 graph.add_population('exc', pop)
 graph.add_synapse('input->exc', composite, src='input', tgt='exc')
 
@@ -345,7 +353,8 @@ network = NetworkRNN(graph, integrator=RK4Integrator())
 
 t_values = np.arange(0, 1000, dt, dtype=np.float32)
 t_seq = tf.constant(t_values[None, :, None])
-output = network(t_seq)
+inputs = graph.pack_inputs({'input': gen(t_seq)})
+output = network(t_seq, inputs=inputs)
 
 print(f"Composite output shape: {output.firing_rates['exc'].shape}")
 ```
@@ -391,7 +400,7 @@ syn = TsodyksMarkramSynapse(n_pre=1, n_post=2, dt=dt, params={
 })
 
 graph = NetworkGraph(dt=dt)
-graph.add_input_population('theta', gen)
+graph.declare_input('theta', n_units=gen.n_units)
 graph.add_population('exc', pop)
 graph.add_synapse('theta->exc', syn, src='theta', tgt='exc')
 
@@ -406,9 +415,10 @@ target = {
 }
 
 t_seq = tf.constant(t_values[None, :, None])
+inputs = graph.pack_inputs({'theta': gen(t_seq)})
 
 # До обучения
-output_before = network(t_seq, training=False)
+output_before = network(t_seq, inputs=inputs, training=False)
 
 # Обучение
 loss_fn = CompositeLoss([
@@ -416,10 +426,10 @@ loss_fn = CompositeLoss([
     (1e-3, StabilityPenalty()),
 ])
 trainer = Trainer(network, loss_fn, optimizer=tf.keras.optimizers.Adam(1e-3))
-history = trainer.fit(t_seq, epochs=epochs, verbose=1)
+history = trainer.fit(t_seq, inputs=inputs, epochs=epochs, verbose=1)
 
 # После обучения
-output_after = network(t_seq, training=False)
+output_after = network(t_seq, inputs=inputs, training=False)
 
 print(f"Initial loss: {history.loss_history[0]:.4f}")
 print(f"Final loss: {history.loss_history[-1]:.4f}")
@@ -471,7 +481,7 @@ syn = StaticSynapse(n_pre=1, n_post=1, dt=dt, params={
 })
 
 graph = NetworkGraph(dt=dt)
-graph.add_input_population('input', gen)
+graph.declare_input('input', n_units=gen.n_units)
 graph.add_population('EI', pop)
 graph.add_synapse('input->EI', syn, src='input', tgt='EI')
 
@@ -479,7 +489,8 @@ network = NetworkRNN(graph, integrator=RK4Integrator())
 
 t_values = np.arange(0, T, dt, dtype=np.float32)
 t_seq = tf.constant(t_values[None, :, None])
-output = network(t_seq)
+inputs = graph.pack_inputs({'input': gen(t_seq)})
+output = network(t_seq, inputs=inputs)
 
 print(f"Wilson-Cowan output shape: {output.firing_rates['EI'].shape}")
 ```
@@ -541,14 +552,16 @@ config = NetworkConfig(
     ]
 )
 
-network = build_network_from_config(config)
+# build_network_from_config возвращает (network, generators)
+network, generators = build_network_from_config(config)
 
 # Далее обычная симуляция
 import numpy as np
 import tensorflow as tf
 
 t_seq = tf.constant(np.arange(0, 1000, 0.5)[None, :, None])
-output = network(t_seq)
+inputs = graph.pack_inputs({name: gen(t_seq) for name, gen in generators.items()})
+output = network(t_seq, inputs=inputs)
 print(output.firing_rates['exc'].shape)
 ```
 
@@ -578,7 +591,7 @@ init_pop[2] = tf.constant([[0.0]])  # w
 network.set_initial_state((init_pop, init_syn))
 
 # Запуск симуляции
-output = network(t_seq, initial_state=(init_pop, init_syn))
+output = network(t_seq, inputs=inputs, initial_state=(init_pop, init_syn))
 ```
 
 ### Stateful режим
@@ -588,11 +601,11 @@ output = network(t_seq, initial_state=(init_pop, init_syn))
 network = NetworkRNN(graph, integrator=RK4Integrator(), stateful=True)
 
 # Первый батч
-output1 = network(t_seq)
+output1 = network(t_seq, inputs=inputs)
 final_state = network.get_state()
 
 # Второй батч продолжает с финального состояния первого
-output2 = network(t_seq)
+output2 = network(t_seq, inputs=inputs)
 
 # Сброс для нового эксперимента
 network.reset_state()
@@ -690,21 +703,25 @@ rates_no_pos = gen(t_seq, extra_inputs=None)
 ### Поток данных
 
 ```
-pos_x, pos_y, vx, vy (см, см/мс)  ──→  extra_inputs [batch, T, 4]
-                                              │
-    t [batch, T, 1]  ────────────────────────┤
-                                              │
+pos_x, pos_y (см)  ──→  extra_inputs [batch, T, 2]
+                              │
+    t [batch, T, 1]  ────────┤
+                              │
                     PlaceFieldGenerator.call(t, extra_inputs=extra)
-                                              │
+                              │
                     rates [batch, T, n_units]  (Hz)
-                                              │
-              dphi = -slope * ((px-cx)*vx + (py-cy)*vy) / |v|
-              (различает заход в поле и выход)
+                              │
+                    graph.pack_inputs({'place': rates})
+                              │
+                    inputs [batch, T, total_input_units]
+                              │
+                    NetworkRNN.call(t_seq, inputs=inputs)
+                              │
+                    output.firing_rates['readout']
 ```
 
 ### Примечания
 
-- `extra_inputs_seq` опционален (по умолчанию `None`). При `None` генераторы получают `[batch, 0]` тензор.
-- Если `extra_inputs_seq` имеет rank 2, он автоматически расширяется до `[batch, T, 1]`.
-- `extra_inputs` передаётся **только** во `InputPopulation`-генераторы, не в динамические популяции.
+- `inputs` опционален (по умолчанию `None`). При `None` и нулевом `total_input_units` генераторы не используются.
+- `inputs` передаётся в `NetworkRNN.call()` как единый тензор, упакованный через `graph.pack_inputs()`.
 - Генераторы `SinusoidalGenerator`, `ConstantRateGenerator`, `VonMisesGenerator` игнорируют `extra_inputs`.

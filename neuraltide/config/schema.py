@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from typing import Dict, List, Any, Optional
+from typing import Dict, List, Any, Optional, Tuple
 
 import neuraltide.config
 from neuraltide.core.network import NetworkGraph, NetworkRNN
@@ -59,7 +59,9 @@ def _get_integrator(name: str) -> Any:
     return integrators[name]()
 
 
-def build_network_from_config(config: NetworkConfig) -> NetworkRNN:
+def build_network_from_config(
+    config: NetworkConfig,
+) -> Tuple[NetworkRNN, Dict[str, Any]]:
     """
     Строит NetworkRNN из конфигурации.
 
@@ -67,23 +69,25 @@ def build_network_from_config(config: NetworkConfig) -> NetworkRNN:
         config: NetworkConfig с описанием сети.
 
     Returns:
-        NetworkRNN.
+        Tuple (NetworkRNN, generators_dict).
     """
     graph = NetworkGraph(dt=config.dt)
 
+    # Build generators separately + declare inputs on graph
+    generators = {}
     for input_config in config.inputs:
         gen_class = neuraltide.config.INPUT_REGISTRY.get(input_config.generator_class)
         if gen_class is None:
             raise ValueError(f"Unknown input generator: {input_config.generator_class}")
-        generator = gen_class(**input_config.params)
-        graph.add_input_population(input_config.name, generator)
+        gen = gen_class(**input_config.params)
+        generators[input_config.name] = gen
+        graph.declare_input(input_config.name, n_units=gen.n_units)
 
     for pop_config in config.populations:
         pop_class = neuraltide.config.POPULATION_REGISTRY.get(pop_config.model_class)
         if pop_class is None:
             raise ValueError(f"Unknown population model: {pop_config.model_class}")
         population = pop_class(
-            n_units=pop_config.params.get('n_units', 1),
             dt=pop_config.dt,
             params=pop_config.params,
             name=pop_config.name,
@@ -135,4 +139,4 @@ def build_network_from_config(config: NetworkConfig) -> NetworkRNN:
         return_hidden_states=config.return_hidden_states,
     )
 
-    return network
+    return network, generators

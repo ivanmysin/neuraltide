@@ -111,7 +111,7 @@ theta_syn = TsodyksMarkramSynapse(n_pre=1, n_post=4, dt=dt, params={
 })
 
 graph = NetworkGraph(dt=dt)
-graph.add_input_population('theta', gen)
+graph.declare_input('theta', n_units=gen.n_units)
 graph.add_population('exc', exc)
 graph.add_population('inh', inh)
 graph.add_synapse('theta->exc', theta_syn, src='theta', tgt='exc')
@@ -125,6 +125,7 @@ network = NetworkRNN(graph, integrator=RK4Integrator(),
 
 t_values = np.arange(T, dtype=np.float32) * dt
 t_seq = tf.constant(t_values[None, :, None])
+inputs = graph.pack_inputs({'theta': gen(t_seq)})
 
 target_exc = 10.0 + 5.0*np.sin(2*np.pi*8.0*t_values/1000.0)
 target_exc = tf.constant(target_exc[None, :, None], dtype=tf.float32)
@@ -136,4 +137,4 @@ loss_fn = CompositeLoss([
 ])
 trainer = Trainer(network, loss_fn,
                   optimizer=tf.keras.optimizers.Adam(1e-3))
-history = trainer.fit(t_seq, epochs=200, verbose=1)
+history = trainer.fit(t_seq, inputs=inputs, epochs=200, verbose=1)

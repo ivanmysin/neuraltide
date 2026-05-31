@@ -10,11 +10,14 @@ NeuralTide предоставляет гибкий инструментарий 
 - **Синаптическими моделями**: Static, NMDA, Tsodyks-Markram (STP), Composite
 - **Входными генераторами**: Sinusoidal, ConstantRate, VonMises
 - **Интеграторами**: Euler, Heun, RK4
+- **Модулями данных**: `neuraltide.data` (сохранение/загрузка HDF5)
+- **Keras-моделью**: `neuraltide.model.BrainModelKeras`
 
 ## Быстрый старт
 
 ```python
-import neuraltide as nt
+import numpy as np
+import tensorflow as tf
 from neuraltide.populations import IzhikevichMeanField
 from neuraltide.synapses import StaticSynapse
 from neuraltide.inputs import SinusoidalGenerator
@@ -39,17 +42,16 @@ syn = StaticSynapse(n_pre=1, n_post=1, dt=0.5, params={
 
 # Построение сети
 graph = NetworkGraph(dt=0.5)
-graph.add_input_population('input', gen)
+graph.declare_input('input', n_units=gen.n_units)
 graph.add_population('exc', pop)
 graph.add_synapse('input->exc', syn, src='input', tgt='exc')
 
 network = NetworkRNN(graph, integrator=RK4Integrator())
 
 # Запуск симуляции
-import tensorflow as tf
-import numpy as np
 t_seq = tf.constant(np.arange(0, 100, 0.5)[None, :, None])
-output = network(t_seq)
+inputs = graph.pack_inputs({'input': gen(t_seq)})
+output = network(t_seq, inputs=inputs)
 ```
 
 ## Структура документации
@@ -67,6 +69,8 @@ output = network(t_seq)
 | [Сеть](network.md) | NetworkGraph и NetworkRNN |
 | [Конфигурация](config.md) | Система конфигурации и реестры |
 | [Обучение](training.md) | Обучение сети: Trainer, loss functions, adjoint method |
+| [Данные](data.md) | Модуль neuraltide.data: сохранение и загрузка HDF5 |
+| [Модель](model.md) | Модуль neuraltide.model: BrainModelKeras |
 | [Ограничения](constraints.md) | Ограничения на параметры |
 | [Примеры](examples.md) | Полные примеры использования |
 | [API Reference](api_reference.md) | Полный справочник API |
@@ -87,12 +91,13 @@ pip install -e .
 
 ## Требования
 
-- Python 3.9+
+- Python 3.12+
 - TensorFlow 2.x
 - NumPy
 - (опционально) Matplotlib для визуализации
 - (опционально) SciPy для VonMisesGenerator
+- (опционально) h5py для neuraltide.data
 
 ## Версия
 
-0.1.0
+0.2.0
