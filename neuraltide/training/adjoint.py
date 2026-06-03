@@ -78,6 +78,12 @@ class AdjointSolver(tf.Module):
         for v in self._trainable:
             setattr(self, "v_" + _sanitise(v.name), v)
 
+        trainable_set = set(id(v) for v in self._trainable)
+        self._trainable_to_grad_idx: Dict[int, int] = {}
+        for i, v in enumerate(network.trainable_variables):
+            if id(v) in trainable_set:
+                self._trainable_to_grad_idx[id(v)] = len(self._trainable_to_grad_idx)
+
         if use_analytical_adjoint:
             self._build_analytical_index()
 
@@ -725,9 +731,11 @@ class AdjointSolver(tf.Module):
                 loss_fn, tf.constant(T, dtype=tf.int32), dtype,
             )
 
-        grad_map = {v.name: g for v, g in zip(self._trainable, dtheta_step_list)}
+        grad_list: List[TensorType] = list(dtheta_step_list)
         return [
-            grad_map.get(v.name, tf.zeros_like(v))
+            grad_list[self._trainable_to_grad_idx[id(v)]]
+            if id(v) in self._trainable_to_grad_idx
+            else tf.zeros_like(v)
             for v in variables
         ]
 

@@ -64,8 +64,19 @@ class Trainer:
         if grad_method == "adjoint" and AdjointSolver is None:
             raise ImportError("adjoint method not available")
 
-        if not run_eagerly:
+        if grad_method != "adjoint" and not run_eagerly:
             self._train_step = tf.function(self._train_step)
+
+    @staticmethod
+    def _extract_targets(loss_fn) -> Dict[str, TensorType]:
+        """Collect target tensors from a (possibly composite) loss."""
+        targets: Dict[str, TensorType] = {}
+        terms = loss_fn.terms if isinstance(loss_fn, CompositeLoss) else [(1.0, loss_fn)]
+        for _, sub in terms:
+            tgt = getattr(sub, 'target', None)
+            if isinstance(tgt, dict):
+                targets.update(tgt)
+        return targets
 
     def _get_adjoint_solver(self):
         if self._adjoint_solver is None:
@@ -106,12 +117,49 @@ class Trainer:
 
         return {'loss': loss}
 
+    def _train_step_adjoint(
+        self,
+        t_sequence: TensorType,
+        inputs: TensorType,
+        initial_state: Optional[Tuple[StateList, StateList]] = None,
+    ) -> Dict[str, float]:
+        """Train step using AdjointSolver (memory-efficient gradients).
+
+        initial_state is accepted for API parity but ignored: AdjointSolver
+        currently runs the forward pass from the network's default zero state.
+        """
+        del initial_state  # not supported by AdjointSolver.compute_gradients yet
+
+        target = self._extract_targets(self.loss_fn)
+        solver = self._get_adjoint_solver()
+        grads, variables, output = solver.compute_gradients(
+            t_sequence, inputs, target, self.loss_fn
+        )
+
+        loss = self.loss_fn(output, self.network)
+
+        grads_and_vars = [(g, v) for g, v in zip(grads, variables) if g is not None]
+        if not grads_and_vars:
+            return {'loss': loss}
+
+        if self.grad_clip_norm > 0:
+            grads_only = [g for g, v in grads_and_vars]
+            clipped_grads, _ = tf.clip_by_global_norm(grads_only, self.grad_clip_norm)
+            grads_and_vars = [(g, v) for g, (_, v) in zip(clipped_grads, grads_and_vars)]
+
+        self.optimizer.apply_gradients(grads_and_vars)
+        self._apply_constraints()
+
+        return {'loss': loss}
+
     def train_step(
         self,
         t_sequence: TensorType,
         inputs: TensorType,
         initial_state: Optional[Tuple[StateList, StateList]] = None,
     ) -> Dict[str, float]:
+        if self.grad_method == "adjoint":
+            return self._train_step_adjoint(t_sequence, inputs, initial_state)
         if self.run_eagerly:
             return self._train_step_eager(t_sequence, inputs, initial_state)
         return self._train_step(t_sequence, inputs, initial_state)
