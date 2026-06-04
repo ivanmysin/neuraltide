@@ -164,26 +164,6 @@ class IzhikevichMeanField(PopulationModel):
 
         self.n_units = max_len
 
-    def _infer_n_units(self) -> None:
-        """Infer n_units from the dimensions of parameters."""
-        max_len = 1
-        for key, spec in self._params.items():
-            if isinstance(spec, dict):
-                value = spec.get('value', None)
-            else:
-                value = spec
-
-            if value is None:
-                continue
-
-            if isinstance(value, (list, tuple)):
-                max_len = max(max_len, len(value))
-            elif isinstance(value, np.ndarray):
-                if value.ndim == 1:
-                    max_len = max(max_len, len(value))
-
-        self.n_units = max_len
-
     def _validate_param_dimensions(self) -> None:
         """Validate that all parameters have consistent dimensions (1 or n_units)."""
         for key, spec in self._params.items():

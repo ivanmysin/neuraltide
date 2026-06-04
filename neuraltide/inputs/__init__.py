@@ -1,4 +1,4 @@
-from neuraltide.inputs.base import BaseInputGenerator
+from neuraltide.core.base import BaseInputGenerator
 from neuraltide.inputs.von_mises import VonMisesGenerator
 from neuraltide.inputs.sinusoidal import SinusoidalGenerator
 from neuraltide.inputs.constant import ConstantRateGenerator

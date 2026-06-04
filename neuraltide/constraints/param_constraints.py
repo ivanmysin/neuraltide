@@ -26,34 +26,3 @@ class MinMaxConstraint(tf.keras.constraints.Constraint):
     @classmethod
     def from_config(cls, config: dict) -> 'MinMaxConstraint':
         return cls(config['min_val'], config['max_val'])
-
-
-class NonNegConstraint(tf.keras.constraints.Constraint):
-    """Ограничение: неотрицательные значения через ReLU."""
-
-    def __call__(self, w: tf.Tensor) -> tf.Tensor:
-        return tf.nn.relu(w)
-
-    def get_config(self) -> dict:
-        return {}
-
-    @classmethod
-    def from_config(cls, config: dict) -> 'NonNegConstraint':
-        return cls()
-
-
-class UnitIntervalConstraint(tf.keras.constraints.Constraint):
-    """Ограничение на отрезок [0, 1]. Эквивалентна MinMaxConstraint(0, 1)."""
-
-    def __init__(self):
-        self._inner = MinMaxConstraint(0.0, 1.0)
-
-    def __call__(self, w: tf.Tensor) -> tf.Tensor:
-        return self._inner(w)
-
-    def get_config(self) -> dict:
-        return self._inner.get_config()
-
-    @classmethod
-    def from_config(cls, config: dict) -> 'UnitIntervalConstraint':
-        return cls()
