@@ -3,7 +3,7 @@ import tensorflow as tf
 from typing import Any, Dict, Optional, Tuple
 
 import neuraltide.config
-from neuraltide.core.base import BaseInputGenerator
+from neuraltide.core.base import BaseInputGenerator, _get_constraint_name
 from neuraltide.core.types import TensorType
 
 
@@ -417,6 +417,4 @@ class PlaceFieldGenerator(BaseInputGenerator):
         }
 
     def _get_constraint_name(self, var: tf.Variable) -> Optional[str]:
-        if var.constraint is not None:
-            return var.constraint.__class__.__name__
-        return None
+        return _get_constraint_name(var)

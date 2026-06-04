@@ -3,8 +3,8 @@ import numpy as np
 from typing import Any, Dict, Optional
 
 import neuraltide.config
-from neuraltide.core.base import BaseInputGenerator
-from neuraltide.core.types import TensorType
+from neuraltide.core.base import BaseInputGenerator, _get_constraint_name
+from neuraltide.core.types import TensorType, get_pi
 
 
 class VonMisesGenerator(BaseInputGenerator):
@@ -82,9 +82,8 @@ class VonMisesGenerator(BaseInputGenerator):
         self.phase = self._make_param(self._params, 'phase')
 
     def _i0_np(self, kappa: np.ndarray) -> np.ndarray:
-        """Compute I0(kappa) using scipy."""
-        from scipy.special import i0
-        return i0(kappa).astype(np.float32)
+        """Compute I0(kappa) using TensorFlow."""
+        return tf.math.bessel_i0(kappa).numpy().astype(np.float32)
 
     def _r2kappa_np(self, R: np.ndarray) -> np.ndarray:
         """Векторизованная версия r2kappa для numpy."""
@@ -117,7 +116,7 @@ class VonMisesGenerator(BaseInputGenerator):
         Returns:
             tf.Tensor, shape = [batch, n_units], в Гц.
         """
-        two_pi = tf.constant(2.0 * 3.141592653589793, dtype=neuraltide.config.get_dtype())
+        two_pi = 2.0 * get_pi()
 
         mean_rate = tf.reshape(self.mean_rate, [1, self.n_units])
         kappa = tf.reshape(self.kappa, [1, self.n_units])
@@ -160,7 +159,5 @@ class VonMisesGenerator(BaseInputGenerator):
             },
         }
 
-    def _get_constraint_name(self, var: tf.Variable) -> str:
-        if var.constraint is not None:
-            return var.constraint.__class__.__name__
-        return None
+    def _get_constraint_name(self, var: tf.Variable) -> Optional[str]:
+        return _get_constraint_name(var)

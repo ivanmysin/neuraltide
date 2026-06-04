@@ -22,18 +22,6 @@ class _SynapseEntry:
     tgt: str
 
 
-def compute_synapse_current(
-    synapse: SynapseModel,
-    state: StateList,
-    pre_firing_rate: TensorType,
-    post_voltage: TensorType,
-) -> Dict[str, TensorType]:
-    """
-    Compute synaptic current and conductance from synapse state.
-    """
-    return synapse.compute_current(state, pre_firing_rate, post_voltage)
-
-
 class NetworkGraph:
     """
     Описание топологии сети: популяции, внешние входы и синаптические проекции.
@@ -377,8 +365,8 @@ def _step_fn(
             entry.model, syn_state, pre_rate, post_v, entry.model.dt
         )
 
-        current_dict = compute_synapse_current(
-            entry.model, new_syn_state, pre_rate, post_v
+        current_dict = entry.model.compute_current(
+            new_syn_state, pre_rate, post_v
         )
 
         syn_I[entry.tgt] = syn_I[entry.tgt] + current_dict['I_syn']

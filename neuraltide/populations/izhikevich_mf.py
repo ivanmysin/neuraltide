@@ -23,8 +23,13 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 
 import neuraltide
 import neuraltide.config
-from neuraltide.core.base import PopulationModel
-from neuraltide.core.types import TensorType, StateList
+from neuraltide.core.base import (
+    PopulationModel,
+    _infer_n_units_from_params,
+    _validate_param_dimensions,
+    _get_constraint_name,
+)
+from neuraltide.core.types import TensorType, StateList, get_pi
 
 
 class IzhikevichMeanField(PopulationModel):
@@ -134,9 +139,7 @@ class IzhikevichMeanField(PopulationModel):
         self.Delta_I = self._make_param(self._params, 'Delta_I')
         self.I_ext = self._make_param(self._params, 'I_ext')
         self.v_max = tf.constant(10.0, dtype=neuraltide.config.get_dtype())
-
-        dtype = neuraltide.config.get_dtype()
-        self.PI = tf.constant(3.141592653589793, dtype=dtype)
+        self.PI = get_pi()
 
         self.state_size = [
             tf.TensorShape([1, self.n_units]),
@@ -146,47 +149,15 @@ class IzhikevichMeanField(PopulationModel):
 
     def _infer_n_units_from_raw_params(self, params: Dict[str, Any]) -> None:
         """Infer n_units from raw input params before any conversion."""
-        max_len = 1
-        for key, spec in params.items():
-            if isinstance(spec, dict):
-                value = spec.get('value', None)
-            else:
-                value = spec
-
-            if value is None:
-                continue
-
-            if isinstance(value, (list, tuple)):
-                max_len = max(max_len, len(value))
-            elif isinstance(value, np.ndarray):
-                if value.ndim == 1:
-                    max_len = max(max_len, len(value))
-
-        self.n_units = max_len
+        self.n_units = _infer_n_units_from_params(params)
 
     def _validate_param_dimensions(self) -> None:
         """Validate that all parameters have consistent dimensions (1 or n_units)."""
-        for key, spec in self._params.items():
-            if isinstance(spec, dict):
-                value = spec.get('value', None)
-            else:
-                value = spec
-
-            if value is None:
-                continue
-
-            if isinstance(value, (list, tuple)):
-                if len(value) != 1 and len(value) != self.n_units:
-                    raise ValueError(
-                        f"IzhikevichMeanField '{self.name}': parameter '{key}' "
-                        f"has length {len(value)}, expected 1 or {self.n_units}."
-                    )
-            elif isinstance(value, np.ndarray):
-                if value.ndim == 1 and len(value) != 1 and len(value) != self.n_units:
-                    raise ValueError(
-                        f"IzhikevichMeanField '{self.name}': parameter '{key}' "
-                        f"has length {len(value)}, expected 1 or {self.n_units}."
-                    )
+        _validate_param_dimensions(
+            self._params,
+            self.n_units,
+            f"IzhikevichMeanField '{self.name}'",
+        )
 
     def _validate_params(self) -> None:
         """Validate that all required parameters are present."""
@@ -670,9 +641,7 @@ class IzhikevichMeanField(PopulationModel):
 
     def _get_constraint_name(self, var: tf.Variable) -> Optional[str]:
         """Get the name of the constraint applied to a variable."""
-        if var.constraint is not None:
-            return var.constraint.__class__.__name__
-        return None
+        return _get_constraint_name(var)
 
     @staticmethod
     def dimensionless_to_dimensional(

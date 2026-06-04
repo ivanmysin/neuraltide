@@ -2,8 +2,8 @@ import tensorflow as tf
 from typing import Any, Dict, Optional
 
 import neuraltide.config
-from neuraltide.core.base import BaseInputGenerator
-from neuraltide.core.types import TensorType
+from neuraltide.core.base import BaseInputGenerator, _get_constraint_name
+from neuraltide.core.types import TensorType, get_pi
 
 
 class SinusoidalGenerator(BaseInputGenerator):
@@ -65,7 +65,7 @@ class SinusoidalGenerator(BaseInputGenerator):
         Returns:
             tf.Tensor, shape = [batch, n_units], в Гц.
         """
-        two_pi = tf.constant(2.0 * 3.141592653589793, dtype=neuraltide.config.get_dtype())
+        two_pi = 2.0 * get_pi()
 
         t_expanded = t
         amplitude = tf.reshape(self.amplitude, [1, self.n_units])
@@ -106,7 +106,5 @@ class SinusoidalGenerator(BaseInputGenerator):
             },
         }
 
-    def _get_constraint_name(self, var: tf.Variable) -> str:
-        if var.constraint is not None:
-            return var.constraint.__class__.__name__
-        return None
+    def _get_constraint_name(self, var: tf.Variable) -> Optional[str]:
+        return _get_constraint_name(var)
