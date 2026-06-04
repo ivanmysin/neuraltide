@@ -826,7 +826,10 @@ class AdjointSolver(tf.Module):
         syn_states = tuple(init_syn)
         stability_acc = tf.zeros([1], dtype=dtype)
 
-        t_val = tf.squeeze(tf.constant([[[0.05]]], dtype=dtype))
+        t_val = tf.constant(
+            self._graph.dt,
+            dtype=dtype,
+        )
 
         with tf.GradientTape() as tape:
             for _ in range(10):
