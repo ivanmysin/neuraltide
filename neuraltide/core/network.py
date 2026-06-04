@@ -486,6 +486,7 @@ class NetworkRNN(tf.keras.layers.Layer):
             vars_.extend(entry.model.trainable_variables)
         return vars_
 
+    @tf.function
     def _scan_forward(
         self,
         t_sequence: TensorType,
@@ -589,6 +590,7 @@ class NetworkRNN(tf.keras.layers.Layer):
 
         return all_rates, stability_loss, final_pop_states, final_syn_states
 
+    @tf.function
     def _scan_forward_states(
         self,
         t_sequence: TensorType,
