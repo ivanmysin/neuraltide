@@ -111,7 +111,8 @@ class AdjointSolver(tf.Module):
             entry = graph._synapses[name]
             offset = self._network._syn_state_offsets[name]
             size = len(entry.model.state_size)
-            src_idx = self._ap_pop_names.index(entry.src)
+            src_idx = (self._ap_pop_names.index(entry.src)
+                       if entry.src in graph._populations else -1)
             tgt_idx = self._ap_pop_names.index(entry.tgt)
             self._as_syn_names.append(name)
             self._as_syn_offsets.append(offset)
