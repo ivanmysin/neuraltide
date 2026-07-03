@@ -248,12 +248,6 @@ class SecondOrderSynapse(SynapseModel):
                 'constraint': 'MinMaxConstraint',
                 'units': 'ms',
             },
-            'w': {
-                'shape': (self.n_pre, self.n_post),
-                'trainable': self.w.trainable,
-                'constraint': 'MinMaxConstraint',
-                'units': 'dimensionless',
-            },
             'pconn': {
                 'shape': (self.n_pre, self.n_post),
                 'trainable': False,
