@@ -5,6 +5,7 @@ NeuralTide предоставляет несколько типов синапт
 - **StaticSynapse** — статический синапс без пластичности
 - **NMDASynapse** — NMDA синапс с магниевым блоком
 - **TsodyksMarkramSynapse** — синапс с кратковременной пластичностью (STP)
+- **SecondOrderSynapse** — непластичный синапс с двойной экспонентой (2-го порядка)
 - **CompositeSynapse** — композитный синапс, объединяющий несколько компонент
 
 ---
@@ -101,6 +102,89 @@ state_size = []  # пустой список, нет состояния
 ```python
 {
     'gsyn_max': {'shape': (n_pre, n_post), 'trainable': ..., 'constraint': 'NonNegConstraint', 'units': 'mS/cm^2'},
+    'pconn':    {'shape': (n_pre, n_post), 'trainable': False, 'constraint': 'UnitIntervalConstraint', 'units': 'dimensionless'},
+    'e_r':      {'shape': (n_pre, n_post), 'trainable': False, 'constraint': None, 'units': 'mV'},
+}
+```
+
+---
+
+## SecondOrderSynapse
+
+**Файл**: `neuraltide/synapses/second_order.py`
+
+Непластичный синапс с фильтром второго порядка (двойная экспонента)
+между пресинаптической частотой разрядов и проводимостью. Поддерживает
+adjoint-метод градиентов (реализованы `adjoint_derivatives()`,
+`parameter_jacobian()`, `compute_current_state_vjp()`,
+`compute_current_param_grad()`).
+
+### Уравнения
+
+```
+τ₁·τ₂·d²g_s/dt² + (τ₁ + τ₂)·dg_s/dt + g_s = ν_pre
+
+I_syn = gsyn_max · g_s · (e_r − V_post)   (сумма по пресинаптическим)
+g_syn = gsyn_max · g_s
+```
+
+где `ν_pre = pconn · pre_firing_rate / 1000` (частота в кГц).
+Стационарное состояние: `g_s,eq = ν_pre`.
+
+### Конструктор
+
+```python
+SecondOrderSynapse(
+    n_pre: int,
+    n_post: int,
+    dt: float,
+    params: dict,
+    **kwargs
+)
+```
+
+### Параметры (params)
+
+| Параметр | Тип | Описание | Единицы |
+|----------|-----|-----------|---------|
+| `gsyn_max` | float/matrix | Максимальная проводимость | мС/см² |
+| `tau1` | float/matrix | Первая постоянная времени | мс |
+| `tau2` | float/matrix | Вторая постоянная времени | мс |
+| `pconn` | matrix [n_pre, n_post] | Матрица соединений | безразмерный |
+| `e_r` | float/matrix | Потенциал реверса | мВ |
+
+**Пример**:
+```python
+syn = SecondOrderSynapse(
+    n_pre=1,
+    n_post=2,
+    dt=0.5,
+    params={
+        'gsyn_max': {'value': [[0.1, 0.15]], 'trainable': True},
+        'tau1':     {'value': 3.0,  'trainable': True, 'min': 0.1, 'max': 20.0},
+        'tau2':     {'value': 10.0, 'trainable': True, 'min': 0.1, 'max': 50.0},
+        'pconn':    {'value': [[1.0, 1.0]], 'trainable': False},
+        'e_r':      {'value': 0.0, 'trainable': False},
+    }
+)
+```
+
+### Состояние
+
+```python
+state_size = [
+    tf.TensorShape([n_pre, n_post]),  # g_s
+    tf.TensorShape([n_pre, n_post]),  # dg_s/dt
+]
+```
+
+### ParameterSpec
+
+```python
+{
+    'gsyn_max': {'shape': (n_pre, n_post), 'trainable': ..., 'constraint': 'NonNegConstraint', 'units': 'mS/cm^2'},
+    'tau1':     {'shape': (n_pre, n_post), 'trainable': ..., 'constraint': 'MinMaxConstraint', 'units': 'ms'},
+    'tau2':     {'shape': (n_pre, n_post), 'trainable': ..., 'constraint': 'MinMaxConstraint', 'units': 'ms'},
     'pconn':    {'shape': (n_pre, n_post), 'trainable': False, 'constraint': 'UnitIntervalConstraint', 'units': 'dimensionless'},
     'e_r':      {'shape': (n_pre, n_post), 'trainable': False, 'constraint': None, 'units': 'mV'},
 }

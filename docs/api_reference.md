@@ -381,6 +381,30 @@ TsodyksMarkramSynapse(
 **Параметры**:
 - `gsyn_max`, `tau_f`, `tau_d`, `tau_r`, `Uinc`, `pconn`, `e_r`
 
+### SecondOrderSynapse
+
+```python
+class SecondOrderSynapse(SynapseModel):
+```
+
+Непластичный синапс с фильтром второго порядка (двойная экспонента):
+`τ₁·τ₂·g̈_s + (τ₁+τ₂)·ġ_s + g_s = ν_pre`. Состояние: `[g_s, dg_s]`.
+Поддерживает adjoint-метод градиентов.
+
+**Конструктор**:
+```python
+SecondOrderSynapse(
+    n_pre: int,
+    n_post: int,
+    dt: float,
+    params: dict,
+    **kwargs
+)
+```
+
+**Параметры**:
+- `gsyn_max`, `tau1`, `tau2`, `pconn`, `e_r`
+
 ### CompositeSynapse
 
 ```python
@@ -815,6 +839,7 @@ def print_summary(network, rich_library: Optional[object] = None) -> None:
 - `StaticSynapse`
 - `NMDASynapse`
 - `TsodyksMarkramSynapse`
+- `SecondOrderSynapse`
 - `CompositeSynapse`
 
 ---
