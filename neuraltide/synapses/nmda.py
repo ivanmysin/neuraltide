@@ -45,6 +45,12 @@ class NMDASynapse(SynapseModel):
             tf.zeros([self.n_pre, self.n_post], dtype=dtype),
         ]
 
+    @staticmethod
+    def _maybe_cast(val, dtype):
+        if isinstance(val, tf.Tensor) and val.dtype == dtype:
+            return val
+        return tf.cast(val, dtype)
+
     def forward(
         self,
         pre_firing_rate: TensorType,
@@ -55,14 +61,15 @@ class NMDASynapse(SynapseModel):
         gnmda, dgnmda = state
 
         dtype = neuraltide.config.get_dtype()
-        gsyn_max_nmda = tf.cast(self.gsyn_max_nmda, dtype)
-        tau1_nmda = tf.cast(self.tau1_nmda, dtype)
-        tau2_nmda = tf.cast(self.tau2_nmda, dtype)
-        Mgb = tf.cast(self.Mgb, dtype)
-        av_nmda = tf.cast(self.av_nmda, dtype)
-        pconn_nmda = tf.cast(self.pconn_nmda, dtype)
-        e_r_nmda = tf.cast(self.e_r_nmda, dtype)
-        v_ref = tf.cast(self.v_ref, dtype)
+        _c = self._maybe_cast
+        gsyn_max_nmda = _c(self.gsyn_max_nmda, dtype)
+        tau1_nmda = _c(self.tau1_nmda, dtype)
+        tau2_nmda = _c(self.tau2_nmda, dtype)
+        Mgb = _c(self.Mgb, dtype)
+        av_nmda = _c(self.av_nmda, dtype)
+        pconn_nmda = _c(self.pconn_nmda, dtype)
+        e_r_nmda = _c(self.e_r_nmda, dtype)
+        v_ref = _c(self.v_ref, dtype)
 
         firing_probs_T = tf.transpose(dt * pre_firing_rate / 1000.0)
         s_input = pconn_nmda * firing_probs_T
@@ -99,9 +106,10 @@ class NMDASynapse(SynapseModel):
         gnmda, dgnmda = state
 
         dtype = neuraltide.config.get_dtype()
-        pconn = tf.cast(self.pconn_nmda, dtype)
-        tau1 = tf.maximum(tf.cast(self.tau1_nmda, dtype), 1e-6)
-        tau2 = tf.maximum(tf.cast(self.tau2_nmda, dtype), 1e-6)
+        _c = self._maybe_cast
+        pconn = _c(self.pconn_nmda, dtype)
+        tau1 = tf.maximum(_c(self.tau1_nmda, dtype), 1e-6)
+        tau2 = tf.maximum(_c(self.tau2_nmda, dtype), 1e-6)
 
         firing_probs_T = tf.transpose(pre_firing_rate / 1000.0)
         s_input = pconn * firing_probs_T
@@ -128,11 +136,12 @@ class NMDASynapse(SynapseModel):
         Includes magnesium block.
         """
         dtype = neuraltide.config.get_dtype()
-        gsyn_max_nmda = tf.cast(self.gsyn_max_nmda, dtype)
-        Mgb = tf.cast(self.Mgb, dtype)
-        av_nmda = tf.cast(self.av_nmda, dtype)
-        e_r_nmda = tf.cast(self.e_r_nmda, dtype)
-        v_ref = tf.cast(self.v_ref, dtype)
+        _c = self._maybe_cast
+        gsyn_max_nmda = _c(self.gsyn_max_nmda, dtype)
+        Mgb = _c(self.Mgb, dtype)
+        av_nmda = _c(self.av_nmda, dtype)
+        e_r_nmda = _c(self.e_r_nmda, dtype)
+        v_ref = _c(self.v_ref, dtype)
 
         gnmda = state[0]
 
@@ -162,8 +171,9 @@ class NMDASynapse(SynapseModel):
         lam_gnmda, lam_dgnmda = adjoint_state
 
         dtype = neuraltide.config.get_dtype()
-        tau1 = tf.maximum(tf.cast(self.tau1_nmda, dtype), 1e-6)
-        tau2 = tf.maximum(tf.cast(self.tau2_nmda, dtype), 1e-6)
+        _c = self._maybe_cast
+        tau1 = tf.maximum(_c(self.tau1_nmda, dtype), 1e-6)
+        tau2 = tf.maximum(_c(self.tau2_nmda, dtype), 1e-6)
         t12 = tau1 * tau2
 
         dlam_gnmda = lam_dgnmda / t12
@@ -211,11 +221,12 @@ class NMDASynapse(SynapseModel):
         gnmda, dgnmda = state
 
         dtype = neuraltide.config.get_dtype()
-        gsyn_max = tf.cast(self.gsyn_max_nmda, dtype)
-        Mgb = tf.cast(self.Mgb, dtype)
-        av_nmda = tf.cast(self.av_nmda, dtype)
-        e_r_nmda = tf.cast(self.e_r_nmda, dtype)
-        v_ref = tf.cast(self.v_ref, dtype)
+        _c = self._maybe_cast
+        gsyn_max = _c(self.gsyn_max_nmda, dtype)
+        Mgb = _c(self.Mgb, dtype)
+        av_nmda = _c(self.av_nmda, dtype)
+        e_r_nmda = _c(self.e_r_nmda, dtype)
+        v_ref = _c(self.v_ref, dtype)
 
         mg_block = 1.0 / (1.0 + Mgb * tf.exp(-av_nmda * (post_voltage - v_ref)))
 
@@ -240,11 +251,11 @@ class NMDASynapse(SynapseModel):
         gnmda, dgnmda = state
 
         dtype = neuraltide.config.get_dtype()
-
-        Mgb = tf.cast(self.Mgb, dtype)
-        av_nmda = tf.cast(self.av_nmda, dtype)
-        e_r_nmda = tf.cast(self.e_r_nmda, dtype)
-        v_ref = tf.cast(self.v_ref, dtype)
+        _c = self._maybe_cast
+        Mgb = _c(self.Mgb, dtype)
+        av_nmda = _c(self.av_nmda, dtype)
+        e_r_nmda = _c(self.e_r_nmda, dtype)
+        v_ref = _c(self.v_ref, dtype)
 
         mg_block = 1.0 / (1.0 + Mgb * tf.exp(-av_nmda * (post_voltage - v_ref)))
         lam_I_sum = tf.reduce_sum(lam_I, axis=0)

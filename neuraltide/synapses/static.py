@@ -29,6 +29,12 @@ class StaticSynapse(SynapseModel):
     def get_initial_state(self, batch_size: int = 1) -> StateList:
         return []
 
+    @staticmethod
+    def _maybe_cast(val, dtype):
+        if isinstance(val, tf.Tensor) and val.dtype == dtype:
+            return val
+        return tf.cast(val, dtype)
+
     def forward(
         self,
         pre_firing_rate: TensorType,
@@ -37,9 +43,10 @@ class StaticSynapse(SynapseModel):
         dt: float,
     ) -> Tuple[Dict[str, TensorType], StateList]:
         dtype = neuraltide.config.get_dtype()
-        gsyn_max = tf.cast(self.gsyn_max, dtype)
-        pconn = tf.cast(self.pconn, dtype)
-        e_r = tf.cast(self.e_r, dtype)
+        _c = self._maybe_cast
+        gsyn_max = _c(self.gsyn_max, dtype)
+        pconn = _c(self.pconn, dtype)
+        e_r = _c(self.e_r, dtype)
 
         firing_probs_T = tf.transpose(dt * pre_firing_rate / 1000.0)
         FRpre_normed = pconn * firing_probs_T
@@ -76,9 +83,10 @@ class StaticSynapse(SynapseModel):
         Used after numerical integration to compute currents.
         """
         dtype = neuraltide.config.get_dtype()
-        gsyn_max = tf.cast(self.gsyn_max, dtype)
-        pconn = tf.cast(self.pconn, dtype)
-        e_r = tf.cast(self.e_r, dtype)
+        _c = self._maybe_cast
+        gsyn_max = _c(self.gsyn_max, dtype)
+        pconn = _c(self.pconn, dtype)
+        e_r = _c(self.e_r, dtype)
 
         firing_probs_T = tf.transpose(pre_firing_rate / 1000.0)
         FRpre_normed = pconn * firing_probs_T

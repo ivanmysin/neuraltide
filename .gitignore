@@ -1,4 +1,3 @@
-```gitignore
 # Python cache files
 __pycache__/
 *.pyc
@@ -38,4 +37,14 @@ build/
 .tox/
 .pytest_cache/
 .mypy_cache/
-```
+
+# Local research context (papers, third-party checkouts)
+context/
+
+# Generated example outputs
+examples/*.h5
+examples/*.png
+examples/optimization_results.csv
+examples/optimization_results.json
+optimization_results.csv
+optimization_results.json

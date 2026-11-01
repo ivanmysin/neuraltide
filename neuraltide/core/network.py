@@ -351,25 +351,31 @@ def _step_fn(
         syn_I[name] = tf.zeros([1, n], dtype=dtype)
         syn_g[name] = tf.zeros([1, n], dtype=dtype)
 
+    # Кэширование firing_rates и observables для каждой популяции (T1)
+    # Вычисляем один раз, а не на каждый синапс
+    cached_rates: Dict[str, TensorType] = {}
+    cached_obs: Dict[str, Dict[str, TensorType]] = {}
+    for pop_name in graph._populations:
+        pop = graph._populations[pop_name]
+        pop_state = pop_states_dict[pop_name]
+        cached_rates[pop_name] = pop.get_firing_rate(pop_state)
+        cached_obs[pop_name] = pop.observables(pop_state)
+
     # Обработка всех синапсов
     if input_rates is None:
         input_rates = {}
     for syn_name, entry, _ in graph._syn_info_cache:
-        tgt_state = pop_states_dict[entry.tgt]
         syn_state = syn_states_dict[syn_name]
 
         tgt_pop = graph._populations[entry.tgt]
 
-        # Получение пресинаптической частоты разрядов
+        # Получение пресинаптической частоты разрядов из кэша
         if entry.src in graph._external_inputs:
             pre_rate = input_rates[entry.src]
         else:
-            src_pop = graph._populations[entry.src]
-            src_state = pop_states_dict[entry.src]
-            pre_rate = src_pop.get_firing_rate(src_state)
+            pre_rate = cached_rates[entry.src]
 
-        tgt_obs = tgt_pop.observables(tgt_state)
-        post_v = tgt_obs.get('v_mean')
+        post_v = cached_obs[entry.tgt].get('v_mean')
         if post_v is None:
             post_v = tf.zeros([1, tgt_pop.n_units], dtype=dtype)
 

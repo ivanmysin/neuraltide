@@ -71,6 +71,7 @@ output = network(t_seq, inputs=inputs)
 | [Обучение](training.md) | Обучение сети: Trainer, loss functions, adjoint method |
 | [Данные](data.md) | Модуль neuraltide.data: сохранение и загрузка HDF5 |
 | [Модель](model.md) | Модуль neuraltide.model: BrainModelKeras |
+| [Playbook по оптимизации](optimization_playbook.md) | Приёмы подгонки параметров: масштабирование, loss, градиенты, жёсткость, идентифицируемость, UQ |
 | [Ограничения](constraints.md) | Ограничения на параметры |
 | [Примеры](examples.md) | Полные примеры использования |
 | [API Reference](api_reference.md) | Полный справочник API |
