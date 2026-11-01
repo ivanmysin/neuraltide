@@ -39,18 +39,18 @@ class NetworkState:
         pop_sizes: Dict[str, int],
         syn_names: List[str],
         syn_sizes: Dict[str, int],
-    ) -> 'NetworkState':
+    ) -> "NetworkState":
         """Десериализует из плоского списка."""
         idx = 0
         pop_states = {}
         for name in pop_names:
             n = pop_sizes[name]
-            pop_states[name] = flat[idx:idx + n]
+            pop_states[name] = flat[idx : idx + n]
             idx += n
         syn_states = {}
         for name in syn_names:
             n = syn_sizes[name]
-            syn_states[name] = flat[idx:idx + n]
+            syn_states[name] = flat[idx : idx + n]
             idx += n
         return NetworkState(
             population_states=pop_states,

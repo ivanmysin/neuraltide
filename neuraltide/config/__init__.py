@@ -33,17 +33,21 @@ def maybe_check_numerics(tensor: tf.Tensor, message: str) -> tf.Tensor:
         return tf.debugging.check_numerics(tensor, message)
     return tensor
 
+
 POPULATION_REGISTRY: Dict[str, Type] = {}
 SYNAPSE_REGISTRY: Dict[str, Type] = {}
 INPUT_REGISTRY: Dict[str, Type] = {}
+
 
 def register_population(name: str, cls: Type) -> None:
     """Регистрирует пользовательский класс PopulationModel для config-first API."""
     POPULATION_REGISTRY[name] = cls
 
+
 def register_synapse(name: str, cls: Type) -> None:
     """Регистрирует пользовательский класс SynapseModel."""
     SYNAPSE_REGISTRY[name] = cls
+
 
 def register_input(name: str, cls: Type) -> None:
     """Регистрирует пользовательский класс BaseInputGenerator."""

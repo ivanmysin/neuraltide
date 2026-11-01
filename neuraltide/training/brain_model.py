@@ -11,6 +11,7 @@ BrainModel — высокоуровневый класс, объединяющи
     - network_optimizer: обновляет параметры NetworkRNN
     - generator_optimizer: обновляет параметры генераторов (опционально)
 """
+
 from typing import Dict, List, Optional, Tuple
 
 import tensorflow as tf
@@ -94,8 +95,7 @@ class BrainModel(tf.keras.layers.Layer):
     ) -> NetworkOutput:
         """Forward pass: генераторы → входы → сеть."""
         inputs = self._precompute_inputs(t_sequence, extra_inputs)
-        return self._network(t_sequence, inputs=inputs,
-                             initial_state=initial_state)
+        return self._network(t_sequence, inputs=inputs, initial_state=initial_state)
 
     def train_step(
         self,
@@ -107,8 +107,9 @@ class BrainModel(tf.keras.layers.Layer):
         """Один шаг обучения с двойным потоком градиентов."""
         with tf.GradientTape(persistent=True) as tape:
             inputs = self._precompute_inputs(t_sequence, extra_inputs)
-            output = self._network(t_sequence, inputs=inputs,
-                                   training=True, initial_state=initial_state)
+            output = self._network(
+                t_sequence, inputs=inputs, training=True, initial_state=initial_state
+            )
             loss = self._loss_fn(output, self._network)
 
         # Градиенты по сети
@@ -121,8 +122,11 @@ class BrainModel(tf.keras.layers.Layer):
         del tape
 
         # Применение градиентов сети
-        nv_pairs = [(g, v) for g, v in zip(network_grads,
-                     self._network.trainable_variables) if g is not None]
+        nv_pairs = [
+            (g, v)
+            for g, v in zip(network_grads, self._network.trainable_variables)
+            if g is not None
+        ]
         if nv_pairs:
             if self._grad_clip_norm > 0:
                 gs = [g for g, _ in nv_pairs]
@@ -132,8 +136,7 @@ class BrainModel(tf.keras.layers.Layer):
 
         # Применение градиентов генераторов
         if self._generator_optimizer is not None and gen_vars:
-            gv_pairs = [(g, v) for g, v in zip(gen_grads, gen_vars)
-                        if g is not None]
+            gv_pairs = [(g, v) for g, v in zip(gen_grads, gen_vars) if g is not None]
             if gv_pairs:
                 if self._grad_clip_norm > 0:
                     gs = [g for g, _ in gv_pairs]
@@ -141,7 +144,7 @@ class BrainModel(tf.keras.layers.Layer):
                     gv_pairs = [(g, v) for (_, v), g in zip(gv_pairs, clipped)]
                 self._generator_optimizer.apply_gradients(gv_pairs)
 
-        return {'loss': loss}
+        return {"loss": loss}
 
     def fit(
         self,
@@ -156,16 +159,15 @@ class BrainModel(tf.keras.layers.Layer):
         """Обучение на заданное число эпох."""
         history = TrainingHistory(loss_history=[], epochs=epochs)
         for epoch in range(epochs):
-            result = self.train_step(t_sequence, target, extra_inputs,
-                                     initial_state)
-            loss_val = float(result['loss'])
+            result = self.train_step(t_sequence, target, extra_inputs, initial_state)
+            loss_val = float(result["loss"])
             history.loss_history.append(loss_val)
             if verbose > 0 and (epoch + 1) % max(1, epochs // 20) == 0:
                 print(f"Epoch {epoch + 1}/{epochs} - loss: {loss_val:.6f}")
             if callbacks:
                 for cb in callbacks:
-                    if hasattr(cb, 'on_epoch_end'):
-                        cb.on_epoch_end(epoch, {'loss': loss_val})
+                    if hasattr(cb, "on_epoch_end"):
+                        cb.on_epoch_end(epoch, {"loss": loss_val})
         return history
 
     @property

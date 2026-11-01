@@ -16,6 +16,7 @@
         ├── target_n_units  JSON dict
         └── generator_params JSON dict
 """
+
 import json
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Any
@@ -26,9 +27,10 @@ import numpy as np
 @dataclass
 class Dataset:
     """Контейнер для данных обучения."""
-    inputs: np.ndarray          # [T, total_input_units]
-    target: np.ndarray          # [T, total_target_units]
-    time_seq: np.ndarray        # [T]
+
+    inputs: np.ndarray  # [T, total_input_units]
+    target: np.ndarray  # [T, total_target_units]
+    time_seq: np.ndarray  # [T]
     dt: float
     input_names: List[str]
     input_n_units: Dict[str, int]
@@ -56,7 +58,7 @@ class Dataset:
                 break
             offset += self.input_n_units[n]
         n = self.input_n_units[name]
-        return self.inputs[:, offset:offset + n]
+        return self.inputs[:, offset : offset + n]
 
     def target_slice(self, name: str) -> np.ndarray:
         """Возвращает срез цели по имени: [T, n_units_i]."""
@@ -66,7 +68,7 @@ class Dataset:
                 break
             offset += self.target_n_units[n]
         n = self.target_n_units[name]
-        return self.target[:, offset:offset + n]
+        return self.target[:, offset : offset + n]
 
 
 def save_dataset(
@@ -100,12 +102,10 @@ def save_dataset(
     # Проверяем согласованность
     for name, arr in inputs.items():
         if arr.shape[0] != T:
-            raise ValueError(
-                f"Input '{name}' has T={arr.shape[0]}, expected {T}")
+            raise ValueError(f"Input '{name}' has T={arr.shape[0]}, expected {T}")
     for name, arr in target.items():
         if arr.shape[0] != T:
-            raise ValueError(
-                f"Target '{name}' has T={arr.shape[0]}, expected {T}")
+            raise ValueError(f"Target '{name}' has T={arr.shape[0]}, expected {T}")
 
     # Стекаем inputs и target в плоские тензоры
     input_names = list(inputs.keys())
@@ -135,18 +135,18 @@ def save_dataset(
     if generator_params is None:
         generator_params = {}
 
-    with h5py.File(path, 'w') as f:
-        f.create_dataset('inputs', data=inputs_flat, compression='gzip')
-        f.create_dataset('target', data=target_flat, compression='gzip')
-        f.create_dataset('time_seq', data=time_seq)
+    with h5py.File(path, "w") as f:
+        f.create_dataset("inputs", data=inputs_flat, compression="gzip")
+        f.create_dataset("target", data=target_flat, compression="gzip")
+        f.create_dataset("time_seq", data=time_seq)
 
-        meta = f.create_group('metadata')
-        meta.attrs['dt'] = dt
-        meta.attrs['input_names'] = json.dumps(input_names)
-        meta.attrs['input_n_units'] = json.dumps(input_n_units)
-        meta.attrs['target_names'] = json.dumps(target_names)
-        meta.attrs['target_n_units'] = json.dumps(target_n_units)
-        meta.attrs['generator_params'] = json.dumps(generator_params)
+        meta = f.create_group("metadata")
+        meta.attrs["dt"] = dt
+        meta.attrs["input_names"] = json.dumps(input_names)
+        meta.attrs["input_n_units"] = json.dumps(input_n_units)
+        meta.attrs["target_names"] = json.dumps(target_names)
+        meta.attrs["target_n_units"] = json.dumps(target_n_units)
+        meta.attrs["generator_params"] = json.dumps(generator_params)
 
 
 def load_dataset(path: str) -> Dataset:
@@ -161,18 +161,18 @@ def load_dataset(path: str) -> Dataset:
     """
     import h5py
 
-    with h5py.File(path, 'r') as f:
-        inputs = f['inputs'][:]           # [T, total_input]
-        target = f['target'][:]           # [T, total_target]
-        time_seq = f['time_seq'][:]       # [T]
+    with h5py.File(path, "r") as f:
+        inputs = f["inputs"][:]  # [T, total_input]
+        target = f["target"][:]  # [T, total_target]
+        time_seq = f["time_seq"][:]  # [T]
 
-        meta = f['metadata']
-        dt = float(meta.attrs['dt'])
-        input_names = json.loads(meta.attrs['input_names'])
-        input_n_units = json.loads(meta.attrs['input_n_units'])
-        target_names = json.loads(meta.attrs['target_names'])
-        target_n_units = json.loads(meta.attrs['target_n_units'])
-        generator_params = json.loads(meta.attrs.get('generator_params', '{}'))
+        meta = f["metadata"]
+        dt = float(meta.attrs["dt"])
+        input_names = json.loads(meta.attrs["input_names"])
+        input_n_units = json.loads(meta.attrs["input_n_units"])
+        target_names = json.loads(meta.attrs["target_names"])
+        target_n_units = json.loads(meta.attrs["target_n_units"])
+        generator_params = json.loads(meta.attrs.get("generator_params", "{}"))
 
     return Dataset(
         inputs=inputs,
@@ -234,15 +234,15 @@ def plot_dataset(
         n = data.input_n_units[name]
         ax = axes[i, col]
         for j in range(n):
-            ax.plot(t_plot, inputs_plot[:, offset + j], label=f'{name}[{j}]', alpha=0.8)
-        ax.set_title(f'Input: {name}')
-        ax.set_xlabel('Time (ms)')
-        ax.set_ylabel('Rate (Hz)')
+            ax.plot(t_plot, inputs_plot[:, offset + j], label=f"{name}[{j}]", alpha=0.8)
+        ax.set_title(f"Input: {name}")
+        ax.set_xlabel("Time (ms)")
+        ax.set_ylabel("Rate (Hz)")
         ax.legend(fontsize=8)
         ax.grid(True, alpha=0.3)
         offset += n
     for i in range(n_inputs, n_rows):
-        axes[i, col].axis('off')
+        axes[i, col].axis("off")
 
     # Цели
     col = 1
@@ -251,19 +251,21 @@ def plot_dataset(
         n = data.target_n_units[name]
         ax = axes[i, col]
         for j in range(n):
-            ax.plot(t_plot, target_plot[:, offset + j], label=f'{name}[{j}]', alpha=0.8)
-        ax.set_title(f'Target: {name}')
-        ax.set_xlabel('Time (ms)')
-        ax.set_ylabel('Rate (Hz)')
+            ax.plot(t_plot, target_plot[:, offset + j], label=f"{name}[{j}]", alpha=0.8)
+        ax.set_title(f"Target: {name}")
+        ax.set_xlabel("Time (ms)")
+        ax.set_ylabel("Rate (Hz)")
         ax.legend(fontsize=8)
         ax.grid(True, alpha=0.3)
         offset += n
     for i in range(n_targets, n_rows):
-        axes[i, col].axis('off')
+        axes[i, col].axis("off")
 
-    fig.suptitle(f'Dataset: T={T}, dt={data.dt}ms, '
-                 f'inputs={list(data.input_n_units.keys())}, '
-                 f'targets={list(data.target_n_units.keys())}',
-                 fontsize=12)
+    fig.suptitle(
+        f"Dataset: T={T}, dt={data.dt}ms, "
+        f"inputs={list(data.input_n_units.keys())}, "
+        f"targets={list(data.target_n_units.keys())}",
+        fontsize=12,
+    )
     plt.tight_layout()
     plt.show()

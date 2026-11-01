@@ -2,6 +2,7 @@
 Пример 4: FokkerPlanckPopulation.
 Пользователь наследуется и реализует derivatives().
 """
+
 import tensorflow as tf
 import numpy as np
 
@@ -41,7 +42,7 @@ class SimpleFokkerPlanck(PopulationModel):
         v = self.v_grid
         mean = tf.constant([[0.0]], dtype=dtype)
         std = tf.constant([[1.0]], dtype=dtype)
-        P = tf.exp(-((v - mean) ** 2) / (2 * std ** 2))
+        P = tf.exp(-((v - mean) ** 2) / (2 * std**2))
         P = P / tf.reduce_sum(P, axis=-1, keepdims=True)
         return [P]
 
@@ -66,28 +67,28 @@ class SimpleFokkerPlanck(PopulationModel):
     def get_firing_rate(self, state):
         P = state[0]
         idx = self.grid_size - 1
-        J_out = -self.D * (P[:, idx] - P[:, idx-1]) / self.dV
+        J_out = -self.D * (P[:, idx] - P[:, idx - 1]) / self.dV
         return J_out[:, tf.newaxis]
 
     @property
     def parameter_spec(self):
         return {
-            'D': {
-                'shape': (),
-                'trainable': False,
-                'constraint': None,
-                'units': 'mV^2/ms'
+            "D": {
+                "shape": (),
+                "trainable": False,
+                "constraint": None,
+                "units": "mV^2/ms",
             },
-            'mu': {
-                'shape': (),
-                'trainable': False,
-                'constraint': None,
-                'units': 'mV/ms'
+            "mu": {
+                "shape": (),
+                "trainable": False,
+                "constraint": None,
+                "units": "mV/ms",
             },
         }
 
 
-register_population('SimpleFokkerPlanck', SimpleFokkerPlanck)
+register_population("SimpleFokkerPlanck", SimpleFokkerPlanck)
 
 dt = 0.5
 T = 50
@@ -95,7 +96,7 @@ T = 50
 pop = SimpleFokkerPlanck(n_units=1, dt=dt, grid_size=100)
 
 graph = NetworkGraph(dt=dt)
-graph.add_population('fp', pop)
+graph.add_population("fp", pop)
 
 network = NetworkRNN(graph, integrator=EulerIntegrator())
 
@@ -103,16 +104,15 @@ t_values = np.arange(T, dtype=np.float32) * dt
 t_seq = tf.constant(t_values[None, :, None])
 
 target_rate = 5.0 + 2.0 * np.sin(2 * np.pi * 5.0 * t_values / 1000.0)
-target = {
-    'fp': tf.constant(target_rate[None, :, None], dtype=tf.float32)
-}
+target = {"fp": tf.constant(target_rate[None, :, None], dtype=tf.float32)}
 
-loss_fn = CompositeLoss([
-    (1.0, MSELoss(target)),
-])
+loss_fn = CompositeLoss(
+    [
+        (1.0, MSELoss(target)),
+    ]
+)
 
-trainer = Trainer(network, loss_fn,
-                  optimizer=tf.keras.optimizers.Adam(1e-3))
+trainer = Trainer(network, loss_fn, optimizer=tf.keras.optimizers.Adam(1e-3))
 history = trainer.fit(t_seq, epochs=50, verbose=1)
 
 print("Fokker-Planck population trained successfully!")

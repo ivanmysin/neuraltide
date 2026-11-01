@@ -19,8 +19,15 @@ class FokkerPlanckPopulation(PopulationModel):
     (пороговый потенциал) по умолчанию.
     """
 
-    def __init__(self, n_units: int, dt: float, grid_size: int = 100,
-                 v_min: float = -100.0, v_max: float = 50.0, **kwargs):
+    def __init__(
+        self,
+        n_units: int,
+        dt: float,
+        grid_size: int = 100,
+        v_min: float = -100.0,
+        v_max: float = 50.0,
+        **kwargs,
+    ):
         super().__init__(n_units=n_units, dt=dt, **kwargs)
         self.grid_size = grid_size
         self.v_min = v_min
@@ -57,10 +64,10 @@ class FokkerPlanckPopulation(PopulationModel):
     @property
     def parameter_spec(self) -> Dict[str, Dict[str, any]]:
         return {
-            'grid_size': {
-                'shape': (),
-                'trainable': False,
-                'constraint': None,
-                'units': 'dimensionless',
+            "grid_size": {
+                "shape": (),
+                "trainable": False,
+                "constraint": None,
+                "units": "dimensionless",
             },
         }

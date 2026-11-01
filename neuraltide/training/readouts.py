@@ -56,14 +56,14 @@ class LinearReadout(BaseReadout):
             initializer=tf.keras.initializers.GlorotUniform(),
             trainable=self._trainable,
             dtype=dtype,
-            name='W'
+            name="W",
         )
         self.b = self.add_weight(
             shape=(self.n_out,),
             initializer=tf.keras.initializers.Zeros(),
             trainable=self._trainable,
             dtype=dtype,
-            name='b'
+            name="b",
         )
 
     def call(self, x: TensorType) -> TensorType:
@@ -81,8 +81,9 @@ class BandpassReadout(BaseReadout):
         n_taps: число коэффициентов фильтра (по умолчанию 51).
     """
 
-    def __init__(self, f_low: float, f_high: float, dt: float,
-                 n_taps: int = 51, **kwargs):
+    def __init__(
+        self, f_low: float, f_high: float, dt: float, n_taps: int = 51, **kwargs
+    ):
         super().__init__(**kwargs)
         self.f_low = f_low
         self.f_high = f_high
@@ -91,13 +92,12 @@ class BandpassReadout(BaseReadout):
 
     def build(self, input_shape):
         from scipy.signal import firwin
+
         nyq = 0.5 * (1000.0 / self.dt)
-        coeffs = firwin(self.n_taps, [self.f_low, self.f_high], 
-                        pass_zero=False, fs=nyq)
+        coeffs = firwin(self.n_taps, [self.f_low, self.f_high], pass_zero=False, fs=nyq)
         n_channels = int(input_shape[-1])
         self._kernel = tf.constant(
-            coeffs[tf.newaxis, :, tf.newaxis],
-            dtype=neuraltide.config.get_dtype()
+            coeffs[tf.newaxis, :, tf.newaxis], dtype=neuraltide.config.get_dtype()
         )
         self._n_channels = n_channels
 
@@ -136,13 +136,13 @@ class HemodynamicReadout(BaseReadout):
     def build(self, input_shape):
         t = tf.range(0, 20, self.dt, dtype=neuraltide.config.get_dtype())
         tau1, tau2, a1, a2 = 2.5, 10.0, 6.0, 16.0
-        hrf = (t / tau1) ** a1 * tf.exp(-t / tau1) / (a1 ** a1 * tf.exp(-a1)) \
-              - (t / tau2) ** a2 * tf.exp(-t / tau2) / (a2 ** a2 * tf.exp(-a2))
+        hrf = (t / tau1) ** a1 * tf.exp(-t / tau1) / (a1**a1 * tf.exp(-a1)) - (
+            t / tau2
+        ) ** a2 * tf.exp(-t / tau2) / (a2**a2 * tf.exp(-a2))
         hrf = hrf / tf.reduce_max(tf.abs(hrf))
         self._kernel = tf.constant(
-            hrf[tf.newaxis, :, tf.newaxis],
-            dtype=neuraltide.config.get_dtype()
+            hrf[tf.newaxis, :, tf.newaxis], dtype=neuraltide.config.get_dtype()
         )
 
     def call(self, x: TensorType) -> TensorType:
-        return tf.nn.conv1d(x, self._kernel, stride=1, padding='SAME')
+        return tf.nn.conv1d(x, self._kernel, stride=1, padding="SAME")

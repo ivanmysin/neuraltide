@@ -28,16 +28,10 @@ class HeunIntegrator(BaseIntegrator):
 
         k1 = population.derivatives(state, total_synaptic_input)
 
-        state_plus_k1 = [
-            state[i] + dt * k1[i]
-            for i in range(len(state))
-        ]
+        state_plus_k1 = [state[i] + dt * k1[i] for i in range(len(state))]
         k2 = population.derivatives(state_plus_k1, total_synaptic_input)
 
-        new_state = [
-            state[i] + dt * 0.5 * (k1[i] + k2[i])
-            for i in range(len(state))
-        ]
+        new_state = [state[i] + dt * 0.5 * (k1[i] + k2[i]) for i in range(len(state))]
 
         errors = [
             tf.reduce_sum((new_state[i] - state_plus_k1[i]) ** 2)
@@ -62,16 +56,10 @@ class HeunIntegrator(BaseIntegrator):
         if len(k1) == 0:
             return state, tf.zeros([1], dtype=dtype)
 
-        state_plus_k1 = [
-            state[i] + dt * k1[i]
-            for i in range(len(k1))
-        ]
+        state_plus_k1 = [state[i] + dt * k1[i] for i in range(len(k1))]
         k2 = synapse.derivatives(state_plus_k1, pre_firing_rate, post_voltage)
 
-        new_state = [
-            state[i] + dt * 0.5 * (k1[i] + k2[i])
-            for i in range(len(k1))
-        ]
+        new_state = [state[i] + dt * 0.5 * (k1[i] + k2[i]) for i in range(len(k1))]
 
         errors = [
             tf.reduce_sum((new_state[i] - state_plus_k1[i]) ** 2)

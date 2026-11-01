@@ -1,8 +1,8 @@
-import pytest
 import tensorflow as tf
 import neuraltide
 import neuraltide.config as config
 from neuraltide.core.base import PopulationModel
+
 
 class TestDtypeConfig:
     def test_default_dtype(self):
@@ -28,7 +28,9 @@ class TestRegistries:
                 self.state_size = [tf.TensorShape([1, n_units])]
 
             def get_initial_state(self, batch_size=1):
-                return [tf.zeros([1, self.n_units], dtype=neuraltide.config.get_dtype())]
+                return [
+                    tf.zeros([1, self.n_units], dtype=neuraltide.config.get_dtype())
+                ]
 
             def derivatives(self, state, total_synaptic_input):
                 return state
@@ -40,9 +42,9 @@ class TestRegistries:
             def parameter_spec(self):
                 return {}
 
-        config.register_population('DummyPopulation', DummyPopulation)
-        assert 'DummyPopulation' in config.POPULATION_REGISTRY
-        assert config.POPULATION_REGISTRY['DummyPopulation'] == DummyPopulation
+        config.register_population("DummyPopulation", DummyPopulation)
+        assert "DummyPopulation" in config.POPULATION_REGISTRY
+        assert config.POPULATION_REGISTRY["DummyPopulation"] == DummyPopulation
 
     def test_register_synapse(self):
         from neuraltide.core.base import SynapseModel
@@ -56,16 +58,21 @@ class TestRegistries:
                 return []
 
             def forward(self, pre_firing_rate, post_voltage, state, dt):
-                return ({'I_syn': tf.zeros([1, self.n_post]),
-                         'g_syn': tf.zeros([1, self.n_post])}, [])
+                return (
+                    {
+                        "I_syn": tf.zeros([1, self.n_post]),
+                        "g_syn": tf.zeros([1, self.n_post]),
+                    },
+                    [],
+                )
 
             @property
             def parameter_spec(self):
                 return {}
 
-        config.register_synapse('DummySynapse', DummySynapse)
-        assert 'DummySynapse' in config.SYNAPSE_REGISTRY
-        assert config.SYNAPSE_REGISTRY['DummySynapse'] == DummySynapse
+        config.register_synapse("DummySynapse", DummySynapse)
+        assert "DummySynapse" in config.SYNAPSE_REGISTRY
+        assert config.SYNAPSE_REGISTRY["DummySynapse"] == DummySynapse
 
     def test_register_input(self):
         from neuraltide.inputs import BaseInputGenerator
@@ -77,6 +84,6 @@ class TestRegistries:
             def call(self, t):
                 return tf.ones([1, self.n_outputs])
 
-        config.register_input('DummyInput', DummyInput)
-        assert 'DummyInput' in config.INPUT_REGISTRY
-        assert config.INPUT_REGISTRY['DummyInput'] == DummyInput
+        config.register_input("DummyInput", DummyInput)
+        assert "DummyInput" in config.INPUT_REGISTRY
+        assert config.INPUT_REGISTRY["DummyInput"] == DummyInput

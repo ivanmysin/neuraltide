@@ -17,6 +17,7 @@ Note on dimensionless variables:
         <v>_dimensionless = (<v>_mV - V_rest) / |V_rest|
     Therefore, the dimensionless rest state is v=0 (not v=1).
 """
+
 import numpy as np
 import tensorflow as tf
 from typing import Any, Dict, List, Optional, Tuple, Union
@@ -112,7 +113,7 @@ class IzhikevichMeanField(PopulationModel):
             raise ValueError("params cannot be None")
 
         self.name = name
-        self._use_dimensional = 'Cm' in params
+        self._use_dimensional = "Cm" in params
 
         self._infer_n_units_from_raw_params(params)
 
@@ -126,13 +127,13 @@ class IzhikevichMeanField(PopulationModel):
 
         super().__init__(n_units=self.n_units, dt=dt, name=name, **kwargs)
 
-        self.tau_pop = self._make_param(self._params, 'tau_pop')
-        self.alpha = self._make_param(self._params, 'alpha')
-        self.a = self._make_param(self._params, 'a')
-        self.b = self._make_param(self._params, 'b')
-        self.w_jump = self._make_param(self._params, 'w_jump')
-        self.Delta_I = self._make_param(self._params, 'Delta_I')
-        self.I_ext = self._make_param(self._params, 'I_ext')
+        self.tau_pop = self._make_param(self._params, "tau_pop")
+        self.alpha = self._make_param(self._params, "alpha")
+        self.a = self._make_param(self._params, "a")
+        self.b = self._make_param(self._params, "b")
+        self.w_jump = self._make_param(self._params, "w_jump")
+        self.Delta_I = self._make_param(self._params, "Delta_I")
+        self.I_ext = self._make_param(self._params, "I_ext")
         self.v_max = tf.constant(10.0, dtype=neuraltide.config.get_dtype())
 
         dtype = neuraltide.config.get_dtype()
@@ -149,7 +150,7 @@ class IzhikevichMeanField(PopulationModel):
         max_len = 1
         for key, spec in params.items():
             if isinstance(spec, dict):
-                value = spec.get('value', None)
+                value = spec.get("value", None)
             else:
                 value = spec
 
@@ -169,7 +170,7 @@ class IzhikevichMeanField(PopulationModel):
         max_len = 1
         for key, spec in self._params.items():
             if isinstance(spec, dict):
-                value = spec.get('value', None)
+                value = spec.get("value", None)
             else:
                 value = spec
 
@@ -188,7 +189,7 @@ class IzhikevichMeanField(PopulationModel):
         """Validate that all parameters have consistent dimensions (1 or n_units)."""
         for key, spec in self._params.items():
             if isinstance(spec, dict):
-                value = spec.get('value', None)
+                value = spec.get("value", None)
             else:
                 value = spec
 
@@ -210,7 +211,7 @@ class IzhikevichMeanField(PopulationModel):
 
     def _validate_params(self) -> None:
         """Validate that all required parameters are present."""
-        required = ['tau_pop', 'alpha', 'a', 'b', 'w_jump', 'Delta_I', 'I_ext']
+        required = ["tau_pop", "alpha", "a", "b", "w_jump", "Delta_I", "I_ext"]
         for name in required:
             if name not in self._params:
                 raise ValueError(
@@ -237,11 +238,12 @@ class IzhikevichMeanField(PopulationModel):
             dict with keys tau_pop, alpha, a, b, w_jump, Delta_I, I_ext
             Each value is a list of length n_units.
         """
+
         def process_param(value, param_name):
             """Convert scalar/list/np.ndarray/dict to list of length n_units."""
             if isinstance(value, dict):
-                value = value.get('value', value)
-            
+                value = value.get("value", value)
+
             if isinstance(value, (list, tuple)):
                 if len(value) == n_units:
                     return [float(v) for v in value]
@@ -267,36 +269,41 @@ class IzhikevichMeanField(PopulationModel):
             else:
                 return [float(value) for _ in range(n_units)]
 
-        V_rest = process_param(params['V_rest'], 'V_rest')
-        V_T = process_param(params['V_T'], 'V_T')
-        Cm = process_param(params['Cm'], 'Cm')
-        K = process_param(params['K'], 'K')
-        A = process_param(params['A'], 'A')
-        B = process_param(params['B'], 'B')
-        W_jump = process_param(params['W_jump'], 'W_jump')
-        Delta_I = process_param(params['Delta_I'], 'Delta_I')
-        I_ext = process_param(params['I_ext'], 'I_ext')
+        V_rest = process_param(params["V_rest"], "V_rest")
+        V_T = process_param(params["V_T"], "V_T")
+        Cm = process_param(params["Cm"], "Cm")
+        K = process_param(params["K"], "K")
+        A = process_param(params["A"], "A")
+        B = process_param(params["B"], "B")
+        W_jump = process_param(params["W_jump"], "W_jump")
+        Delta_I = process_param(params["Delta_I"], "Delta_I")
+        I_ext = process_param(params["I_ext"], "I_ext")
 
         tau_pop = [Cm[i] / (K[i] * abs(V_rest[i])) for i in range(n_units)]
         alpha = [1.0 + V_T[i] / abs(V_rest[i]) for i in range(n_units)]
         a = [Cm[i] * A[i] / (K[i] * abs(V_rest[i])) for i in range(n_units)]
         b = [B[i] / (K[i] * abs(V_rest[i])) for i in range(n_units)]
-        w_jump = [W_jump[i] / (K[i] * abs(V_rest[i])**2) for i in range(n_units)]
-        Delta_I_dimless = [Delta_I[i] / (K[i] * abs(V_rest[i])**2) for i in range(n_units)]
-        I_ext_dimless = [I_ext[i] / (K[i] * abs(V_rest[i])**2) for i in range(n_units)]
+        w_jump = [W_jump[i] / (K[i] * abs(V_rest[i]) ** 2) for i in range(n_units)]
+        Delta_I_dimless = [
+            Delta_I[i] / (K[i] * abs(V_rest[i]) ** 2) for i in range(n_units)
+        ]
+        I_ext_dimless = [
+            I_ext[i] / (K[i] * abs(V_rest[i]) ** 2) for i in range(n_units)
+        ]
 
         return {
-            'tau_pop': tau_pop,
-            'alpha': alpha,
-            'a': a,
-            'b': b,
-            'w_jump': w_jump,
-            'Delta_I': Delta_I_dimless,
-            'I_ext': I_ext_dimless,
+            "tau_pop": tau_pop,
+            "alpha": alpha,
+            "a": a,
+            "b": b,
+            "w_jump": w_jump,
+            "Delta_I": Delta_I_dimless,
+            "I_ext": I_ext_dimless,
         }
 
     def _build_params_from_dimensional(
-        self, params,
+        self,
+        params,
     ) -> Dict[str, Any]:
         """Convert dimensional parameters to dimensionless.
 
@@ -312,7 +319,7 @@ class IzhikevichMeanField(PopulationModel):
             a        -> composite (non-trainable, no constraints)
             b        -> composite (non-trainable, no constraints)
         """
-        required = ['V_rest', 'V_T', 'Cm', 'K', 'A', 'B', 'W_jump', 'Delta_I', 'I_ext']
+        required = ["V_rest", "V_T", "Cm", "K", "A", "B", "W_jump", "Delta_I", "I_ext"]
         missing_keys = [k for k in required if k not in params]
         if missing_keys:
             raise ValueError(
@@ -329,12 +336,12 @@ class IzhikevichMeanField(PopulationModel):
             raw = params.get(key)
             if isinstance(raw, dict):
                 return {
-                    'value': raw.get('value'),
-                    'trainable': raw.get('trainable', False),
-                    'min': raw.get('min', None),
-                    'max': raw.get('max', None),
+                    "value": raw.get("value"),
+                    "trainable": raw.get("trainable", False),
+                    "min": raw.get("min", None),
+                    "max": raw.get("max", None),
                 }
-            return {'value': raw, 'trainable': False, 'min': None, 'max': None}
+            return {"value": raw, "trainable": False, "min": None, "max": None}
 
         def _to_list(raw_val):
             """Convert scalar or list value to a list of length n_units."""
@@ -363,16 +370,16 @@ class IzhikevichMeanField(PopulationModel):
             return lo_out, hi_out
 
         # Scale factor for Delta_I, I_ext, w_jump (all use 1/(K*V_rest^2))
-        V_rest_vals = _to_list(_dim_spec('V_rest')['value'])
-        K_vals = _to_list(_dim_spec('K')['value'])
-        scale_v2 = [K_vals[i] * V_rest_vals[i]**2 for i in range(self.n_units)]
+        V_rest_vals = _to_list(_dim_spec("V_rest")["value"])
+        K_vals = _to_list(_dim_spec("K")["value"])
+        scale_v2 = [K_vals[i] * V_rest_vals[i] ** 2 for i in range(self.n_units)]
 
         # Which dimensionless params map directly to a dimensional source
         # (and use the scale_v2 divisor)
         direct_map = {
-            'Delta_I': 'Delta_I',
-            'I_ext': 'I_ext',
-            'w_jump': 'W_jump',
+            "Delta_I": "Delta_I",
+            "I_ext": "I_ext",
+            "w_jump": "W_jump",
         }
 
         dtype = neuraltide.config.get_dtype()
@@ -382,17 +389,17 @@ class IzhikevichMeanField(PopulationModel):
             src_key = direct_map.get(dimless_key)
             if src_key is not None:
                 src = _dim_spec(src_key)
-                trainable = src['trainable']
-                lo, hi = _convert_bounds(src['min'], src['max'], scale_v2)
+                trainable = src["trainable"]
+                lo, hi = _convert_bounds(src["min"], src["max"], scale_v2)
             else:
                 trainable = False
                 lo, hi = None, None
 
             result[dimless_key] = {
-                'value': tf.constant(dimless_vals, dtype=dtype),
-                'trainable': trainable,
-                'min': lo,
-                'max': hi,
+                "value": tf.constant(dimless_vals, dtype=dtype),
+                "trainable": trainable,
+                "min": lo,
+                "max": hi,
             }
 
         return result
@@ -461,11 +468,20 @@ class IzhikevichMeanField(PopulationModel):
         v = state[1]
         w = state[2]
 
-        g_syn_tot = total_synaptic_input['g_syn']
-        I_syn = total_synaptic_input['I_syn']
+        g_syn_tot = total_synaptic_input["g_syn"]
+        I_syn = total_synaptic_input["I_syn"]
 
-        drdt = (self.Delta_I / self.PI + 2.0 * r * v - (self.alpha + g_syn_tot) * r) / self.tau_pop
-        dvdt = (v**2 / (1 + (v/self.v_max)**2) - self.alpha * v - w + self.I_ext + I_syn - (self.PI * r)**2) / self.tau_pop
+        drdt = (
+            self.Delta_I / self.PI + 2.0 * r * v - (self.alpha + g_syn_tot) * r
+        ) / self.tau_pop
+        dvdt = (
+            v**2 / (1 + (v / self.v_max) ** 2)
+            - self.alpha * v
+            - w
+            + self.I_ext
+            + I_syn
+            - (self.PI * r) ** 2
+        ) / self.tau_pop
         dwdt = (self.a * (self.b * v - w) + self.w_jump * r) / self.tau_pop
 
         # drdt = neuraltide.config.maybe_check_numerics(drdt, f'IzhikevichMeanField dr/dt NaN')
@@ -495,9 +511,9 @@ class IzhikevichMeanField(PopulationModel):
         """
         r, v, w = state
         return {
-            'firing_rate': self.get_firing_rate(state),
-            'v_mean': v,
-            'w_mean': w,
+            "firing_rate": self.get_firing_rate(state),
+            "v_mean": v,
+            "w_mean": w,
         }
 
     def adjoint_derivatives(
@@ -538,7 +554,7 @@ class IzhikevichMeanField(PopulationModel):
         v = state[1]
         # w = state[2]
 
-        g_syn = total_synaptic_input.get('g_syn', tf.zeros_like(r))
+        g_syn = total_synaptic_input.get("g_syn", tf.zeros_like(r))
         # I_syn = total_synaptic_input.get('I_syn', tf.zeros_like(r))
 
         lambda_r = adjoint_state[0]
@@ -551,7 +567,7 @@ class IzhikevichMeanField(PopulationModel):
         dr_dv = 2.0 * r / self.tau_pop
         dr_dw = tf.zeros_like(r)
 
-        dv_dr = -2.0 * (PI ** 2) * r / self.tau_pop
+        dv_dr = -2.0 * (PI**2) * r / self.tau_pop
         dv_dv = (2.0 * v - self.alpha) / self.tau_pop
         dv_dw = -1.0 / self.tau_pop
 
@@ -615,26 +631,26 @@ class IzhikevichMeanField(PopulationModel):
         # g_syn = total_synaptic_input.get('g_syn', tf.zeros_like(r))
         # I_syn = total_synaptic_input.get('I_syn', tf.zeros_like(r))
 
-        if param_name == 'Delta_I':
+        if param_name == "Delta_I":
             ones = tf.ones_like(r)
             return ones / (self.PI * self.tau_pop)
-        elif param_name == 'I_ext':
+        elif param_name == "I_ext":
             ones = tf.ones_like(r)
             return ones / self.tau_pop
-        elif param_name == 'tau_pop':
+        elif param_name == "tau_pop":
             return tf.zeros_like(r)
-        elif param_name == 'alpha':
+        elif param_name == "alpha":
             # Return scalar for simplicity, adjoint will use first component
             ones = tf.ones_like(r)
             return -ones / self.tau_pop
-        elif param_name == 'a':
+        elif param_name == "a":
             ones = tf.ones_like(r)
             return ones / self.tau_pop
-        elif param_name == 'b':
+        elif param_name == "b":
             v = state[1]
             ones = tf.ones_like(r)
             return self.a * v / self.tau_pop
-        elif param_name == 'w_jump':
+        elif param_name == "w_jump":
             ones = tf.ones_like(r)
             return ones / self.tau_pop
         else:
@@ -644,47 +660,47 @@ class IzhikevichMeanField(PopulationModel):
     def parameter_spec(self) -> Dict[str, Dict[str, Any]]:
         """Specification of all parameters for summary and serialization."""
         return {
-            'tau_pop': {
-                'shape': (self.n_units,),
-                'trainable': self.tau_pop.trainable,
-                'constraint': self._get_constraint_name(self.tau_pop),
-                'units': 'ms',
+            "tau_pop": {
+                "shape": (self.n_units,),
+                "trainable": self.tau_pop.trainable,
+                "constraint": self._get_constraint_name(self.tau_pop),
+                "units": "ms",
             },
-            'alpha': {
-                'shape': (self.n_units,),
-                'trainable': self.alpha.trainable,
-                'constraint': self._get_constraint_name(self.alpha),
-                'units': 'dimensionless',
+            "alpha": {
+                "shape": (self.n_units,),
+                "trainable": self.alpha.trainable,
+                "constraint": self._get_constraint_name(self.alpha),
+                "units": "dimensionless",
             },
-            'a': {
-                'shape': (self.n_units,),
-                'trainable': self.a.trainable,
-                'constraint': self._get_constraint_name(self.a),
-                'units': 'dimensionless',
+            "a": {
+                "shape": (self.n_units,),
+                "trainable": self.a.trainable,
+                "constraint": self._get_constraint_name(self.a),
+                "units": "dimensionless",
             },
-            'b': {
-                'shape': (self.n_units,),
-                'trainable': self.b.trainable,
-                'constraint': self._get_constraint_name(self.b),
-                'units': 'dimensionless',
+            "b": {
+                "shape": (self.n_units,),
+                "trainable": self.b.trainable,
+                "constraint": self._get_constraint_name(self.b),
+                "units": "dimensionless",
             },
-            'w_jump': {
-                'shape': (self.n_units,),
-                'trainable': self.w_jump.trainable,
-                'constraint': self._get_constraint_name(self.w_jump),
-                'units': 'dimensionless',
+            "w_jump": {
+                "shape": (self.n_units,),
+                "trainable": self.w_jump.trainable,
+                "constraint": self._get_constraint_name(self.w_jump),
+                "units": "dimensionless",
             },
-            'Delta_I': {
-                'shape': (self.n_units,),
-                'trainable': self.Delta_I.trainable,
-                'constraint': self._get_constraint_name(self.Delta_I),
-                'units': 'dimensionless',
+            "Delta_I": {
+                "shape": (self.n_units,),
+                "trainable": self.Delta_I.trainable,
+                "constraint": self._get_constraint_name(self.Delta_I),
+                "units": "dimensionless",
             },
-            'I_ext': {
-                'shape': (self.n_units,),
-                'trainable': self.I_ext.trainable,
-                'constraint': self._get_constraint_name(self.I_ext),
-                'units': 'dimensionless',
+            "I_ext": {
+                "shape": (self.n_units,),
+                "trainable": self.I_ext.trainable,
+                "constraint": self._get_constraint_name(self.I_ext),
+                "units": "dimensionless",
             },
         }
 
@@ -736,11 +752,11 @@ class IzhikevichMeanField(PopulationModel):
         V_rest_abs = abs(V_rest)
         Cm = tau_pop * K * V_rest_abs
         return {
-            'V_T': (alpha - 1.0) * V_rest_abs,
-            'Cm': Cm,
-            'A': a * K * V_rest_abs / Cm,
-            'B': b * K * V_rest_abs,
-            'W_jump': w_jump * K * V_rest_abs**2,
-            'Delta_I': Delta_I * K * V_rest_abs**2,
-            'I_ext': I_ext * K * V_rest_abs**2,
+            "V_T": (alpha - 1.0) * V_rest_abs,
+            "Cm": Cm,
+            "A": a * K * V_rest_abs / Cm,
+            "B": b * K * V_rest_abs,
+            "W_jump": w_jump * K * V_rest_abs**2,
+            "Delta_I": Delta_I * K * V_rest_abs**2,
+            "I_ext": I_ext * K * V_rest_abs**2,
         }

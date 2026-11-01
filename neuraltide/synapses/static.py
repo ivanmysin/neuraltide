@@ -20,9 +20,9 @@ class StaticSynapse(SynapseModel):
     def __init__(self, n_pre: int, n_post: int, dt: float, params: dict, **kwargs):
         super().__init__(n_pre=n_pre, n_post=n_post, dt=dt, **kwargs)
 
-        self.gsyn_max = self._make_param(params, 'gsyn_max')
-        self.pconn = self._make_param(params, 'pconn')
-        self.e_r = self._make_param(params, 'e_r')
+        self.gsyn_max = self._make_param(params, "gsyn_max")
+        self.pconn = self._make_param(params, "pconn")
+        self.e_r = self._make_param(params, "e_r")
 
         self.state_size = []
 
@@ -56,7 +56,7 @@ class StaticSynapse(SynapseModel):
         I_syn = tf.reduce_sum(I_pair, axis=0, keepdims=True)
         g_syn = tf.reduce_sum(gsyn_max * FRpre_normed, axis=0, keepdims=True)
 
-        return ({'I_syn': I_syn, 'g_syn': g_syn}, [])
+        return ({"I_syn": I_syn, "g_syn": g_syn}, [])
 
     def derivatives(
         self,
@@ -96,7 +96,7 @@ class StaticSynapse(SynapseModel):
         I_syn = tf.reduce_sum(I_pair, axis=0, keepdims=True)
         g_syn = tf.reduce_sum(gsyn_max * FRpre_normed, axis=0, keepdims=True)
 
-        return {'I_syn': I_syn, 'g_syn': g_syn}
+        return {"I_syn": I_syn, "g_syn": g_syn}
 
     def adjoint_derivatives(
         self,
@@ -153,32 +153,31 @@ class StaticSynapse(SynapseModel):
         lam_g_sum = tf.reduce_sum(lam_g, axis=0)
 
         if self.gsyn_max.trainable:
-            dgsyn_max = FRpre_normed * (
-                lam_I_sum * (e_r - post_voltage) + lam_g_sum)
+            dgsyn_max = FRpre_normed * (lam_I_sum * (e_r - post_voltage) + lam_g_sum)
         else:
             dgsyn_max = tf.zeros_like(gsyn_max)
 
-        return {'gsyn_max': dgsyn_max}
+        return {"gsyn_max": dgsyn_max}
 
     @property
     def parameter_spec(self) -> Dict[str, Dict[str, any]]:
         return {
-            'gsyn_max': {
-                'shape': (self.n_pre, self.n_post),
-                'trainable': self.gsyn_max.trainable,
-                'constraint': 'NonNegConstraint',
-                'units': 'mS/cm^2',
+            "gsyn_max": {
+                "shape": (self.n_pre, self.n_post),
+                "trainable": self.gsyn_max.trainable,
+                "constraint": "NonNegConstraint",
+                "units": "mS/cm^2",
             },
-            'pconn': {
-                'shape': (self.n_pre, self.n_post),
-                'trainable': False,
-                'constraint': 'UnitIntervalConstraint',
-                'units': 'dimensionless',
+            "pconn": {
+                "shape": (self.n_pre, self.n_post),
+                "trainable": False,
+                "constraint": "UnitIntervalConstraint",
+                "units": "dimensionless",
             },
-            'e_r': {
-                'shape': (self.n_pre, self.n_post),
-                'trainable': False,
-                'constraint': None,
-                'units': 'mV',
+            "e_r": {
+                "shape": (self.n_pre, self.n_post),
+                "trainable": False,
+                "constraint": None,
+                "units": "mV",
             },
         }

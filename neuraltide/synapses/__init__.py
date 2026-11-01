@@ -5,10 +5,10 @@ from neuraltide.synapses.composite import CompositeSynapse
 
 import neuraltide.config
 
-neuraltide.config.register_synapse('TsodyksMarkramSynapse', TsodyksMarkramSynapse)
-neuraltide.config.register_synapse('NMDASynapse', NMDASynapse)
-neuraltide.config.register_synapse('StaticSynapse', StaticSynapse)
-neuraltide.config.register_synapse('CompositeSynapse', CompositeSynapse)
+neuraltide.config.register_synapse("TsodyksMarkramSynapse", TsodyksMarkramSynapse)
+neuraltide.config.register_synapse("NMDASynapse", NMDASynapse)
+neuraltide.config.register_synapse("StaticSynapse", StaticSynapse)
+neuraltide.config.register_synapse("CompositeSynapse", CompositeSynapse)
 
 __all__ = [
     "TsodyksMarkramSynapse",

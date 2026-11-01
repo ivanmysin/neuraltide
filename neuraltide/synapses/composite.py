@@ -25,7 +25,7 @@ class CompositeSynapse(SynapseModel):
         n_post: int,
         dt: float,
         components: List[Tuple[str, SynapseModel]],
-        **kwargs
+        **kwargs,
     ):
         super().__init__(n_pre=n_pre, n_post=n_post, dt=dt, **kwargs)
 
@@ -57,18 +57,18 @@ class CompositeSynapse(SynapseModel):
 
         for name, syn in self.components:
             n_syn_states = len(syn.state_size)
-            syn_state = state[state_idx:state_idx + n_syn_states]
+            syn_state = state[state_idx : state_idx + n_syn_states]
             state_idx += n_syn_states
 
             current_dict, new_syn_state = syn.forward(
                 pre_firing_rate, post_voltage, syn_state, dt
             )
 
-            total_I_syn += current_dict['I_syn']
-            total_g_syn += current_dict['g_syn']
+            total_I_syn += current_dict["I_syn"]
+            total_g_syn += current_dict["g_syn"]
             new_states.extend(new_syn_state)
 
-        return ({'I_syn': total_I_syn, 'g_syn': total_g_syn}, new_states)
+        return ({"I_syn": total_I_syn, "g_syn": total_g_syn}, new_states)
 
     def derivatives(
         self,
@@ -84,7 +84,7 @@ class CompositeSynapse(SynapseModel):
 
         for name, syn in self.components:
             n_syn_states = len(syn.state_size)
-            syn_state = state[state_idx:state_idx + n_syn_states]
+            syn_state = state[state_idx : state_idx + n_syn_states]
             state_idx += n_syn_states
 
             comp_derivs = syn.derivatives(syn_state, pre_firing_rate, post_voltage)
@@ -109,14 +109,14 @@ class CompositeSynapse(SynapseModel):
 
         for name, syn in self.components:
             n_syn_states = len(syn.state_size)
-            syn_state = state[state_idx:state_idx + n_syn_states]
+            syn_state = state[state_idx : state_idx + n_syn_states]
             state_idx += n_syn_states
 
             comp_current = syn.compute_current(syn_state, pre_firing_rate, post_voltage)
-            total_I_syn += comp_current['I_syn']
-            total_g_syn += comp_current['g_syn']
+            total_I_syn += comp_current["I_syn"]
+            total_g_syn += comp_current["g_syn"]
 
-        return {'I_syn': total_I_syn, 'g_syn': total_g_syn}
+        return {"I_syn": total_I_syn, "g_syn": total_g_syn}
 
     @property
     def parameter_spec(self) -> Dict[str, Dict[str, any]]:
@@ -139,9 +139,13 @@ class CompositeSynapse(SynapseModel):
         lam_idx = 0
         for name, syn in self.components:
             n = len(syn.state_size)
-            syn_state = state[state_idx:state_idx + n]
-            syn_lam = adjoint_state[lam_idx:lam_idx + n]
-            derivs.extend(syn.adjoint_derivatives(syn_lam, syn_state, pre_firing_rate, post_voltage))
+            syn_state = state[state_idx : state_idx + n]
+            syn_lam = adjoint_state[lam_idx : lam_idx + n]
+            derivs.extend(
+                syn.adjoint_derivatives(
+                    syn_lam, syn_state, pre_firing_rate, post_voltage
+                )
+            )
             state_idx += n
             lam_idx += n
         return derivs
@@ -153,14 +157,16 @@ class CompositeSynapse(SynapseModel):
         pre_firing_rate: TensorType,
         post_voltage: TensorType,
     ) -> TensorType:
-        prefix = param_name.split('_', 1)[0]
-        rest = param_name[len(prefix) + 1:]
+        prefix = param_name.split("_", 1)[0]
+        rest = param_name[len(prefix) + 1 :]
         state_idx = 0
         for name, syn in self.components:
             n = len(syn.state_size)
-            syn_state = state[state_idx:state_idx + n]
+            syn_state = state[state_idx : state_idx + n]
             if name == prefix:
-                return syn.parameter_jacobian(rest, syn_state, pre_firing_rate, post_voltage)
+                return syn.parameter_jacobian(
+                    rest, syn_state, pre_firing_rate, post_voltage
+                )
             state_idx += n
         dtype = neuraltide.config.get_dtype()
         return tf.zeros([self.n_pre, self.n_post], dtype=dtype)
@@ -177,9 +183,11 @@ class CompositeSynapse(SynapseModel):
         state_idx = 0
         for name, syn in self.components:
             n = len(syn.state_size)
-            syn_state = state[state_idx:state_idx + n]
+            syn_state = state[state_idx : state_idx + n]
             try:
-                contrib = syn.compute_current_state_vjp(lam_I, lam_g, syn_state, pre_firing_rate, post_voltage)
+                contrib = syn.compute_current_state_vjp(
+                    lam_I, lam_g, syn_state, pre_firing_rate, post_voltage
+                )
             except NotImplementedError:
                 contrib = [tf.zeros_like(s) for s in syn_state]
             result.extend(contrib)
@@ -198,10 +206,11 @@ class CompositeSynapse(SynapseModel):
         state_idx = 0
         for name, syn in self.components:
             n = len(syn.state_size)
-            syn_state = state[state_idx:state_idx + n]
+            syn_state = state[state_idx : state_idx + n]
             try:
                 comp_grad = syn.compute_current_param_grad(
-                    lam_I, lam_g, syn_state, pre_firing_rate, post_voltage)
+                    lam_I, lam_g, syn_state, pre_firing_rate, post_voltage
+                )
                 for pname, grad_val in comp_grad.items():
                     result[f"{name}_{pname}"] = grad_val
             except NotImplementedError:

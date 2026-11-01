@@ -9,6 +9,7 @@ from neuraltide.integrators import EulerIntegrator, HeunIntegrator, RK4Integrato
 @dataclass
 class PopulationConfig:
     """Конфигурация популяции."""
+
     name: str
     model_class: str
     dt: float
@@ -18,18 +19,20 @@ class PopulationConfig:
 @dataclass
 class SynapseConfig:
     """Конфигурация синапса."""
+
     name: str
     synapse_class: str
     src: str
     tgt: str
     dt: float
     params: Dict[str, Any]
-    components: Optional[List['SynapseConfig']] = None
+    components: Optional[List["SynapseConfig"]] = None
 
 
 @dataclass
 class InputConfig:
     """Конфигурация входного генератора."""
+
     name: str
     generator_class: str
     params: Dict[str, Any]
@@ -38,6 +41,7 @@ class InputConfig:
 @dataclass
 class NetworkConfig:
     """Полная конфигурация сети."""
+
     dt: float
     integrator: str
     populations: List[PopulationConfig]
@@ -50,12 +54,14 @@ class NetworkConfig:
 def _get_integrator(name: str) -> Any:
     """Возвращает класс интегратора по имени."""
     integrators = {
-        'euler': EulerIntegrator,
-        'heun': HeunIntegrator,
-        'rk4': RK4Integrator,
+        "euler": EulerIntegrator,
+        "heun": HeunIntegrator,
+        "rk4": RK4Integrator,
     }
     if name not in integrators:
-        raise ValueError(f"Unknown integrator: {name}. Available: {list(integrators.keys())}")
+        raise ValueError(
+            f"Unknown integrator: {name}. Available: {list(integrators.keys())}"
+        )
     return integrators[name]()
 
 
@@ -102,33 +108,39 @@ def build_network_from_config(
         if syn_config.components is not None:
             components = []
             for comp_config in syn_config.components:
-                comp_syn_class = neuraltide.config.SYNAPSE_REGISTRY.get(comp_config.synapse_class)
+                comp_syn_class = neuraltide.config.SYNAPSE_REGISTRY.get(
+                    comp_config.synapse_class
+                )
                 if comp_syn_class is None:
-                    raise ValueError(f"Unknown synapse component: {comp_config.synapse_class}")
+                    raise ValueError(
+                        f"Unknown synapse component: {comp_config.synapse_class}"
+                    )
                 comp_syn = comp_syn_class(
-                    n_pre=syn_config.params.get('n_pre'),
-                    n_post=syn_config.params.get('n_post'),
+                    n_pre=syn_config.params.get("n_pre"),
+                    n_post=syn_config.params.get("n_post"),
                     dt=syn_config.dt,
                     params=comp_config.params,
                     name=comp_config.name,
                 )
                 components.append((comp_config.name, comp_syn))
-            synapse = neuraltide.config.SYNAPSE_REGISTRY['CompositeSynapse'](
-                n_pre=syn_config.params.get('n_pre'),
-                n_post=syn_config.params.get('n_post'),
+            synapse = neuraltide.config.SYNAPSE_REGISTRY["CompositeSynapse"](
+                n_pre=syn_config.params.get("n_pre"),
+                n_post=syn_config.params.get("n_post"),
                 dt=syn_config.dt,
                 components=components,
                 name=syn_config.name,
             )
         else:
             synapse = syn_class(
-                n_pre=syn_config.params.get('n_pre'),
-                n_post=syn_config.params.get('n_post'),
+                n_pre=syn_config.params.get("n_pre"),
+                n_post=syn_config.params.get("n_post"),
                 dt=syn_config.dt,
                 params=syn_config.params,
                 name=syn_config.name,
             )
-        graph.add_synapse(syn_config.name, synapse, src=syn_config.src, tgt=syn_config.tgt)
+        graph.add_synapse(
+            syn_config.name, synapse, src=syn_config.src, tgt=syn_config.tgt
+        )
 
     integrator = _get_integrator(config.integrator)
 

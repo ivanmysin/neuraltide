@@ -1,4 +1,3 @@
-import pytest
 import tensorflow as tf
 
 import neuraltide
@@ -41,7 +40,7 @@ class NonlinearOscillatorPopulation(PopulationModel):
 
     def derivatives(self, state, total_synaptic_input):
         x = state[0]
-        dxdt = x - x ** 3
+        dxdt = x - x**3
         return [dxdt]
 
     def get_firing_rate(self, state):
@@ -65,8 +64,9 @@ class TestEulerIntegrator:
         state = pop.get_initial_state()
 
         for _ in range(n_steps):
-            state, _ = integrator.step(pop, state, {'I_syn': tf.zeros([1, 1]),
-                                                     'g_syn': tf.zeros([1, 1])})
+            state, _ = integrator.step(
+                pop, state, {"I_syn": tf.zeros([1, 1]), "g_syn": tf.zeros([1, 1])}
+            )
 
         numerical = float(state[0].numpy()[0, 0])
         error = abs(numerical - analytical)
@@ -83,7 +83,7 @@ class TestEulerIntegrator:
         state = pop.get_initial_state()
 
         _, local_error = integrator.step(
-            pop, state, {'I_syn': tf.zeros([1, 1]), 'g_syn': tf.zeros([1, 1])}
+            pop, state, {"I_syn": tf.zeros([1, 1]), "g_syn": tf.zeros([1, 1])}
         )
 
         assert tf.reduce_all(local_error == 0.0)
@@ -102,8 +102,9 @@ class TestHeunIntegrator:
         state = pop.get_initial_state()
 
         for _ in range(n_steps):
-            state, _ = integrator.step(pop, state, {'I_syn': tf.zeros([1, 1]),
-                                                      'g_syn': tf.zeros([1, 1])})
+            state, _ = integrator.step(
+                pop, state, {"I_syn": tf.zeros([1, 1]), "g_syn": tf.zeros([1, 1])}
+            )
 
         numerical = float(state[0].numpy()[0, 0])
         error = abs(numerical - analytical)
@@ -127,8 +128,9 @@ class TestRK4Integrator:
         state = pop.get_initial_state()
 
         for _ in range(n_steps):
-            state, _ = integrator.step(pop, state, {'I_syn': tf.zeros([1, 1]),
-                                                      'g_syn': tf.zeros([1, 1])})
+            state, _ = integrator.step(
+                pop, state, {"I_syn": tf.zeros([1, 1]), "g_syn": tf.zeros([1, 1])}
+            )
 
         numerical = float(state[0].numpy()[0, 0])
         error = abs(numerical - analytical)
@@ -145,7 +147,7 @@ class TestRK4Integrator:
         state = pop.get_initial_state()
 
         _, local_error = integrator.step(
-            pop, state, {'I_syn': tf.zeros([1, 1]), 'g_syn': tf.zeros([1, 1])}
+            pop, state, {"I_syn": tf.zeros([1, 1]), "g_syn": tf.zeros([1, 1])}
         )
 
         assert float(local_error[0]) > 0.0
@@ -161,7 +163,7 @@ class TestIntegratorsTFFunction:
         def one_step():
             state = pop.get_initial_state()
             new_state, _ = integrator.step(
-                pop, state, {'I_syn': tf.zeros([1, 1]), 'g_syn': tf.zeros([1, 1])}
+                pop, state, {"I_syn": tf.zeros([1, 1]), "g_syn": tf.zeros([1, 1])}
             )
             return new_state
 
@@ -178,7 +180,7 @@ class TestIntegratorsTFFunction:
         def one_step():
             state = pop.get_initial_state()
             new_state, _ = integrator.step(
-                pop, state, {'I_syn': tf.zeros([1, 1]), 'g_syn': tf.zeros([1, 1])}
+                pop, state, {"I_syn": tf.zeros([1, 1]), "g_syn": tf.zeros([1, 1])}
             )
             return new_state
 
@@ -195,7 +197,7 @@ class TestIntegratorsTFFunction:
         def one_step():
             state = pop.get_initial_state()
             new_state, _ = integrator.step(
-                pop, state, {'I_syn': tf.zeros([1, 1]), 'g_syn': tf.zeros([1, 1])}
+                pop, state, {"I_syn": tf.zeros([1, 1]), "g_syn": tf.zeros([1, 1])}
             )
             return new_state
 

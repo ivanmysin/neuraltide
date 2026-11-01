@@ -7,16 +7,16 @@ Keras-совместимая обёртка для NetworkRNN.
     model.compile(optimizer='adam')
     model.fit(inputs, targets, epochs=100)
 """
-from typing import Dict, List, Optional, Tuple
+
+from typing import List, Optional, Tuple
 
 import tensorflow as tf
 
 import neuraltide
 from neuraltide.core.network import NetworkGraph, NetworkRNN, NetworkOutput
-from neuraltide.core.base import BaseInputGenerator
 from neuraltide.core.types import TensorType, StateList
 from neuraltide.integrators.base import BaseIntegrator
-from neuraltide.training.losses import BaseLoss, CompositeLoss
+from neuraltide.training.losses import BaseLoss
 
 
 class BrainModelKeras(tf.keras.Model):
@@ -57,7 +57,8 @@ class BrainModelKeras(tf.keras.Model):
         self._dt = dt
         self._loss_fn = loss_fn
         self._network = NetworkRNN(
-            graph, integrator,
+            graph,
+            integrator,
             stability_penalty_weight=stability_penalty_weight,
         )
         self._graph = graph
@@ -86,16 +87,18 @@ class BrainModelKeras(tf.keras.Model):
             inputs = inputs[tf.newaxis]
         elif inputs.shape.rank == 3:
             # [batch, T, units] -> [1, T, units] (берём первый样本)
-            inputs = tf.reshape(inputs[0], [1, tf.shape(inputs)[1], tf.shape(inputs)[2]])
+            inputs = tf.reshape(
+                inputs[0], [1, tf.shape(inputs)[1], tf.shape(inputs)[2]]
+            )
 
         # Генерируем t_sequence из dt и T
         T = tf.shape(inputs)[1]
         t_values = tf.cast(tf.range(T), inputs.dtype) * self._dt
         t_sequence = t_values[tf.newaxis, :, tf.newaxis]  # [1, T, 1]
 
-        return self._network(t_sequence, inputs=inputs,
-                             initial_state=initial_state,
-                             training=training)
+        return self._network(
+            t_sequence, inputs=inputs, initial_state=initial_state, training=training
+        )
 
     def train_step(self, data):
         """Один шаг обучения (Keras convention)."""
@@ -126,15 +129,17 @@ class BrainModelKeras(tf.keras.Model):
         # Обновляем веса
         trainable_vars = self._network.trainable_variables
         grads = tape.gradient(loss, trainable_vars)
-        grads_and_vars = [(g, v) for g, v in zip(grads, trainable_vars) if g is not None]
+        grads_and_vars = [
+            (g, v) for g, v in zip(grads, trainable_vars) if g is not None
+        ]
         if grads_and_vars:
             self.optimizer.apply_gradients(grads_and_vars)
 
         # Метрики
-        metrics = {'loss': loss}
-        if hasattr(self, 'metrics') and self.metrics:
+        metrics = {"loss": loss}
+        if hasattr(self, "metrics") and self.metrics:
             for metric in self.metrics:
-                if metric.name == 'loss':
+                if metric.name == "loss":
                     metric.update_state(loss)
 
         return metrics
@@ -162,7 +167,7 @@ class BrainModelKeras(tf.keras.Model):
         else:
             loss = tf.constant(0.0, dtype=neuraltide.config.get_dtype())
 
-        return {'loss': loss}
+        return {"loss": loss}
 
     @property
     def network(self) -> NetworkRNN:

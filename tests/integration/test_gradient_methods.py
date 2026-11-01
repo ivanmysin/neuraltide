@@ -7,18 +7,17 @@ These tests verify:
 3. Memory usage comparison between methods
 4. Long sequence handling with adjoint method
 """
+
 import pytest
 import tensorflow as tf
 import numpy as np
 
-import neuraltide
-from neuraltide.config import set_dtype, get_dtype
 from neuraltide.core.network import NetworkGraph, NetworkRNN
 from neuraltide.populations import IzhikevichMeanField
 from neuraltide.synapses import TsodyksMarkramSynapse, NMDASynapse, StaticSynapse
 from neuraltide.inputs import VonMisesGenerator
-from neuraltide.integrators import RK4Integrator, EulerIntegrator
-from neuraltide.training import Trainer, CompositeLoss, MSELoss
+from neuraltide.integrators import RK4Integrator
+from neuraltide.training import MSELoss
 from neuraltide.utils import seed_everything
 
 
@@ -30,26 +29,26 @@ def dt():
 @pytest.fixture
 def izh_params():
     return {
-        'tau_pop': {'value': [1.0, 1.0], 'trainable': False},
-        'alpha': {'value': [0.5, 0.5], 'trainable': False},
-        'a': {'value': [0.02, 0.02], 'trainable': False},
-        'b': {'value': [0.2, 0.2], 'trainable': False},
-        'w_jump': {'value': [0.1, 0.1], 'trainable': False},
-        'Delta_I': {'value': [0.5, 0.6], 'trainable': True, 'min': 0.01, 'max': 2.0},
-        'I_ext': {'value': [1.0, 1.2], 'trainable': True},
+        "tau_pop": {"value": [1.0, 1.0], "trainable": False},
+        "alpha": {"value": [0.5, 0.5], "trainable": False},
+        "a": {"value": [0.02, 0.02], "trainable": False},
+        "b": {"value": [0.2, 0.2], "trainable": False},
+        "w_jump": {"value": [0.1, 0.1], "trainable": False},
+        "Delta_I": {"value": [0.5, 0.6], "trainable": True, "min": 0.01, "max": 2.0},
+        "I_ext": {"value": [1.0, 1.2], "trainable": True},
     }
 
 
 @pytest.fixture
 def synapse_params():
     return {
-        'gsyn_max': {'value': [[0.1, 0.1]], 'trainable': True},
-        'tau_f': {'value': 20.0, 'trainable': True, 'min': 6.0, 'max': 240.0},
-        'tau_d': {'value': 5.0, 'trainable': True, 'min': 2.0, 'max': 15.0},
-        'tau_r': {'value': 200.0, 'trainable': True, 'min': 91.0, 'max': 1300.0},
-        'Uinc': {'value': 0.2, 'trainable': True, 'min': 0.04, 'max': 0.7},
-        'pconn': {'value': [[1.0, 1.0]], 'trainable': False},
-        'e_r': {'value': 0.0, 'trainable': False},
+        "gsyn_max": {"value": [[0.1, 0.1]], "trainable": True},
+        "tau_f": {"value": 20.0, "trainable": True, "min": 6.0, "max": 240.0},
+        "tau_d": {"value": 5.0, "trainable": True, "min": 2.0, "max": 15.0},
+        "tau_r": {"value": 200.0, "trainable": True, "min": 91.0, "max": 1300.0},
+        "Uinc": {"value": 0.2, "trainable": True, "min": 0.04, "max": 0.7},
+        "pconn": {"value": [[1.0, 1.0]], "trainable": False},
+        "e_r": {"value": 0.0, "trainable": False},
     }
 
 
@@ -69,17 +68,20 @@ class TestAdjointVsAutograd:
         pop = IzhikevichMeanField(dt=dt, params=izh_params)
         syn = TsodyksMarkramSynapse(n_pre=1, n_post=2, dt=dt, params=synapse_params)
 
-        gen = VonMisesGenerator(dt=dt, params={
-            'mean_rate': {'value': 20.0, 'trainable': False},
-            'R': {'value': 0.5, 'trainable': False},
-            'freq': {'value': 8.0, 'trainable': False},
-            'phase': {'value': 0.0, 'trainable': False},
-        })
+        gen = VonMisesGenerator(
+            dt=dt,
+            params={
+                "mean_rate": {"value": 20.0, "trainable": False},
+                "R": {"value": 0.5, "trainable": False},
+                "freq": {"value": 8.0, "trainable": False},
+                "phase": {"value": 0.0, "trainable": False},
+            },
+        )
 
         graph = NetworkGraph(dt=dt)
-        graph.declare_input('theta', n_units=gen.n_units)
-        graph.add_population('exc', pop)
-        graph.add_synapse('theta->exc', syn, src='theta', tgt='exc')
+        graph.declare_input("theta", n_units=gen.n_units)
+        graph.add_population("exc", pop)
+        graph.add_synapse("theta->exc", syn, src="theta", tgt="exc")
 
         network_autograd = NetworkRNN(graph, RK4Integrator())
         network_adjoint = NetworkRNN(graph, RK4Integrator())
@@ -87,7 +89,7 @@ class TestAdjointVsAutograd:
         T = 50
         t_values = np.arange(T, dtype=np.float32) * dt
         t_seq = tf.constant(t_values[None, :, None])
-        inputs = graph.pack_inputs({'theta': gen(t_seq)})
+        inputs = graph.pack_inputs({"theta": gen(t_seq)})
 
         target = self._make_target(network_autograd, inputs, t_seq)
         mse = MSELoss(target)
@@ -98,6 +100,7 @@ class TestAdjointVsAutograd:
         autograd_grads = tape.gradient(loss, network_autograd.trainable_variables)
 
         from neuraltide.training.adjoint import AdjointSolver
+
         adj_comp = AdjointSolver(network_adjoint, network_adjoint._integrator)
         adj_grads_list, _, _ = adj_comp.compute_gradients(t_seq, inputs, target, mse)
 
@@ -117,85 +120,125 @@ class TestAdjointVsAutograd:
             adj_g = adj_dict.get(var_name)
             if adj_g is None:
                 continue
-            rel_error = float(tf.reduce_max(
-                tf.abs(auto_g - adj_g) / (tf.abs(auto_g) + 1e-8)
-            ))
+            rel_error = float(
+                tf.reduce_max(tf.abs(auto_g - adj_g) / (tf.abs(auto_g) + 1e-8))
+            )
             max_rel_error = max(max_rel_error, rel_error)
 
-        assert max_rel_error < 1e-3, \
+        assert max_rel_error < 1e-3, (
             f"Max relative error {max_rel_error:.6f} should be < 1e-3"
+        )
 
     def test_exc_inh_network_gradients(self, izh_params, synapse_params, dt):
         """Test adjoint for exc-inh network."""
         seed_everything(42)
 
-        pop_exc = IzhikevichMeanField(dt=dt, params={
-            'tau_pop': {'value': [1.0, 1.0], 'trainable': False},
-            'alpha': {'value': [0.5, 0.5], 'trainable': False},
-            'a': {'value': [0.02, 0.02], 'trainable': False},
-            'b': {'value': [0.2, 0.2], 'trainable': False},
-            'w_jump': {'value': [0.1, 0.1], 'trainable': False},
-            'Delta_I': {'value': [0.5, 0.6], 'trainable': True, 'min': 0.01, 'max': 2.0},
-            'I_ext': {'value': [1.0, 1.2], 'trainable': True},
-        })
+        pop_exc = IzhikevichMeanField(
+            dt=dt,
+            params={
+                "tau_pop": {"value": [1.0, 1.0], "trainable": False},
+                "alpha": {"value": [0.5, 0.5], "trainable": False},
+                "a": {"value": [0.02, 0.02], "trainable": False},
+                "b": {"value": [0.2, 0.2], "trainable": False},
+                "w_jump": {"value": [0.1, 0.1], "trainable": False},
+                "Delta_I": {
+                    "value": [0.5, 0.6],
+                    "trainable": True,
+                    "min": 0.01,
+                    "max": 2.0,
+                },
+                "I_ext": {"value": [1.0, 1.2], "trainable": True},
+            },
+        )
 
-        pop_inh = IzhikevichMeanField(dt=dt, params={
-            'tau_pop': {'value': [1.0], 'trainable': False},
-            'alpha': {'value': [0.5], 'trainable': False},
-            'a': {'value': [0.02], 'trainable': False},
-            'b': {'value': [0.2], 'trainable': False},
-            'w_jump': {'value': [0.1], 'trainable': False},
-            'Delta_I': {'value': [0.5], 'trainable': True, 'min': 0.01, 'max': 2.0},
-            'I_ext': {'value': [1.0], 'trainable': True},
-        })
+        pop_inh = IzhikevichMeanField(
+            dt=dt,
+            params={
+                "tau_pop": {"value": [1.0], "trainable": False},
+                "alpha": {"value": [0.5], "trainable": False},
+                "a": {"value": [0.02], "trainable": False},
+                "b": {"value": [0.2], "trainable": False},
+                "w_jump": {"value": [0.1], "trainable": False},
+                "Delta_I": {"value": [0.5], "trainable": True, "min": 0.01, "max": 2.0},
+                "I_ext": {"value": [1.0], "trainable": True},
+            },
+        )
 
-        syn_in = TsodyksMarkramSynapse(n_pre=1, n_post=2, dt=dt, params={
-            'gsyn_max': {'value': [[0.1, 0.1]], 'trainable': True},
-            'tau_f': {'value': 20.0, 'trainable': True, 'min': 6.0, 'max': 240.0},
-            'tau_d': {'value': 5.0, 'trainable': True, 'min': 2.0, 'max': 15.0},
-            'tau_r': {'value': 200.0, 'trainable': True, 'min': 91.0, 'max': 1300.0},
-            'Uinc': {'value': 0.2, 'trainable': True, 'min': 0.04, 'max': 0.7},
-            'pconn': {'value': [[1.0, 1.0]], 'trainable': False},
-            'e_r': {'value': 0.0, 'trainable': False},
-        })
+        syn_in = TsodyksMarkramSynapse(
+            n_pre=1,
+            n_post=2,
+            dt=dt,
+            params={
+                "gsyn_max": {"value": [[0.1, 0.1]], "trainable": True},
+                "tau_f": {"value": 20.0, "trainable": True, "min": 6.0, "max": 240.0},
+                "tau_d": {"value": 5.0, "trainable": True, "min": 2.0, "max": 15.0},
+                "tau_r": {
+                    "value": 200.0,
+                    "trainable": True,
+                    "min": 91.0,
+                    "max": 1300.0,
+                },
+                "Uinc": {"value": 0.2, "trainable": True, "min": 0.04, "max": 0.7},
+                "pconn": {"value": [[1.0, 1.0]], "trainable": False},
+                "e_r": {"value": 0.0, "trainable": False},
+            },
+        )
 
-        syn_exc_inh = TsodyksMarkramSynapse(n_pre=2, n_post=1, dt=dt, params={
-            'gsyn_max': {'value': [[0.05], [0.05]], 'trainable': True},
-            'tau_f': {'value': 20.0, 'trainable': True, 'min': 6.0, 'max': 240.0},
-            'tau_d': {'value': 5.0, 'trainable': True, 'min': 2.0, 'max': 15.0},
-            'tau_r': {'value': 200.0, 'trainable': True, 'min': 91.0, 'max': 1300.0},
-            'Uinc': {'value': 0.2, 'trainable': True, 'min': 0.04, 'max': 0.7},
-            'pconn': {'value': [[1.0], [1.0]], 'trainable': False},
-            'e_r': {'value': 0.0, 'trainable': False},
-        })
+        syn_exc_inh = TsodyksMarkramSynapse(
+            n_pre=2,
+            n_post=1,
+            dt=dt,
+            params={
+                "gsyn_max": {"value": [[0.05], [0.05]], "trainable": True},
+                "tau_f": {"value": 20.0, "trainable": True, "min": 6.0, "max": 240.0},
+                "tau_d": {"value": 5.0, "trainable": True, "min": 2.0, "max": 15.0},
+                "tau_r": {
+                    "value": 200.0,
+                    "trainable": True,
+                    "min": 91.0,
+                    "max": 1300.0,
+                },
+                "Uinc": {"value": 0.2, "trainable": True, "min": 0.04, "max": 0.7},
+                "pconn": {"value": [[1.0], [1.0]], "trainable": False},
+                "e_r": {"value": 0.0, "trainable": False},
+            },
+        )
 
-        syn_inh_exc = StaticSynapse(n_pre=1, n_post=2, dt=dt, params={
-            'gsyn_max': {'value': [[0.02, 0.02]], 'trainable': True},
-            'pconn': {'value': [[1.0, 1.0]], 'trainable': False},
-            'e_r': {'value': 0.0, 'trainable': False},
-        })
+        syn_inh_exc = StaticSynapse(
+            n_pre=1,
+            n_post=2,
+            dt=dt,
+            params={
+                "gsyn_max": {"value": [[0.02, 0.02]], "trainable": True},
+                "pconn": {"value": [[1.0, 1.0]], "trainable": False},
+                "e_r": {"value": 0.0, "trainable": False},
+            },
+        )
 
-        gen = VonMisesGenerator(dt=dt, params={
-            'mean_rate': {'value': 20.0, 'trainable': False},
-            'R': {'value': 0.5, 'trainable': False},
-            'freq': {'value': 8.0, 'trainable': False},
-            'phase': {'value': 0.0, 'trainable': False},
-        })
+        gen = VonMisesGenerator(
+            dt=dt,
+            params={
+                "mean_rate": {"value": 20.0, "trainable": False},
+                "R": {"value": 0.5, "trainable": False},
+                "freq": {"value": 8.0, "trainable": False},
+                "phase": {"value": 0.0, "trainable": False},
+            },
+        )
 
         graph = NetworkGraph(dt=dt)
-        graph.declare_input('theta', n_units=gen.n_units)
-        graph.add_population('exc', pop_exc)
-        graph.add_population('inh', pop_inh)
-        graph.add_synapse('theta->exc', syn_in, src='theta', tgt='exc')
-        graph.add_synapse('exc->inh', syn_exc_inh, src='exc', tgt='inh')
-        graph.add_synapse('inh->exc', syn_inh_exc, src='inh', tgt='exc')
+        graph.declare_input("theta", n_units=gen.n_units)
+        graph.add_population("exc", pop_exc)
+        graph.add_population("inh", pop_inh)
+        graph.add_synapse("theta->exc", syn_in, src="theta", tgt="exc")
+        graph.add_synapse("exc->inh", syn_exc_inh, src="exc", tgt="inh")
+        graph.add_synapse("inh->exc", syn_inh_exc, src="inh", tgt="exc")
 
         network = NetworkRNN(graph, RK4Integrator())
 
         T = 50
         t_values = np.arange(T, dtype=np.float32) * dt
         t_seq = tf.constant(t_values[None, :, None])
-        inputs = graph.pack_inputs({'theta': gen(t_seq)})
+        inputs = graph.pack_inputs({"theta": gen(t_seq)})
 
         target = self._make_target(network, inputs, t_seq)
         mse = MSELoss(target)
@@ -206,24 +249,34 @@ class TestAdjointVsAutograd:
         autograd_grads = tape.gradient(loss, network.trainable_variables)
 
         from neuraltide.training.adjoint import AdjointSolver
+
         adj_comp = AdjointSolver(network, network._integrator)
         adj_grads_list, _, _ = adj_comp.compute_gradients(t_seq, inputs, target, mse)
 
-        adj_dict = {v.name: g for v, g in zip(network.trainable_variables, adj_grads_list) if g is not None}
-        auto_dict = {v.name: g for v, g in zip(network.trainable_variables, autograd_grads) if g is not None}
+        adj_dict = {
+            v.name: g
+            for v, g in zip(network.trainable_variables, adj_grads_list)
+            if g is not None
+        }
+        auto_dict = {
+            v.name: g
+            for v, g in zip(network.trainable_variables, autograd_grads)
+            if g is not None
+        }
 
         max_rel_error = 0.0
         for var_name, auto_g in auto_dict.items():
             adj_g = adj_dict.get(var_name)
             if adj_g is None:
                 continue
-            rel_error = float(tf.reduce_max(
-                tf.abs(auto_g - adj_g) / (tf.abs(auto_g) + 1e-8)
-            ))
+            rel_error = float(
+                tf.reduce_max(tf.abs(auto_g - adj_g) / (tf.abs(auto_g) + 1e-8))
+            )
             max_rel_error = max(max_rel_error, rel_error)
 
-        assert max_rel_error < 1e-3, \
+        assert max_rel_error < 1e-3, (
             f"Max relative error {max_rel_error:.6f} should be < 1e-3"
+        )
 
     def test_synapse_params_gradients(self, izh_params, synapse_params, dt):
         """Synapse parameters should have nonzero gradients."""
@@ -232,29 +285,33 @@ class TestAdjointVsAutograd:
         pop = IzhikevichMeanField(dt=dt, params=izh_params)
         syn = TsodyksMarkramSynapse(n_pre=1, n_post=2, dt=dt, params=synapse_params)
 
-        gen = VonMisesGenerator(dt=dt, params={
-            'mean_rate': {'value': 20.0, 'trainable': False},
-            'R': {'value': 0.5, 'trainable': False},
-            'freq': {'value': 8.0, 'trainable': False},
-            'phase': {'value': 0.0, 'trainable': False},
-        })
+        gen = VonMisesGenerator(
+            dt=dt,
+            params={
+                "mean_rate": {"value": 20.0, "trainable": False},
+                "R": {"value": 0.5, "trainable": False},
+                "freq": {"value": 8.0, "trainable": False},
+                "phase": {"value": 0.0, "trainable": False},
+            },
+        )
 
         graph = NetworkGraph(dt=dt)
-        graph.declare_input('theta', n_units=gen.n_units)
-        graph.add_population('exc', pop)
-        graph.add_synapse('theta->exc', syn, src='theta', tgt='exc')
+        graph.declare_input("theta", n_units=gen.n_units)
+        graph.add_population("exc", pop)
+        graph.add_synapse("theta->exc", syn, src="theta", tgt="exc")
 
         network = NetworkRNN(graph, RK4Integrator())
 
         T = 50
         t_values = np.arange(T, dtype=np.float32) * dt
         t_seq = tf.constant(t_values[None, :, None])
-        inputs = graph.pack_inputs({'theta': gen(t_seq)})
+        inputs = graph.pack_inputs({"theta": gen(t_seq)})
 
         target = self._make_target(network, inputs, t_seq)
         mse = MSELoss(target)
 
         from neuraltide.training.adjoint import AdjointSolver
+
         adj_comp = AdjointSolver(network, network._integrator)
         grads_list, _, _ = adj_comp.compute_gradients(t_seq, inputs, target, mse)
 
@@ -262,8 +319,9 @@ class TestAdjointVsAutograd:
         for v, g in zip(network.trainable_variables, grads_list):
             if v.name in syn_params:
                 assert g is not None, f"Synapse param {v.name} should have gradient"
-                assert tf.reduce_any(tf.abs(g) > 1e-8), \
+                assert tf.reduce_any(tf.abs(g) > 1e-8), (
                     f"Synapse param {v.name} gradient should be nonzero"
+                )
 
 
 class TestLongSequence:
@@ -274,58 +332,81 @@ class TestLongSequence:
         """Adjoint should work with long sequences (T=1000)."""
         seed_everything(42)
 
-        pop = IzhikevichMeanField(dt=dt, params={
-            'tau_pop': {'value': [1.0, 1.0], 'trainable': False},
-            'alpha': {'value': [0.5, 0.5], 'trainable': False},
-            'a': {'value': [0.02, 0.02], 'trainable': False},
-            'b': {'value': [0.2, 0.2], 'trainable': False},
-            'w_jump': {'value': [0.1, 0.1], 'trainable': False},
-            'Delta_I': {'value': [0.5, 0.6], 'trainable': True, 'min': 0.01, 'max': 2.0},
-            'I_ext': {'value': [1.0, 1.2], 'trainable': True},
-        })
+        pop = IzhikevichMeanField(
+            dt=dt,
+            params={
+                "tau_pop": {"value": [1.0, 1.0], "trainable": False},
+                "alpha": {"value": [0.5, 0.5], "trainable": False},
+                "a": {"value": [0.02, 0.02], "trainable": False},
+                "b": {"value": [0.2, 0.2], "trainable": False},
+                "w_jump": {"value": [0.1, 0.1], "trainable": False},
+                "Delta_I": {
+                    "value": [0.5, 0.6],
+                    "trainable": True,
+                    "min": 0.01,
+                    "max": 2.0,
+                },
+                "I_ext": {"value": [1.0, 1.2], "trainable": True},
+            },
+        )
 
-        syn = TsodyksMarkramSynapse(n_pre=1, n_post=2, dt=dt, params={
-            'gsyn_max': {'value': [[0.1, 0.1]], 'trainable': True},
-            'tau_f': {'value': 20.0, 'trainable': True, 'min': 6.0, 'max': 240.0},
-            'tau_d': {'value': 5.0, 'trainable': True, 'min': 2.0, 'max': 15.0},
-            'tau_r': {'value': 200.0, 'trainable': True, 'min': 91.0, 'max': 1300.0},
-            'Uinc': {'value': 0.2, 'trainable': True, 'min': 0.04, 'max': 0.7},
-            'pconn': {'value': [[1.0, 1.0]], 'trainable': False},
-            'e_r': {'value': 0.0, 'trainable': False},
-        })
+        syn = TsodyksMarkramSynapse(
+            n_pre=1,
+            n_post=2,
+            dt=dt,
+            params={
+                "gsyn_max": {"value": [[0.1, 0.1]], "trainable": True},
+                "tau_f": {"value": 20.0, "trainable": True, "min": 6.0, "max": 240.0},
+                "tau_d": {"value": 5.0, "trainable": True, "min": 2.0, "max": 15.0},
+                "tau_r": {
+                    "value": 200.0,
+                    "trainable": True,
+                    "min": 91.0,
+                    "max": 1300.0,
+                },
+                "Uinc": {"value": 0.2, "trainable": True, "min": 0.04, "max": 0.7},
+                "pconn": {"value": [[1.0, 1.0]], "trainable": False},
+                "e_r": {"value": 0.0, "trainable": False},
+            },
+        )
 
-        gen = VonMisesGenerator(dt=dt, params={
-            'mean_rate': {'value': 20.0, 'trainable': False},
-            'R': {'value': 0.5, 'trainable': False},
-            'freq': {'value': 8.0, 'trainable': False},
-            'phase': {'value': 0.0, 'trainable': False},
-        })
+        gen = VonMisesGenerator(
+            dt=dt,
+            params={
+                "mean_rate": {"value": 20.0, "trainable": False},
+                "R": {"value": 0.5, "trainable": False},
+                "freq": {"value": 8.0, "trainable": False},
+                "phase": {"value": 0.0, "trainable": False},
+            },
+        )
 
         graph = NetworkGraph(dt=dt)
-        graph.declare_input('theta', n_units=gen.n_units)
-        graph.add_population('exc', pop)
-        graph.add_synapse('theta->exc', syn, src='theta', tgt='exc')
+        graph.declare_input("theta", n_units=gen.n_units)
+        graph.add_population("exc", pop)
+        graph.add_synapse("theta->exc", syn, src="theta", tgt="exc")
 
         network = NetworkRNN(graph, RK4Integrator())
 
         T = 1000
         t_values = np.arange(T, dtype=np.float32) * dt
         t_seq = tf.constant(t_values[None, :, None])
-        inputs = graph.pack_inputs({'theta': gen(t_seq)})
+        inputs = graph.pack_inputs({"theta": gen(t_seq)})
 
         output = network(t_seq, inputs=inputs)
         target = {k: v + 0.5 for k, v in output.firing_rates.items()}
         mse = MSELoss(target)
 
         from neuraltide.training.adjoint import AdjointSolver
+
         adj_comp = AdjointSolver(network, network._integrator)
         grads_list, _, _ = adj_comp.compute_gradients(t_seq, inputs, target, mse)
 
         assert len(grads_list) > 0, "Should compute gradients"
         for v, g in zip(network.trainable_variables, grads_list):
             assert g is not None, f"Gradient for {v.name} should not be None"
-            assert tf.reduce_all(tf.math.is_finite(g)), \
+            assert tf.reduce_all(tf.math.is_finite(g)), (
                 f"Gradient for {v.name} should be finite"
+            )
 
 
 class TestNMDAWithAdjoint:
@@ -337,48 +418,62 @@ class TestNMDAWithAdjoint:
 
         pop = IzhikevichMeanField(dt=dt, params=izh_params)
 
-        syn_ampa = StaticSynapse(n_pre=1, n_post=2, dt=dt, params={
-            'gsyn_max': {'value': [[0.05, 0.05]], 'trainable': True},
-            'pconn': {'value': [[1.0, 1.0]], 'trainable': False},
-            'e_r': {'value': 0.0, 'trainable': False},
-        })
+        syn_ampa = StaticSynapse(
+            n_pre=1,
+            n_post=2,
+            dt=dt,
+            params={
+                "gsyn_max": {"value": [[0.05, 0.05]], "trainable": True},
+                "pconn": {"value": [[1.0, 1.0]], "trainable": False},
+                "e_r": {"value": 0.0, "trainable": False},
+            },
+        )
 
-        syn_nmda = NMDASynapse(n_pre=1, n_post=2, dt=dt, params={
-            'gsyn_max_nmda': {'value': [[0.08, 0.08]], 'trainable': True},
-            'tau1_nmda': {'value': 10.0, 'trainable': False},
-            'tau2_nmda': {'value': 100.0, 'trainable': False},
-            'Mgb': {'value': 3.0, 'trainable': False},
-            'av_nmda': {'value': 0.1, 'trainable': False},
-            'pconn_nmda': {'value': [[1.0, 1.0]], 'trainable': False},
-            'e_r_nmda': {'value': 0.0, 'trainable': False},
-            'v_ref': {'value': 0.0, 'trainable': False},
-        })
+        syn_nmda = NMDASynapse(
+            n_pre=1,
+            n_post=2,
+            dt=dt,
+            params={
+                "gsyn_max_nmda": {"value": [[0.08, 0.08]], "trainable": True},
+                "tau1_nmda": {"value": 10.0, "trainable": False},
+                "tau2_nmda": {"value": 100.0, "trainable": False},
+                "Mgb": {"value": 3.0, "trainable": False},
+                "av_nmda": {"value": 0.1, "trainable": False},
+                "pconn_nmda": {"value": [[1.0, 1.0]], "trainable": False},
+                "e_r_nmda": {"value": 0.0, "trainable": False},
+                "v_ref": {"value": 0.0, "trainable": False},
+            },
+        )
 
-        gen = VonMisesGenerator(dt=dt, params={
-            'mean_rate': {'value': 20.0, 'trainable': False},
-            'R': {'value': 0.5, 'trainable': False},
-            'freq': {'value': 8.0, 'trainable': False},
-            'phase': {'value': 0.0, 'trainable': False},
-        })
+        gen = VonMisesGenerator(
+            dt=dt,
+            params={
+                "mean_rate": {"value": 20.0, "trainable": False},
+                "R": {"value": 0.5, "trainable": False},
+                "freq": {"value": 8.0, "trainable": False},
+                "phase": {"value": 0.0, "trainable": False},
+            },
+        )
 
         graph = NetworkGraph(dt=dt)
-        graph.declare_input('theta', n_units=gen.n_units)
-        graph.add_population('exc', pop)
-        graph.add_synapse('theta->exc_ampa', syn_ampa, src='theta', tgt='exc')
-        graph.add_synapse('theta->exc_nmda', syn_nmda, src='theta', tgt='exc')
+        graph.declare_input("theta", n_units=gen.n_units)
+        graph.add_population("exc", pop)
+        graph.add_synapse("theta->exc_ampa", syn_ampa, src="theta", tgt="exc")
+        graph.add_synapse("theta->exc_nmda", syn_nmda, src="theta", tgt="exc")
 
         network = NetworkRNN(graph, RK4Integrator())
 
         T = 50
         t_values = np.arange(T, dtype=np.float32) * dt
         t_seq = tf.constant(t_values[None, :, None])
-        inputs = graph.pack_inputs({'theta': gen(t_seq)})
+        inputs = graph.pack_inputs({"theta": gen(t_seq)})
 
         output = network(t_seq, inputs=inputs)
         target = {k: v + 0.5 for k, v in output.firing_rates.items()}
         mse = MSELoss(target)
 
         from neuraltide.training.adjoint import AdjointSolver
+
         adj_comp = AdjointSolver(network, network._integrator)
         grads_list, _, _ = adj_comp.compute_gradients(t_seq, inputs, target, mse)
 
@@ -387,5 +482,6 @@ class TestNMDAWithAdjoint:
         assert len(trainable) > 0
         for v, g in zip(trainable, grads_list):
             assert g is not None, f"Gradient for {v.name} should not be None"
-            assert tf.reduce_all(tf.math.is_finite(g)), \
+            assert tf.reduce_all(tf.math.is_finite(g)), (
                 f"Gradient for {v.name} should be finite"
+            )

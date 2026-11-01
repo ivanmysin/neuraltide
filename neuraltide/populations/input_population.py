@@ -37,11 +37,7 @@ class InputPopulation(PopulationModel):
             DeprecationWarning,
             stacklevel=2,
         )
-        super().__init__(
-            n_units=generator.n_units,
-            dt=generator.dt,
-            **kwargs
-        )
+        super().__init__(n_units=generator.n_units, dt=generator.dt, **kwargs)
         self.generator = generator
         self._has_extra = True
         self.state_size = [
@@ -66,7 +62,7 @@ class InputPopulation(PopulationModel):
         return tf.reshape(rate, [1, self.n_units])
 
     def observables(self, state: StateList) -> Dict[str, TensorType]:
-        return {'firing_rate': self.get_firing_rate(state)}
+        return {"firing_rate": self.get_firing_rate(state)}
 
     @property
     def parameter_spec(self) -> Dict[str, Dict[str, any]]:

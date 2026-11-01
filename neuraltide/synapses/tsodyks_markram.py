@@ -26,13 +26,13 @@ class TsodyksMarkramSynapse(SynapseModel):
     def __init__(self, n_pre: int, n_post: int, dt: float, params: dict, **kwargs):
         super().__init__(n_pre=n_pre, n_post=n_post, dt=dt, **kwargs)
 
-        self.gsyn_max = self._make_param(params, 'gsyn_max')
-        self.tau_f = self._make_param(params, 'tau_f')
-        self.tau_d = self._make_param(params, 'tau_d')
-        self.tau_r = self._make_param(params, 'tau_r')
-        self.Uinc = self._make_param(params, 'Uinc')
-        self.pconn = self._make_param(params, 'pconn')
-        self.e_r = self._make_param(params, 'e_r')
+        self.gsyn_max = self._make_param(params, "gsyn_max")
+        self.tau_f = self._make_param(params, "tau_f")
+        self.tau_d = self._make_param(params, "tau_d")
+        self.tau_r = self._make_param(params, "tau_r")
+        self.Uinc = self._make_param(params, "Uinc")
+        self.pconn = self._make_param(params, "pconn")
+        self.e_r = self._make_param(params, "e_r")
 
         self.state_size = [
             tf.TensorShape([n_pre, n_post]),
@@ -57,14 +57,11 @@ class TsodyksMarkramSynapse(SynapseModel):
     ) -> Tuple[Dict[str, TensorType], StateList]:
         R, U, A = state
 
-
-
         firing_probs = dt * pre_firing_rate / 1000.0
         firing_probs_T = tf.transpose(firing_probs)
         FRpre_normed = self.pconn * firing_probs_T
 
         tau1r = tf.math.divide_no_nan(self.tau_d, self.tau_d - self.tau_r)
-
 
         exp_d = tf.exp(-dt / self.tau_d)
         exp_f = tf.exp(-dt / self.tau_f)
@@ -86,7 +83,7 @@ class TsodyksMarkramSynapse(SynapseModel):
         I_syn = tf.reduce_sum(I_pair, axis=0, keepdims=True)
         g_syn = tf.reduce_sum(g_eff, axis=0, keepdims=True)
 
-        return ({'I_syn': I_syn, 'g_syn': g_syn}, [R_new, U_new, A_new])
+        return ({"I_syn": I_syn, "g_syn": g_syn}, [R_new, U_new, A_new])
 
     def derivatives(
         self,
@@ -140,7 +137,6 @@ class TsodyksMarkramSynapse(SynapseModel):
         Used after numerical integration to compute currents.
         """
 
-
         if len(state) > 0:
             R_new, U_new, A_new = state
             g_eff = self.gsyn_max * A_new
@@ -154,7 +150,7 @@ class TsodyksMarkramSynapse(SynapseModel):
         I_syn = tf.reduce_sum(I_pair, axis=0, keepdims=True)
         g_syn = tf.reduce_sum(g_eff, axis=0, keepdims=True)
 
-        return {'I_syn': I_syn, 'g_syn': g_syn}
+        return {"I_syn": I_syn, "g_syn": g_syn}
 
     def adjoint_derivatives(
         self,
@@ -212,13 +208,15 @@ class TsodyksMarkramSynapse(SynapseModel):
         firing_probs_T = tf.transpose(pre_firing_rate / 1000.0)
         s = self.pconn * firing_probs_T
 
-        if param_name == 'tau_f':
+        if param_name == "tau_f":
             return U / tf.square(tf.maximum(tf.cast(self.tau_f, dtype), 1e-6))
-        elif param_name == 'tau_d':
+        elif param_name == "tau_d":
             return A / tf.square(tf.maximum(tf.cast(self.tau_d, dtype), 1e-6))
-        elif param_name == 'tau_r':
-            return -(1.0 - R - A) / tf.square(tf.maximum(tf.cast(self.tau_r, dtype), 1e-6))
-        elif param_name == 'Uinc':
+        elif param_name == "tau_r":
+            return -(1.0 - R - A) / tf.square(
+                tf.maximum(tf.cast(self.tau_r, dtype), 1e-6)
+            )
+        elif param_name == "Uinc":
             return (1.0 - U) * s
         else:
             return tf.zeros_like(R)
@@ -282,51 +280,51 @@ class TsodyksMarkramSynapse(SynapseModel):
         else:
             dgsyn_max = tf.zeros_like(A)
 
-        return {'gsyn_max': dgsyn_max}
+        return {"gsyn_max": dgsyn_max}
 
     @property
     def parameter_spec(self) -> Dict[str, Dict[str, any]]:
         return {
-            'gsyn_max': {
-                'shape': (self.n_pre, self.n_post),
-                'trainable': self.gsyn_max.trainable,
-                'constraint': 'NonNegConstraint',
-                'units': 'mS/cm^2',
+            "gsyn_max": {
+                "shape": (self.n_pre, self.n_post),
+                "trainable": self.gsyn_max.trainable,
+                "constraint": "NonNegConstraint",
+                "units": "mS/cm^2",
             },
-            'tau_f': {
-                'shape': (self.n_pre, self.n_post),
-                'trainable': self.tau_f.trainable,
-                'constraint': 'MinMaxConstraint',
-                'units': 'ms',
+            "tau_f": {
+                "shape": (self.n_pre, self.n_post),
+                "trainable": self.tau_f.trainable,
+                "constraint": "MinMaxConstraint",
+                "units": "ms",
             },
-            'tau_d': {
-                'shape': (self.n_pre, self.n_post),
-                'trainable': self.tau_d.trainable,
-                'constraint': 'MinMaxConstraint',
-                'units': 'ms',
+            "tau_d": {
+                "shape": (self.n_pre, self.n_post),
+                "trainable": self.tau_d.trainable,
+                "constraint": "MinMaxConstraint",
+                "units": "ms",
             },
-            'tau_r': {
-                'shape': (self.n_pre, self.n_post),
-                'trainable': self.tau_r.trainable,
-                'constraint': 'MinMaxConstraint',
-                'units': 'ms',
+            "tau_r": {
+                "shape": (self.n_pre, self.n_post),
+                "trainable": self.tau_r.trainable,
+                "constraint": "MinMaxConstraint",
+                "units": "ms",
             },
-            'Uinc': {
-                'shape': (self.n_pre, self.n_post),
-                'trainable': self.Uinc.trainable,
-                'constraint': 'MinMaxConstraint',
-                'units': 'dimensionless',
+            "Uinc": {
+                "shape": (self.n_pre, self.n_post),
+                "trainable": self.Uinc.trainable,
+                "constraint": "MinMaxConstraint",
+                "units": "dimensionless",
             },
-            'pconn': {
-                'shape': (self.n_pre, self.n_post),
-                'trainable': False,
-                'constraint': 'UnitIntervalConstraint',
-                'units': 'dimensionless',
+            "pconn": {
+                "shape": (self.n_pre, self.n_post),
+                "trainable": False,
+                "constraint": "UnitIntervalConstraint",
+                "units": "dimensionless",
             },
-            'e_r': {
-                'shape': (self.n_pre, self.n_post),
-                'trainable': False,
-                'constraint': None,
-                'units': 'mV',
+            "e_r": {
+                "shape": (self.n_pre, self.n_post),
+                "trainable": False,
+                "constraint": None,
+                "units": "mV",
             },
         }

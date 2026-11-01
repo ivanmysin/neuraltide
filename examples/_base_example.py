@@ -2,6 +2,7 @@
 Базовый шаблон для примеров.
 Импорты, настройка matplotlib и общие утилиты.
 """
+
 import numpy as np
 import tensorflow as tf
 import matplotlib.pyplot as plt
@@ -29,9 +30,9 @@ def run_simulation(pop, syn_in, syn_rec=None, T=100, dt=0.5, seed=42):
     seed_everything(seed)
 
     graph = NetworkGraph(dt=dt)
-    graph.add_population('main', pop)
+    graph.add_population("main", pop)
     if syn_rec is not None:
-        graph.add_synapse('rec', syn_rec, src='main', tgt='main')
+        graph.add_synapse("rec", syn_rec, src="main", tgt="main")
 
     network = NetworkRNN(graph, integrator=RK4Integrator())
 
@@ -59,8 +60,7 @@ def plot_population_dynamics(t_values, pop, pop_states_history, output, save_pat
 
     fig, axes = plt.subplots(n_states + 1, 1, figsize=(10, 3 * (n_states + 1)))
 
-    state_labels = ['r (firing rate)', 'v (membrane)', 'w (adaptation)'][:n_states]
-    colors = ['tab:blue', 'tab:orange', 'tab:green'][:n_states]
+    state_labels = ["r (firing rate)", "v (membrane)", "w (adaptation)"][:n_states]
 
     for i in range(n_states):
         state = pop_states_history[i]
@@ -69,15 +69,15 @@ def plot_population_dynamics(t_values, pop, pop_states_history, output, save_pat
         if state.ndim == 3:
             state = state[0]
         for u in range(min(n_units, 3)):
-            axes[i].plot(t_values, state[:, u], label=f'Unit {u}', alpha=0.8)
+            axes[i].plot(t_values, state[:, u], label=f"Unit {u}", alpha=0.8)
         axes[i].set_ylabel(state_labels[i])
         axes[i].legend(fontsize=8)
         axes[i].grid(True, alpha=0.3)
 
-    rates = output.firing_rates['main'].numpy()[0]
-    axes[-1].plot(t_values, rates, color='tab:blue', linewidth=1.5)
-    axes[-1].set_ylabel('Firing Rate (Hz)')
-    axes[-1].set_xlabel('Time (ms)')
+    rates = output.firing_rates["main"].numpy()[0]
+    axes[-1].plot(t_values, rates, color="tab:blue", linewidth=1.5)
+    axes[-1].set_ylabel("Firing Rate (Hz)")
+    axes[-1].set_xlabel("Time (ms)")
     axes[-1].grid(True, alpha=0.3)
     axes[-1].legend(fontsize=8)
 

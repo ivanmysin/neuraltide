@@ -89,9 +89,7 @@ class NetworkGraph:
         if name in self._external_inputs:
             raise ValueError(f"Input '{name}' already declared.")
         if name in self._populations:
-            raise ValueError(
-                f"Input name '{name}' conflicts with population name."
-            )
+            raise ValueError(f"Input name '{name}' conflicts with population name.")
         self._external_inputs[name] = n_units
         self._input_names.append(name)
         self._input_offsets[name] = self._total_input_units
@@ -134,10 +132,10 @@ class NetworkGraph:
         """Построение кэшированных структур для ускорения итераций."""
         if self._cached_population_names is not None:
             return  # Уже построено
-        
+
         self._cached_population_names = list(self._populations.keys())
         self._cached_synapse_names = list(self._synapses.keys())
-        
+
         # Кэш для популяций: (name, model, state_size)
         self._pop_info_cache = []
         self._dynamic_pop_indices = []
@@ -146,11 +144,11 @@ class NetworkGraph:
             n = len(pop.state_size)
             self._pop_info_cache.append((name, pop, n))
             self._dynamic_pop_indices.append(i)
-        
+
         self._cached_dynamic_population_names = [
             name for name, _, _ in self._pop_info_cache
         ]
-        
+
         # Кэш для синапсов: (name, entry, state_size)
         self._syn_info_cache = []
         for name in self._cached_synapse_names:
@@ -182,11 +180,11 @@ class NetworkGraph:
             has_input = any(e.tgt == pop_name for e in self._synapses.values())
             if not has_input:
                 import warnings
+
                 warnings.warn(
-                    f"Population '{pop_name}' has no incoming synapses.",
-                    UserWarning
+                    f"Population '{pop_name}' has no incoming synapses.", UserWarning
                 )
-        
+
         # Построить кэши после валидации
         self._build_caches()
 
@@ -238,15 +236,13 @@ class NetworkGraph:
         for name in self._input_names:
             if name not in input_dict:
                 raise ValueError(
-                    f"Input '{name}' not provided. "
-                    f"Expected: {self._input_names}"
+                    f"Input '{name}' not provided. Expected: {self._input_names}"
                 )
             t = input_dict[name]
             expected = self._external_inputs[name]
             if t.shape[-1] != expected:
                 raise ValueError(
-                    f"Input '{name}': last dim is {t.shape[-1]}, "
-                    f"expected {expected}"
+                    f"Input '{name}': last dim is {t.shape[-1]}, expected {expected}"
                 )
             parts.append(t)
         return tf.concat(parts, axis=-1)
@@ -259,12 +255,12 @@ def unpack_state(
 ) -> Tuple[Dict[str, StateList], Dict[str, StateList]]:
     """
     Unpack flat state lists into dictionaries keyed by population/synapse name.
-    
+
     Args:
         graph: NetworkGraph
         flat_pop_states: Flat list of population states
         flat_syn_states: Flat list of synapse states
-    
+
     Returns:
         (pop_states_dict, syn_states_dict)
     """
@@ -272,16 +268,16 @@ def unpack_state(
     idx = 0
     # Use cached info for efficient iteration
     for name, pop, n in graph._pop_info_cache:
-        pop_states_dict[name] = flat_pop_states[idx:idx + n]
+        pop_states_dict[name] = flat_pop_states[idx : idx + n]
         idx += n
-    
+
     syn_states_dict = {}
     idx = 0
     # Use cached info for efficient iteration
     for name, entry, n in graph._syn_info_cache:
-        syn_states_dict[name] = flat_syn_states[idx:idx + n]
+        syn_states_dict[name] = flat_syn_states[idx : idx + n]
         idx += n
-    
+
     return pop_states_dict, syn_states_dict
 
 
@@ -291,11 +287,11 @@ def get_firing_rates(
 ) -> Dict[str, TensorType]:
     """
     Get firing rates for all dynamic populations.
-    
+
     Args:
         graph: NetworkGraph
         pop_states_dict: Dict of population states
-    
+
     Returns:
         Dict of firing rates keyed by population name
     """
@@ -314,7 +310,7 @@ def _step_fn(
 ) -> Tuple[StateList, StateList, TensorType]:
     """
     Один шаг симуляции сети. Используется с tf.scan.
-    
+
     Args:
         states: (pop_states, syn_states, stability_error) - текущие состояния
         t: текущее время
@@ -322,25 +318,25 @@ def _step_fn(
             частоты разрядов для внешних входов на данном шаге.
         graph: NetworkGraph
         integrator: BaseIntegrator
-    
+
     Returns:
         (new_pop_states, new_syn_states, new_stability_error)
     """
     pop_states, syn_states, stability_acc = states
     dtype = neuraltide.config.get_dtype()
-    
+
     # Распаковка состояний популяций с использованием кэшированных оффсетов
     pop_states_dict = {}
     idx = 0
     for name, pop, n in graph._pop_info_cache:
-        pop_states_dict[name] = pop_states[idx:idx + n]
+        pop_states_dict[name] = pop_states[idx : idx + n]
         idx += n
 
     # Распаковка состояний синапсов с использованием кэшированных оффсетов
     syn_states_dict = {}
     idx = 0
     for name, entry, n in graph._syn_info_cache:
-        syn_states_dict[name] = syn_states[idx:idx + n]
+        syn_states_dict[name] = syn_states[idx : idx + n]
         idx += n
 
     # Инициализация синаптических токов для динамических популяций
@@ -375,7 +371,7 @@ def _step_fn(
         else:
             pre_rate = cached_rates[entry.src]
 
-        post_v = cached_obs[entry.tgt].get('v_mean')
+        post_v = cached_obs[entry.tgt].get("v_mean")
         if post_v is None:
             post_v = tf.zeros([1, tgt_pop.n_units], dtype=dtype)
 
@@ -387,8 +383,8 @@ def _step_fn(
             entry.model, new_syn_state, pre_rate, post_v
         )
 
-        syn_I[entry.tgt] = syn_I[entry.tgt] + current_dict['I_syn']
-        syn_g[entry.tgt] = syn_g[entry.tgt] + current_dict['g_syn']
+        syn_I[entry.tgt] = syn_I[entry.tgt] + current_dict["I_syn"]
+        syn_g[entry.tgt] = syn_g[entry.tgt] + current_dict["g_syn"]
         syn_states_dict[syn_name] = new_syn_state
 
     # Интегрирование популяций
@@ -397,7 +393,7 @@ def _step_fn(
     for name, pop, n in graph._pop_info_cache:
         pop_state = pop_states_dict[name]
 
-        total_syn = {'I_syn': syn_I[name], 'g_syn': syn_g[name]}
+        total_syn = {"I_syn": syn_I[name], "g_syn": syn_g[name]}
         new_pop_state, local_err = integrator.step(pop, pop_state, total_syn)
         new_pop_states_list.extend(new_pop_state)
         stability_error = stability_error + local_err
@@ -409,15 +405,23 @@ def _step_fn(
 
     if neuraltide.config.get_debug_numerics():
         for i, s in enumerate(new_pop_states_list):
-            new_pop_states_list[i] = tf.debugging.check_numerics(s, f'NaN in population state[{i}]')
+            new_pop_states_list[i] = tf.debugging.check_numerics(
+                s, f"NaN in population state[{i}]"
+            )
         for i, s in enumerate(new_syn_states_list):
-            new_syn_states_list[i] = tf.debugging.check_numerics(s, f'NaN in synapse state[{i}]')
+            new_syn_states_list[i] = tf.debugging.check_numerics(
+                s, f"NaN in synapse state[{i}]"
+            )
 
     return (tuple(new_pop_states_list), tuple(new_syn_states_list), stability_error)
 
 
-class NetworkOutput(namedtuple('_NetworkOutputBase',
-    ['firing_rates', 'hidden_states', 'stability_loss', 'final_state'])):
+class NetworkOutput(
+    namedtuple(
+        "_NetworkOutputBase",
+        ["firing_rates", "hidden_states", "stability_loss", "final_state"],
+    )
+):
     """
     Результат прогона NetworkRNN.
 
@@ -438,7 +442,7 @@ class NetworkOutput(namedtuple('_NetworkOutputBase',
 class NetworkRNN(tf.keras.layers.Layer):
     """
     Симуляция сети на временно́й оси через tf.scan.
-    
+
     Использует пошаговое интегрирование для каждого временного шага,
     что позволяет избежать проблем с variable scoping в Keras RNN.
     """
@@ -463,7 +467,7 @@ class NetworkRNN(tf.keras.layers.Layer):
     def _build(self) -> None:
         """Собирает начальные состояния и вычисляет размерности."""
         batch_size = 1
-        
+
         self._init_pop_states: StateList = []
         self._pop_state_offsets: Dict[str, int] = {}
         self._pop_state_shapes: List[tf.TensorShape] = []
@@ -472,26 +476,23 @@ class NetworkRNN(tf.keras.layers.Layer):
             self._pop_state_offsets[name] = len(self._init_pop_states)
             self._init_pop_states.extend(pop.get_initial_state(batch_size))
             self._pop_state_shapes.extend(pop.state_size)
-        
+
         self._init_syn_states: StateList = []
         self._syn_state_offsets: Dict[str, int] = {}
         for name in self._graph.synapse_names:
             entry = self._graph._synapses[name]
             self._syn_state_offsets[name] = len(self._init_syn_states)
             self._init_syn_states.extend(entry.model.get_initial_state(batch_size))
-        
+
         self._total_dynamic_units = sum(
-            pop.n_units
-            for name, pop in self._graph._populations.items()
+            pop.n_units for name, pop in self._graph._populations.items()
         )
-        
+
         self._pop_state_count = sum(
-            len(pop.state_size)
-            for pop in self._graph._populations.values()
+            len(pop.state_size) for pop in self._graph._populations.values()
         )
         self._syn_state_count = sum(
-            len(entry.model.state_size)
-            for entry in self._graph._synapses.values()
+            len(entry.model.state_size) for entry in self._graph._synapses.values()
         )
 
         self._cached_trainable_vars = self._collect_trainable_vars()
@@ -524,48 +525,64 @@ class NetworkRNN(tf.keras.layers.Layer):
         for name in self._graph._input_names:
             offset = self._graph._input_offsets[name]
             size = self._graph._external_inputs[name]
-            input_seqs[name] = inputs_T[:, :, offset:offset + size]
+            input_seqs[name] = inputs_T[:, :, offset : offset + size]
 
         init_stability = tf.zeros([1], dtype=dtype)
 
         pop_arrays = [
-            tf.TensorArray(dtype, size=T, clear_after_read=False,
-                           element_shape=self._pop_state_shapes[i])
+            tf.TensorArray(
+                dtype,
+                size=T,
+                clear_after_read=False,
+                element_shape=self._pop_state_shapes[i],
+            )
             for i in range(self._pop_state_count)
         ]
         syn_arrays = [
-            tf.TensorArray(dtype, size=T, clear_after_read=False,
-                           element_shape=_tensorarr_shape(init_syn[i]))
+            tf.TensorArray(
+                dtype,
+                size=T,
+                clear_after_read=False,
+                element_shape=_tensorarr_shape(init_syn[i]),
+            )
             for i in range(self._syn_state_count)
         ]
-        stab_array = tf.TensorArray(dtype, size=T, clear_after_read=False,
-                                    element_shape=[1])
+        stab_array = tf.TensorArray(
+            dtype, size=T, clear_after_read=False, element_shape=[1]
+        )
 
         i0 = tf.constant(0)
 
-        def _cond(i, pop_carry, syn_carry, stab_carry,
-                  pop_arrs, syn_arrs, stab_arr):
+        def _cond(i, pop_carry, syn_carry, stab_carry, pop_arrs, syn_arrs, stab_arr):
             return i < T
 
-        def _body(i, pop_carry, syn_carry, stab_carry,
-                  pop_arrs, syn_arrs, stab_arr):
+        def _body(i, pop_carry, syn_carry, stab_carry, pop_arrs, syn_arrs, stab_arr):
             t = elems[i]
             # Slice inputs at this time step
             input_step = {name: seq[i] for name, seq in input_seqs.items()}
             new_pop, new_syn, new_stab = _step_fn(
                 (pop_carry, syn_carry, stab_carry),
-                t, input_step, self._graph, self._integrator,
+                t,
+                input_step,
+                self._graph,
+                self._integrator,
             )
             for j in range(self._pop_state_count):
                 pop_arrs[j] = pop_arrs[j].write(i, new_pop[j])
             for j in range(self._syn_state_count):
                 syn_arrs[j] = syn_arrs[j].write(i, new_syn[j])
             stab_arr = stab_arr.write(i, new_stab)
-            return (i + 1, new_pop, new_syn, new_stab,
-                    pop_arrs, syn_arrs, stab_arr)
+            return (i + 1, new_pop, new_syn, new_stab, pop_arrs, syn_arrs, stab_arr)
 
-        loop_vars = (i0, init_pop, init_syn, init_stability,
-                     pop_arrays, syn_arrays, stab_array)
+        loop_vars = (
+            i0,
+            init_pop,
+            init_syn,
+            init_stability,
+            pop_arrays,
+            syn_arrays,
+            stab_array,
+        )
 
         pop_state_inv = tuple(
             tf.TensorShape(s) if not isinstance(s, tf.TensorShape) else s
@@ -581,9 +598,11 @@ class NetworkRNN(tf.keras.layers.Layer):
             tf.TensorShape(None),
         )
 
-        (*_, final_pop, final_syn, _,
-         pop_arrs, syn_arrs, stab_arr) = tf.while_loop(
-            _cond, _body, loop_vars, parallel_iterations=1,
+        (*_, final_pop, final_syn, _, pop_arrs, syn_arrs, stab_arr) = tf.while_loop(
+            _cond,
+            _body,
+            loop_vars,
+            parallel_iterations=1,
             shape_invariants=shape_inv,
         )
 
@@ -600,7 +619,8 @@ class NetworkRNN(tf.keras.layers.Layer):
             all_rates[name] = tf.transpose(rate, [1, 0, 2])
 
         stability_loss = self._stability_penalty_weight * tf.reduce_mean(
-            all_stability[-1])
+            all_stability[-1]
+        )
 
         final_pop_states = [s[-1] for s in all_pop_stacked]
         final_syn_states = [s[-1] for s in all_syn_stacked]
@@ -629,8 +649,8 @@ class NetworkRNN(tf.keras.layers.Layer):
 
         if inputs is None:
             inputs = tf.zeros(
-                [tf.shape(t_sequence)[0], tf.shape(t_sequence)[1], 0],
-                dtype=dtype)
+                [tf.shape(t_sequence)[0], tf.shape(t_sequence)[1], 0], dtype=dtype
+            )
 
         # Pre-transpose inputs: [batch, T, total] -> [T, batch, total]
         inputs_T = tf.transpose(inputs, [1, 0, 2])
@@ -640,48 +660,64 @@ class NetworkRNN(tf.keras.layers.Layer):
         for name in self._graph._input_names:
             offset = self._graph._input_offsets[name]
             size = self._graph._external_inputs[name]
-            input_seqs[name] = inputs_T[:, :, offset:offset + size]
+            input_seqs[name] = inputs_T[:, :, offset : offset + size]
 
         init_stability = tf.zeros([1], dtype=dtype)
 
         pop_arrays = [
-            tf.TensorArray(dtype, size=T, clear_after_read=False,
-                           element_shape=self._pop_state_shapes[i])
+            tf.TensorArray(
+                dtype,
+                size=T,
+                clear_after_read=False,
+                element_shape=self._pop_state_shapes[i],
+            )
             for i in range(self._pop_state_count)
         ]
         syn_arrays = [
-            tf.TensorArray(dtype, size=T, clear_after_read=False,
-                           element_shape=_tensorarr_shape(init_syn[i]))
+            tf.TensorArray(
+                dtype,
+                size=T,
+                clear_after_read=False,
+                element_shape=_tensorarr_shape(init_syn[i]),
+            )
             for i in range(self._syn_state_count)
         ]
-        stab_array = tf.TensorArray(dtype, size=T, clear_after_read=False,
-                                    element_shape=[1])
+        stab_array = tf.TensorArray(
+            dtype, size=T, clear_after_read=False, element_shape=[1]
+        )
 
         i0 = tf.constant(0)
 
-        def _cond(i, pop_carry, syn_carry, stab_carry,
-                  pop_arrs, syn_arrs, stab_arr):
+        def _cond(i, pop_carry, syn_carry, stab_carry, pop_arrs, syn_arrs, stab_arr):
             return i < T
 
-        def _body(i, pop_carry, syn_carry, stab_carry,
-                  pop_arrs, syn_arrs, stab_arr):
+        def _body(i, pop_carry, syn_carry, stab_carry, pop_arrs, syn_arrs, stab_arr):
             t = elems[i]
             # Slice inputs at this time step
             input_step = {name: seq[i] for name, seq in input_seqs.items()}
             new_pop, new_syn, new_stab = _step_fn(
                 (pop_carry, syn_carry, stab_carry),
-                t, input_step, self._graph, self._integrator,
+                t,
+                input_step,
+                self._graph,
+                self._integrator,
             )
             for j in range(self._pop_state_count):
                 pop_arrs[j] = pop_arrs[j].write(i, new_pop[j])
             for j in range(self._syn_state_count):
                 syn_arrs[j] = syn_arrs[j].write(i, new_syn[j])
             stab_arr = stab_arr.write(i, new_stab)
-            return (i + 1, new_pop, new_syn, new_stab,
-                    pop_arrs, syn_arrs, stab_arr)
+            return (i + 1, new_pop, new_syn, new_stab, pop_arrs, syn_arrs, stab_arr)
 
-        loop_vars = (i0, init_pop, init_syn, init_stability,
-                      pop_arrays, syn_arrays, stab_array)
+        loop_vars = (
+            i0,
+            init_pop,
+            init_syn,
+            init_stability,
+            pop_arrays,
+            syn_arrays,
+            stab_array,
+        )
 
         pop_state_inv = tuple(
             tf.TensorShape(s) if not isinstance(s, tf.TensorShape) else s
@@ -697,9 +733,11 @@ class NetworkRNN(tf.keras.layers.Layer):
             tf.TensorShape(None),
         )
 
-        (*_, final_pop, final_syn, _,
-          pop_arrs, syn_arrs, stab_arr) = tf.while_loop(
-            _cond, _body, loop_vars, parallel_iterations=1,
+        (*_, final_pop, final_syn, _, pop_arrs, syn_arrs, stab_arr) = tf.while_loop(
+            _cond,
+            _body,
+            loop_vars,
+            parallel_iterations=1,
             shape_invariants=shape_inv,
         )
 
@@ -716,14 +754,20 @@ class NetworkRNN(tf.keras.layers.Layer):
             all_rates[name] = tf.transpose(rate, [1, 0, 2])
 
         stability_loss = self._stability_penalty_weight * tf.reduce_mean(
-            all_stability[-1])
+            all_stability[-1]
+        )
 
         final_pop_states = tuple([s[-1] for s in all_pop_stacked])
         final_syn_states = tuple([s[-1] for s in all_syn_stacked])
 
-        return (all_rates, stability_loss,
-                final_pop_states, final_syn_states,
-                all_pop_stacked, all_syn_stacked)
+        return (
+            all_rates,
+            stability_loss,
+            final_pop_states,
+            final_syn_states,
+            all_pop_stacked,
+            all_syn_stacked,
+        )
 
     @tf.function
     def call(
@@ -769,7 +813,8 @@ class NetworkRNN(tf.keras.layers.Layer):
             if inputs is None:
                 inputs = tf.zeros(
                     [tf.shape(t_sequence)[0], tf.shape(t_sequence)[1], 0],
-                    dtype=neuraltide.config.get_dtype())
+                    dtype=neuraltide.config.get_dtype(),
+                )
 
         if initial_state is not None:
             init_pop, init_syn = initial_state
@@ -777,8 +822,9 @@ class NetworkRNN(tf.keras.layers.Layer):
             init_pop = list(self._init_pop_states)
             init_syn = list(self._init_syn_states)
 
-        all_rates, stability_loss, final_pop, final_syn = \
-            self._scan_forward(t_sequence, inputs, tuple(init_pop), tuple(init_syn))
+        all_rates, stability_loss, final_pop, final_syn = self._scan_forward(
+            t_sequence, inputs, tuple(init_pop), tuple(init_syn)
+        )
 
         return NetworkOutput(
             firing_rates=all_rates,
@@ -786,7 +832,7 @@ class NetworkRNN(tf.keras.layers.Layer):
             stability_loss=stability_loss,
             final_state=(final_pop, final_syn),
         )
-    
+
     @property
     def trainable_variables(self) -> List[tf.Variable]:
         return self._cached_trainable_vars
@@ -796,9 +842,9 @@ class NetworkRNN(tf.keras.layers.Layer):
         init_pop = []
         for pop in self._graph._populations.values():
             init_pop.extend(pop.get_initial_state(batch_size))
-        
+
         init_syn = []
         for entry in self._graph._synapses.values():
             init_syn.extend(entry.model.get_initial_state(batch_size))
-        
+
         return init_pop, init_syn

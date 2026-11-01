@@ -25,10 +25,7 @@ class EulerIntegrator(BaseIntegrator):
         derivs = population.derivatives(state, total_synaptic_input)
         dt = population.dt
 
-        new_state = [
-            state[i] + dt * derivs[i]
-            for i in range(len(state))
-        ]
+        new_state = [state[i] + dt * derivs[i] for i in range(len(state))]
 
         local_error = tf.zeros([1], dtype=neuraltide.config.get_dtype())
 
@@ -47,10 +44,7 @@ class EulerIntegrator(BaseIntegrator):
         if len(derivs) == 0:
             return state, tf.zeros([1], dtype=neuraltide.config.get_dtype())
 
-        new_state = [
-            state[i] + dt * derivs[i]
-            for i in range(len(state))
-        ]
+        new_state = [state[i] + dt * derivs[i] for i in range(len(state))]
 
         local_error = tf.zeros([1], dtype=neuraltide.config.get_dtype())
 

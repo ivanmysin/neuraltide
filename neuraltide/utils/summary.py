@@ -1,4 +1,3 @@
-
 def print_summary(network) -> None:
     """
     Выводит summary модели.
@@ -8,6 +7,7 @@ def print_summary(network) -> None:
     """
     try:
         import rich  # noqa: F401
+
         has_rich = True
     except ImportError:
         has_rich = False
@@ -55,9 +55,7 @@ def _print_summary_ascii(network) -> None:
         connection = f"{entry.src} → {entry.tgt}"
         print(f"{syn_name:<20} {connection:<25} {shape:<15} {syn_type:<15}")
 
-    trainable_count = sum(
-        1 for var in network.trainable_variables if var.trainable
-    )
+    trainable_count = sum(1 for var in network.trainable_variables if var.trainable)
     non_trainable_count = sum(
         1 for var in network.trainable_variables if not var.trainable
     )
@@ -96,7 +94,9 @@ def _print_summary_rich(network) -> None:
     for syn_name, entry in graph._synapses.items():
         connection = f"{entry.src} → {entry.tgt}"
         shape = f"[{entry.model.n_pre}, {entry.model.n_post}]"
-        console.print(f"  {syn_name}: {connection} {shape} ({entry.model.__class__.__name__})")
+        console.print(
+            f"  {syn_name}: {connection} {shape} ({entry.model.__class__.__name__})"
+        )
 
     trainable_count = sum(1 for var in network.trainable_variables if var.trainable)
     console.print(f"\n[bold]Trainable params:[/bold] {trainable_count}")

@@ -34,33 +34,23 @@ class RK4Integrator(BaseIntegrator):
 
         k1 = population.derivatives(state, total_synaptic_input)
 
-        state_plus_k1_half = [
-            state[i] + dt * 0.5 * k1[i]
-            for i in range(len(state))
-        ]
+        state_plus_k1_half = [state[i] + dt * 0.5 * k1[i] for i in range(len(state))]
         k2 = population.derivatives(state_plus_k1_half, total_synaptic_input)
 
-        state_plus_k2_half = [
-            state[i] + dt * 0.5 * k2[i]
-            for i in range(len(state))
-        ]
+        state_plus_k2_half = [state[i] + dt * 0.5 * k2[i] for i in range(len(state))]
         k3 = population.derivatives(state_plus_k2_half, total_synaptic_input)
 
-        state_plus_k3 = [
-            state[i] + dt * k3[i]
-            for i in range(len(state))
-        ]
+        state_plus_k3 = [state[i] + dt * k3[i] for i in range(len(state))]
         k4 = population.derivatives(state_plus_k3, total_synaptic_input)
 
         new_state = [
-            state[i] + dt * (k1[i] + 2*k2[i] + 2*k3[i] + k4[i]) / 6.0
+            state[i] + dt * (k1[i] + 2 * k2[i] + 2 * k3[i] + k4[i]) / 6.0
             for i in range(len(state))
         ]
 
         if self.compute_error:
             heun_state = [
-                state[i] + dt * 0.5 * (k1[i] + k2[i])
-                for i in range(len(state))
+                state[i] + dt * 0.5 * (k1[i] + k2[i]) for i in range(len(state))
             ]
             errors = [
                 tf.reduce_sum((new_state[i] - heun_state[i]) ** 2)
@@ -87,34 +77,22 @@ class RK4Integrator(BaseIntegrator):
         if len(k1) == 0:
             return state, tf.zeros([1], dtype=dtype)
 
-        state_plus_k1_half = [
-            state[i] + dt * 0.5 * k1[i]
-            for i in range(len(k1))
-        ]
+        state_plus_k1_half = [state[i] + dt * 0.5 * k1[i] for i in range(len(k1))]
         k2 = synapse.derivatives(state_plus_k1_half, pre_firing_rate, post_voltage)
 
-        state_plus_k2_half = [
-            state[i] + dt * 0.5 * k2[i]
-            for i in range(len(k1))
-        ]
+        state_plus_k2_half = [state[i] + dt * 0.5 * k2[i] for i in range(len(k1))]
         k3 = synapse.derivatives(state_plus_k2_half, pre_firing_rate, post_voltage)
 
-        state_plus_k3 = [
-            state[i] + dt * k3[i]
-            for i in range(len(k1))
-        ]
+        state_plus_k3 = [state[i] + dt * k3[i] for i in range(len(k1))]
         k4 = synapse.derivatives(state_plus_k3, pre_firing_rate, post_voltage)
 
         new_state = [
-            state[i] + dt * (k1[i] + 2*k2[i] + 2*k3[i] + k4[i]) / 6.0
+            state[i] + dt * (k1[i] + 2 * k2[i] + 2 * k3[i] + k4[i]) / 6.0
             for i in range(len(k1))
         ]
 
         if self.compute_error:
-            heun_state = [
-                state[i] + dt * 0.5 * (k1[i] + k2[i])
-                for i in range(len(k1))
-            ]
+            heun_state = [state[i] + dt * 0.5 * (k1[i] + k2[i]) for i in range(len(k1))]
             errors = [
                 tf.reduce_sum((new_state[i] - heun_state[i]) ** 2)
                 for i in range(len(k1))

@@ -53,7 +53,7 @@ class TestMinimalConcretePopulation:
     def test_make_param_broadcast_scalar(self):
         """_make_param broadcast скаляра до [n_units]."""
         pop = MinimalPopulation(n_units=4, dt=0.5)
-        param = pop._make_param({'value': 1.5, 'trainable': False}, 'value')
+        param = pop._make_param({"value": 1.5, "trainable": False}, "value")
         assert param.shape == (4,)
         values = param.numpy()
         assert all(v == 1.5 for v in values)
@@ -71,11 +71,8 @@ class MinimalSynapse(SynapseModel):
 
     def forward(self, pre_firing_rate, post_voltage, state, dt):
         return (
-            {
-                'I_syn': tf.zeros([1, self.n_post]),
-                'g_syn': tf.zeros([1, self.n_post])
-            },
-            []
+            {"I_syn": tf.zeros([1, self.n_post]), "g_syn": tf.zeros([1, self.n_post])},
+            [],
         )
 
     @property
@@ -92,35 +89,35 @@ class TestMinimalConcreteSynapse:
         """_broadcast_to_matrix скаляр → [n_pre, n_post]."""
         syn = MinimalSynapse(n_pre=2, n_post=3, dt=0.5)
         value = tf.constant(0.5)
-        result = syn._broadcast_to_matrix(value, 'test')
+        result = syn._broadcast_to_matrix(value, "test")
         assert result.shape == (2, 3)
 
     def test_broadcast_to_matrix_vector_n_pre(self):
         """_broadcast_to_matrix вектор [n_pre] → [n_pre, n_post]."""
         syn = MinimalSynapse(n_pre=2, n_post=3, dt=0.5)
         value = tf.constant([0.1, 0.2])
-        result = syn._broadcast_to_matrix(value, 'test')
+        result = syn._broadcast_to_matrix(value, "test")
         assert result.shape == (2, 3)
 
     def test_broadcast_to_matrix_vector_n_post_different(self):
         """_broadcast_to_matrix вектор [n_post] при n_pre≠n_post → [n_pre, n_post]."""
         syn = MinimalSynapse(n_pre=2, n_post=3, dt=0.5)
         value = tf.constant([0.1, 0.2, 0.3])
-        result = syn._broadcast_to_matrix(value, 'test')
+        result = syn._broadcast_to_matrix(value, "test")
         assert result.shape == (2, 3)
 
     def test_broadcast_to_matrix_vector_same_n(self):
         """Вектор длины n при n_pre==n_post трактуется как [n_pre]."""
         syn = MinimalSynapse(n_pre=3, n_post=3, dt=0.5)
         value = tf.constant([0.1, 0.2, 0.3])
-        result = syn._broadcast_to_matrix(value, 'test')
+        result = syn._broadcast_to_matrix(value, "test")
         assert result.shape == (3, 3)
 
     def test_broadcast_to_matrix_matrix(self):
         """_broadcast_to_matrix матрица [n_pre, n_post] → без изменений."""
         syn = MinimalSynapse(n_pre=2, n_post=3, dt=0.5)
         value = tf.constant([[0.1, 0.2, 0.3], [0.4, 0.5, 0.6]])
-        result = syn._broadcast_to_matrix(value, 'test')
+        result = syn._broadcast_to_matrix(value, "test")
         assert result.shape == (2, 3)
 
     def test_broadcast_to_matrix_wrong_shape(self):
@@ -128,14 +125,14 @@ class TestMinimalConcreteSynapse:
         syn = MinimalSynapse(n_pre=2, n_post=3, dt=0.5)
         value = tf.constant([[0.1, 0.2], [0.3, 0.4]])
         with pytest.raises(ValueError):
-            syn._broadcast_to_matrix(value, 'test')
+            syn._broadcast_to_matrix(value, "test")
 
 
 class MinimalInput(BaseInputGenerator):
     """Минимальная конкретная реализация BaseInputGenerator для тестов."""
 
     def __init__(self, n_outputs=1, **kwargs):
-        super().__init__(params={'rate': 1.0}, dt=0.5, **kwargs)
+        super().__init__(params={"rate": 1.0}, dt=0.5, **kwargs)
         self.n_units = n_outputs
 
     def call(self, t, extra_inputs=None):

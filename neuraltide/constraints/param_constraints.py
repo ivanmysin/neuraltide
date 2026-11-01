@@ -1,6 +1,7 @@
 import tensorflow as tf
 from typing import Optional
 
+
 class MinMaxConstraint(tf.keras.constraints.Constraint):
     """Ограничение параметра на отрезок [min_val, max_val]."""
 
@@ -19,13 +20,13 @@ class MinMaxConstraint(tf.keras.constraints.Constraint):
 
     def get_config(self) -> dict:
         return {
-            'min_val': self.min_val,
-            'max_val': self.max_val,
+            "min_val": self.min_val,
+            "max_val": self.max_val,
         }
 
     @classmethod
-    def from_config(cls, config: dict) -> 'MinMaxConstraint':
-        return cls(config['min_val'], config['max_val'])
+    def from_config(cls, config: dict) -> "MinMaxConstraint":
+        return cls(config["min_val"], config["max_val"])
 
 
 class NonNegConstraint(tf.keras.constraints.Constraint):
@@ -38,7 +39,7 @@ class NonNegConstraint(tf.keras.constraints.Constraint):
         return {}
 
     @classmethod
-    def from_config(cls, config: dict) -> 'NonNegConstraint':
+    def from_config(cls, config: dict) -> "NonNegConstraint":
         return cls()
 
 
@@ -55,5 +56,5 @@ class UnitIntervalConstraint(tf.keras.constraints.Constraint):
         return self._inner.get_config()
 
     @classmethod
-    def from_config(cls, config: dict) -> 'UnitIntervalConstraint':
+    def from_config(cls, config: dict) -> "UnitIntervalConstraint":
         return cls()

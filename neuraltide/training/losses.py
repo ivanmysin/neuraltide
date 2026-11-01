@@ -23,11 +23,11 @@ class BaseLoss(ABC):
     ) -> TensorType:
         """
         Compute loss for a single time step (for adjoint method).
-        
+
         Args:
             firing_rates: Dict of firing rates at time t
             target: Dict of target values at time t
-        
+
         Returns:
             Scalar loss value
         """
@@ -58,7 +58,7 @@ class MSELoss(BaseLoss):
         self,
         target: Dict[str, TensorType],
         readout: Optional[BaseReadout] = None,
-        observable_key: str = 'firing_rate',
+        observable_key: str = "firing_rate",
         mask: Optional[Dict[str, TensorType]] = None,
     ):
         self.target = target
@@ -203,7 +203,7 @@ class L2RegularizationLoss(BaseLoss):
     def __call__(self, predictions: NetworkOutput, model: NetworkRNN) -> TensorType:
         loss = tf.constant(0.0, dtype=neuraltide.config.get_dtype())
         for var in model.trainable_variables:
-            loss += tf.reduce_sum(var ** 2)
+            loss += tf.reduce_sum(var**2)
         return loss
 
 
@@ -290,8 +290,8 @@ class AntiPhaseLoss(BaseLoss):
             r_b = rates[pop_b]
 
             if self.transient_steps > 0:
-                r_a = r_a[:, self.transient_steps:, :]
-                r_b = r_b[:, self.transient_steps:, :]
+                r_a = r_a[:, self.transient_steps :, :]
+                r_b = r_b[:, self.transient_steps :, :]
 
             r_a_flat = tf.reshape(r_a, [-1])
             r_b_flat = tf.reshape(r_b, [-1])
@@ -302,8 +302,8 @@ class AntiPhaseLoss(BaseLoss):
             r_b_c = r_b_flat - mean_b
 
             cov = tf.reduce_mean(r_a_c * r_b_c)
-            std_a = tf.sqrt(tf.reduce_mean(r_a_c ** 2) + self.eps)
-            std_b = tf.sqrt(tf.reduce_mean(r_b_c ** 2) + self.eps)
+            std_a = tf.sqrt(tf.reduce_mean(r_a_c**2) + self.eps)
+            std_b = tf.sqrt(tf.reduce_mean(r_b_c**2) + self.eps)
             corr = cov / (std_a * std_b + self.eps)
 
             loss += self.correlation_weight * (corr - self.target_correlation) ** 2
@@ -312,11 +312,9 @@ class AntiPhaseLoss(BaseLoss):
         for pop_name in self.all_populations:
             r = rates[pop_name]  # [1, T, n_units]
             if self.transient_steps > 0:
-                r = r[:, self.transient_steps:, :]
+                r = r[:, self.transient_steps :, :]
             mean_rate = tf.reduce_mean(r)
-            loss += self.activity_weight * tf.nn.relu(
-                self.activity_target - mean_rate
-            )
+            loss += self.activity_weight * tf.nn.relu(self.activity_target - mean_rate)
 
         return loss
 
