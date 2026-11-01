@@ -151,67 +151,57 @@ IzhikevichMeanField.dimensionless_to_dimensional(
 
 **Файл**: `neuraltide/populations/wilson_cowan.py`
 
-Модель Wilson-Cowan для взаимодействия возбуждающих и тормозных популяций.
+Модель Вильсона–Коуэна в форме одной популяции (rate model). Одна
+популяция описывается одной переменной E — нормированной активностью
+(0..1). Торможение учитывается через входящие синаптические токи
+(в том числе от отдельных тормозных популяций с отрицательным весом).
 
 ### Уравнения
 
 ```
-τ_E * dE/dt = -E + F_E(w_EE*E - w_IE*I + I_ext_E + I_syn)
-τ_I * dI/dt = -I + F_I(w_EI*E - w_II*I + I_ext_I)
+τ * dE/dt = -E + F(w*E + I_ext + I_syn)
 
-F(x) = 1 / (1 + exp(-a_coeff*(x - theta)))
+F(x) = 1 / (1 + exp(-a*(x - theta)))
 ```
 
 ### Конструктор
 
 ```python
 WilsonCowan(
-    n_units: int,
     dt: float,
     params: dict,
     **kwargs
 )
 ```
 
+`n_units` выводится из максимальной длины параметров (как у
+`IzhikevichMeanField`), явно не передаётся.
+
 ### Параметры (params)
 
 | Параметр | Тип | Описание | Единицы |
 |----------|-----|-----------|---------|
-| `tau_E` | list[float] | Постоянная времени E-популяции | мс |
-| `tau_I` | list[float] | Постоянная времени I-популяции | мс |
-| `a_E` | list[float] | Коэффициент сигмоиды E | 1/мВ |
-| `a_I` | list[float] | Коэффициент сигмоиды I | 1/мВ |
-| `theta_E` | list[float] | Порог сигмоиды E | мВ |
-| `theta_I` | list[float] | Порог сигмоиды I | мВ |
-| `w_EE` | list[float] | Вес E→E | безразмерный |
-| `w_IE` | list[float] | Вес I→E | безразмерный |
-| `w_EI` | list[float] | Вес E→I | безразмерный |
-| `w_II` | list[float] | Вес I→I | безразмерный |
-| `I_ext_E` | list[float] | Внешний ток E | мВ |
-| `I_ext_I` | list[float] | Внешний ток I | мВ |
-| `max_rate` | list[float] | Максимальная частота | Гц |
+| `tau` | list[float] | Постоянная времени | мс |
+| `a` | list[float] | Крутизна сигмоиды | безразмерная |
+| `theta` | list[float] | Порог сигмоиды | мВ |
+| `w` | list[float] | Рекуррентный вес | безразмерный |
+| `I_ext` | list[float] | Внешний ток | мВ |
+| `max_rate` | list[float] | Масштаб частоты разрядов | Гц |
 
 **Пример**:
 ```python
 pop = WilsonCowan(
-    n_units=2,
     dt=0.5,
     params={
-        'tau_E': [10.0, 10.0],
-        'tau_I': [10.0, 10.0],
-        'a_E': [1.0, 1.0],
-        'a_I': [1.0, 1.0],
-        'theta_E': [0.0, 0.0],
-        'theta_I': [0.0, 0.0],
-        'w_EE': [1.0, 1.0],
-        'w_IE': [1.0, 1.0],
-        'w_EI': [1.0, 1.0],
-        'w_II': [1.0, 1.0],
-        'I_ext_E': [0.5, 0.5],
-        'I_ext_I': [0.0, 0.0],
+        'tau': [10.0, 10.0],
+        'a': [1.0, 1.0],
+        'theta': [0.0, 0.0],
+        'w': [1.0, 1.0],
+        'I_ext': [0.5, 0.5],
         'max_rate': [100.0, 100.0],
     }
 )
+# n_units=2
 ```
 
 ### Состояние
@@ -219,14 +209,13 @@ pop = WilsonCowan(
 ```python
 state_size = [
     tf.TensorShape([1, n_units]),  # E
-    tf.TensorShape([1, n_units]),  # I
 ]
 ```
 
 ### Observables
 
 ```python
-{'firing_rate': E * max_rate}  # с учётом max_rate
+{'firing_rate': relu(E) * max_rate}  # нет 'v_mean'
 ```
 
 ---
@@ -302,6 +291,81 @@ class LeakyIF(FokkerPlanckPopulation):
         P = state[0]
         return self.get_boundary_flux(P, self.dV)
 ```
+
+---
+
+## BrunelFokkerPlanck
+
+**Файл**: `neuraltide/populations/brunel_fp.py`
+
+Готовая популяция ЛИФ-нейронов в приближении Фоккера–Планка по
+Brunel (2000), модель A (одинаковые нейроны). Уравнение для плотности
+распределения потенциалов `P(V, t)` на сетке `[v_min, v_theta]`:
+
+```
+τ_m · ∂P/∂t = (σ²/2) · ∂²P/∂V² + ∂/∂V[(V − μ)·P]
+
+μ(t)  = mu_0 + I_syn(t)     — синаптический ток добавляется к дрейфу
+σ²(t) = sigma_ext²          — параметр
+```
+
+Граничные условия: поглощающий порог `v_theta` (частота разрядов —
+диффузионный поток через порог), реинжекция потока `ν(t − τ_rp)` в
+точке `v_reset`, рефрактерная масса `p_r = ∫_{t−τ_rp}^{t} ν(u) du`.
+Нормировка `∫P dV + p_r = 1` сохраняется схемой точно.
+
+Дискретизация: консервативная конечно-объёмная схема (диффузия —
+центральные разности, дрейф — против потока) с внутренним
+субшагиванием по Куранту и защитой от отрицательной плотности.
+Задержка `τ_rp` — кольцевой буфер из `τ_rp/dt` значений ν.
+Рекомендуются `EulerIntegrator`/`HeunIntegrator`.
+
+### Конструктор
+
+```python
+BrunelFokkerPlanck(
+    dt: float,
+    params: dict,
+    grid_size: int = 300,
+    v_min: float = -100.0,
+    **kwargs
+)
+```
+
+Один объект — одна FP-популяция (`n_units = 1`).
+
+### Параметры (params)
+
+| Параметр | Тип | Описание | Единицы |
+|----------|-----|-----------|---------|
+| `tau_m` | float | Мембранная постоянная времени | мс |
+| `v_theta` | float | Пороговый потенциал | мВ |
+| `v_reset` | float | Потенциал сброса | мВ |
+| `tau_rp` | float | Рефрактерный период | мс |
+| `mu_0` | float | Средний дрейф в покое | мВ |
+| `sigma_ext` | float | Стандартное отклонение шума | мВ |
+
+### Состояние
+
+```python
+state_size = [
+    tf.TensorShape([1, grid_size]),  # P(V)
+    tf.TensorShape([1, 1]),          # p_r
+    tf.TensorShape([1, tau_rp/dt]),  # буфер задержки ν
+]
+```
+
+### Observables
+
+```python
+{'firing_rate', 'v_mean', 'p_refractory'}
+```
+
+### Проверка
+
+Стационарная частота совпадает с самосогласованным уравнением (21)
+Brunel (2000) с точностью ~0.2% (сетка 250, режим у порога);
+см. `tests/unit/test_brunel_fp.py`, `examples/example_06_brunel_fp.py`.
 
 ---
 

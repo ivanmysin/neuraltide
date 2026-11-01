@@ -1479,20 +1479,22 @@ return [drdt, dvdt, dwdt]
 
 ### 3.8.2 `WilsonCowan`
 
+Модель Вильсона–Коуэна в форме одной популяции (rate model): одна
+переменная состояния на популяцию, торможение — через синаптические
+входы (в т.ч. от отдельных тормозных популяций).
+
 \[
-\tau_E \dot{E} = -E + F_E(w_{EE}E - w_{IE}I + I_{ext,E} + I_{syn,E})
-\]
-\[
-\tau_I \dot{I} = -I + F_I(w_{EI}E - w_{II}I + I_{ext,I} + I_{syn,I})
+\tau \dot{E} = -E + F(w\,E + I_{ext} + I_{syn})
 \]
 
-\(F(x) = 1/(1 + e^{-a_{coeff}(x - \theta)})\)
+\(F(x) = 1/(1 + e^{-a(x - \theta)})\)
 
-**Состояние:** `[E, I]`, каждое shape `[1, n_units]`.
+**Состояние:** `[E]`, shape `[1, n_units]`. `n_units` выводится из
+параметров, конструктор: `WilsonCowan(dt=..., params={...})`.
 
-**Параметры:** `tau_E`, `tau_I`, `a_E`, `a_I`, `theta_E`, `theta_I`, `w_EE`, `w_IE`, `w_EI`, `w_II`, `I_ext_E`, `I_ext_I`, `max_rate`.
+**Параметры:** `tau`, `a`, `theta`, `w`, `I_ext`, `max_rate`.
 
-**`observables()`:** только `{'firing_rate': E * max_rate}`. Нет `v_mean` — `NMDASynapse` получит нулевой `post_voltage`.
+**`observables()`:** только `{'firing_rate': relu(E) * max_rate}`. Нет `v_mean` — `NMDASynapse` получит нулевой `post_voltage`.
 
 **`get_firing_rate()`:** `tf.nn.relu(E) * max_rate`.
 
@@ -1513,6 +1515,8 @@ return J_out * tf.ones([1, 1])  # scalar firing rate
 ```
 
 **Вспомогательный метод `get_boundary_flux(P, dV)`** предоставляется в базовом классе.
+
+**Готовая реализация:** `BrunelFokkerPlanck` (`neuraltide/populations/brunel_fp.py`) — классическая модель A Brunel (2000): дрейф-диффузия на сетке `[v_min, v_theta]`, поглощающий порог, реинжекция ν(t − τ_rp) в v_reset, рефрактерная масса p_r. Связь с сетью: μ(t) = mu_0 + I_syn, σ² — параметр. Стационарная частота совпадает с уравнением (21) статьи (~0.2% при grid_size=250). Состояние: `[P, p_r, nu_buf]`.
 
 ---
 

@@ -229,20 +229,22 @@ IzhikevichMeanField(
 class WilsonCowan(PopulationModel):
 ```
 
+Модель Вильсона–Коуэна в форме одной популяции (rate model):
+`τ·dE/dt = −E + F(w·E + I_ext + I_syn)`, выход `relu(E)·max_rate`.
+
 **Конструктор**:
 ```python
 WilsonCowan(
-    n_units: int,
     dt: float,
     params: dict,
     **kwargs
 )
 ```
 
+`n_units` выводится из параметров.
+
 **Параметры**:
-- `tau_E`, `tau_I`, `a_E`, `a_I`, `theta_E`, `theta_I`
-- `w_EE`, `w_IE`, `w_EI`, `w_II`
-- `I_ext_E`, `I_ext_I`, `max_rate`
+- `tau`, `a`, `theta`, `w`, `I_ext`, `max_rate`
 
 ### FokkerPlanckPopulation
 
@@ -264,6 +266,34 @@ FokkerPlanckPopulation(
 
 **Методы**:
 - `get_boundary_flux(P, dV) -> TensorType`
+
+### BrunelFokkerPlanck
+
+```python
+class BrunelFokkerPlanck(FokkerPlanckPopulation):
+```
+
+Готовая реализация Brunel (2000), модель A: дрейф-диффузия на сетке
+`[v_min, v_theta]`, поглощающий порог, реинжекция `ν(t − τ_rp)` в
+`v_reset`, рефрактерная масса. Связь с сетью: `μ = mu_0 + I_syn`,
+σ — параметр.
+
+**Конструктор**:
+```python
+BrunelFokkerPlanck(
+    dt: float,
+    params: dict,
+    grid_size: int = 300,
+    v_min: float = -100.0,
+    **kwargs
+)
+```
+
+**Параметры**:
+- `tau_m`, `v_theta`, `v_reset`, `tau_rp`, `mu_0`, `sigma_ext`
+
+**Состояние**: `[P, p_r, nu_buf]` (n_units = 1). Рекомендуются
+Euler/Heun (буфер задержки точен для Эйлера).
 
 ### InputPopulation (deprecated)
 
@@ -795,6 +825,7 @@ def print_summary(network, rich_library: Optional[object] = None) -> None:
 - `IzhikevichMeanField`
 - `WilsonCowan`
 - `FokkerPlanckPopulation`
+- `BrunelFokkerPlanck`
 - `InputPopulation` (deprecated)
 
 ---
