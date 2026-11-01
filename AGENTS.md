@@ -69,8 +69,8 @@ Time sequence: `tf.Tensor` shape `[batch, T, 1]`. If passed as `[batch, T]`, it 
 Importing `neuraltide.populations`, `neuraltide.synapses`, or `neuraltide.inputs` auto-registers classes into the global `POPULATION_REGISTRY`, `SYNAPSE_REGISTRY`, `INPUT_REGISTRY` dicts in `neuraltide.config`. Required for the config-first API (`config/schema.py`).
 
 ### State shapes
-All population state tensors have leading batch dimension of 1: `[1, n_units]`. The batch axis reflects the Keras convention, but multi-sample batches beyond 1 are not supported in the current sequential `tf.scan`.
+All population state tensors have leading batch dimension of 1: `[1, n_units]`. The batch axis reflects the Keras convention, but multi-sample batches beyond 1 are not supported in the current sequential `tf.while_loop`.
 
-## Outdated docs
-- `README.md`: example code uses the old `IzhikevichMeanField(dt=..., params={...})` with `n_units` as positional (n_units was removed from this constructor — it is now inferred), and the old E/I-pair WilsonCowan (`n_units` positional, `tau_E/tau_I/...` params) — WilsonCowan is now a single-population rate model, see `docs/populations.md`.
-- `MASTER_TZ.md`: test file names do not match actual files (e.g. references `test_network.py`, `test_populations.py` — these were renamed/consolidated); the WilsonCowan/FokkerPlanck sections were updated to match the current code.
+## Docs status
+- `README.md`: актуален (quick start через `declare_input`/`pack_inputs`, новые классы, Python >= 3.12).
+- `SPEC.md` (бывший `MASTER_TZ.md`): историческая дизайн-спецификация v0.1.0. Расхождения с кодом помечены **[устарело]** в шапке и соответствующих разделах; источник истины по API — `docs/`.

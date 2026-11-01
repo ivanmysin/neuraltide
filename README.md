@@ -4,13 +4,13 @@ NeuralTide — Python-библиотека для дифференцируемо
 
 ## Основные возможности
 
-- **Популяционные модели**: Izhikevich mean-field, Wilson-Cowan, Fokker-Planck
-- **Синаптическая динамика**: Tsodyks-Markram (STP), NMDA с Mg²⁺ блоком, статические синапсы, композитные синапсы
-- **Входные генераторы**: Sinusoidal, ConstantRate, VonMises (векторизованные)
+- **Популяционные модели**: Izhikevich mean-field, Wilson–Cowan (rate model), Fokker–Planck (Brunel 2000, модель A)
+- **Синаптическая динамика**: Tsodyks–Markram (STP), NMDA с Mg²⁺ блоком, SecondOrder (двойная экспонента), статические и композитные синапсы
+- **Входные генераторы**: Sinusoidal, ConstantRate, VonMises, PlaceField (клетки места с фазовой прецессией)
+- **Внешние входы**: предвычисляются генераторами и подаются в сеть через `declare_input()` + `pack_inputs()`
 - **Интеграторы**: Euler, Heun, RK4
-- **Дифференцируемость**: все вычисления через TensorFlow для автоматического градиента
+- **Дифференцируемость**: все вычисления через TensorFlow; градиенты BPTT или adjoint-методом
 - **Расширяемость**: наследование от базовых классов с минимальным контрактом
-- **Обучение**: BPTT через пошаговый интегратор
 
 ## Документация
 
@@ -40,9 +40,9 @@ pip install neuraltide
 или из исходников:
 
 ```bash
-git clone https://github.com/yourusername/neuraltide.git
+git clone https://github.com/ivanmysin/neuraltide.git
 cd neuraltide
-pip install -e .
+pip install -e ".[dev]"
 ```
 
 ## Быстрый старт
@@ -68,7 +68,7 @@ gen = SinusoidalGenerator(
     }
 )
 
-# Создание популяции (безразмерные параметры)
+# Создание популяции (безразмерные параметры, n_units выводится из params)
 pop = IzhikevichMeanField(
     dt=0.5,
     params={
@@ -96,16 +96,19 @@ syn = StaticSynapse(
 
 # Построение сети
 graph = NetworkGraph(dt=0.5)
-graph.add_input_population('input', gen)
+graph.declare_input('input', n_units=gen.n_units)   # внешний вход
 graph.add_population('exc', pop)
 graph.add_synapse('input->exc', syn, src='input', tgt='exc')
 
 network = NetworkRNN(graph, integrator=RK4Integrator())
 print_summary(network)
 
-# Симуляция
+# Симуляция: входные частоты предвычисляются и упаковываются
 t_seq = tf.constant(np.arange(0, 1000, 0.5)[None, :, None], dtype=tf.float32)
-output = network(t_seq)
+input_rates = gen(t_seq)                            # [1, T, n_units]
+inputs = graph.pack_inputs({'input': input_rates})
+
+output = network(t_seq, inputs=inputs)
 print(f"Output shape: {output.firing_rates['exc'].shape}")
 ```
 
@@ -113,22 +116,23 @@ print(f"Output shape: {output.firing_rates['exc'].shape}")
 
 Подробные примеры доступны в директории `examples/`:
 
-- `example_01_single_population.py` — Одна популяция IzhikevichMeanField с тета-входом
-- `example_02_exc_inh_nmda.py` — E-I сеть с NMDA синапсами
-- `example_03_custom_population.py` — Создание собственной популяции
-- `example_04_fokker_planck.py` — Модель Fokker-Planck
-- `example_05_lfp_proxy.py` — Прокси LFP
-- `example_von_mises.py` — VonMises генератор
-- `example_multi_input_to_population.py` — Несколько входов на одну популяцию
+- `example_01_single_population.py` — одна популяция IzhikevichMeanField с тета-входом
+- `example_02_exc_inh_nmda.py` — E-I сеть с NMDA синапсами и BandpassReadout
+- `example_03_custom_population.py` — создание собственной популяции
+- `example_04_fokker_planck.py` — своя Fokker–Planck модель через наследование
+- `example_05_lfp_proxy.py` — LFP-прокси как взвешенная сумма тета-фильтрованной активности
+- `example_06_brunel_fp.py` — BrunelFokkerPlanck: сходимость к стационару vs аналитика
+- `example_place_field_phase_precession.py` — клетки места с фазовой прецессией
+- `example_pop_wilson_cowan.py` — популяция Wilson–Cowan (rate model)
 
 См. также [docs/examples.md](docs/examples.md) для подробных описаний.
 
 ## Требования
 
-- Python >= 3.9
+- Python >= 3.12
 - TensorFlow >= 2.16
 - NumPy >= 1.26
-- SciPy >= 1.12 (для VonMisesGenerator)
+- SciPy >= 1.12 (для VonMisesGenerator / PlaceFieldGenerator)
 
 ## Лицензия
 

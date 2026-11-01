@@ -1,6 +1,23 @@
-# NeuralTide: Техническая документация v0.1.0
+# NeuralTide: SPEC (дизайн-спецификация v0.1.0)
 
-## Полная спецификация для кодогенерации
+## Исходная полная спецификация для кодогенерации
+
+> **Статус документа (2026-11).** Это историческая дизайн-спецификация v0.1.0.
+> Она сохранена как описание замысла и архитектурных решений. Актуальный
+> источник истины по API — `docs/` (особенно `docs/populations.md`,
+> `docs/synapses.md`, `docs/inputs.md`, `docs/network.md`, `docs/api_reference.md`)
+> и сам код. Известные расхождения с кодом помечены в тексте пометкой
+> **[устарело]**. Ключевые изменения после v0.1.0:
+> - внешние входы предвычисляются (`NetworkGraph.declare_input()` +
+>   `graph.pack_inputs()` → `NetworkRNN.call(t_seq, inputs=...)`);
+>   `InputPopulation` deprecated;
+> - `NetworkRNN` работает через `tf.while_loop` + TensorArray
+>   (не `tf.keras.layers.RNN` и не `tf.scan`);
+> - добавлены `BrunelFokkerPlanck`, `SecondOrderSynapse`,
+>   `PlaceFieldGenerator`;
+> - удалены `core/state.py`, `utils/sparse.py`, `training/brain_model.py`;
+> - WilsonCowan переписан как single-population rate model;
+> - `NetworkOutput` больше не содержит поля `hidden_states`.
 
 ---
 
@@ -26,7 +43,7 @@
 
 - **Python**: >= 3.12
 - **Backend**: TensorFlow >= 2.16
-- **Дифференцирование**: backpropagation through time (BPTT) через явный пошаговый интегратор внутри `tf.keras.layers.RNN`
+- **Дифференцирование**: backpropagation through time (BPTT) через явный пошаговый интегратор внутри `tf.while_loop` + TensorArray; опционально adjoint-метод
 - **Устройства**: CPU, GPU, multi-GPU (через `tf.distribute`)
 - **Зависимости**: numpy >= 1.26, scipy >= 1.12
 
@@ -42,30 +59,32 @@ neuraltide/
 ├── core/
 │   ├── __init__.py
 │   ├── base.py          # Базовые классы: PopulationModel, SynapseModel, BaseInputGenerator
-│   ├── network.py       # NetworkGraph, NetworkRNNCell, NetworkRNN, NetworkOutput
-│   ├── state.py         # NetworkState
-│   └── types.py         # DTYPE, get_pi(), алиасы типов
+│   ├── network.py       # NetworkGraph, NetworkRNN, NetworkOutput  (NetworkRNNCell нет — [устарело])
+│   └── types.py         # get_pi(), cast_if_needed(), алиасы типов  (state.py удалён)
 │
 ├── populations/
 │   ├── __init__.py
 │   ├── izhikevich_mf.py    # IzhikevichMeanField
-│   ├── wilson_cowan.py     # WilsonCowan
-│   ├── fokker_planck.py    # FokkerPlanckPopulation
-│   └── input_population.py # InputPopulation
+│   ├── wilson_cowan.py     # WilsonCowan (single-population rate model)
+│   ├── fokker_planck.py    # FokkerPlanckPopulation (базовый)
+│   ├── brunel_fp.py        # BrunelFokkerPlanck (Brunel 2000, модель A)
+│   └── input_population.py # InputPopulation (deprecated)
 │
 ├── synapses/
 │   ├── __init__.py
 │   ├── tsodyks_markram.py  # TsodyksMarkramSynapse
 │   ├── nmda.py             # NMDASynapse
+│   ├── second_order.py     # SecondOrderSynapse (непластичный, 2-й порядок)
 │   ├── static.py           # StaticSynapse
 │   └── composite.py        # CompositeSynapse
 │
 ├── inputs/
 │   ├── __init__.py
-│   ├── base.py             # BaseInputGenerator
+│   ├── base.py             # BaseInputGenerator (реэкспорт из core.base)
 │   ├── von_mises.py        # VonMisesGenerator
 │   ├── sinusoidal.py       # SinusoidalGenerator
-│   └── constant.py         # ConstantRateGenerator
+│   ├── constant.py         # ConstantRateGenerator
+│   └── place_field.py      # PlaceFieldGenerator (клетки места + фазовая прецессия)
 │
 ├── integrators/
 │   ├── __init__.py
@@ -79,7 +98,8 @@ neuraltide/
 │   ├── losses.py           # BaseLoss, MSELoss, StabilityPenalty,
 │   │                       # L2RegularizationLoss, ParameterBoundLoss, CompositeLoss
 │   ├── readouts.py         # BaseReadout, IdentityReadout, LinearReadout,
-│   │                       # BandpassReadout, LFPProxyReadout, HemodynamicReadout
+│   │                       # BandpassReadout, HemodynamicReadout
+│   │                       # (LFPProxyReadout удалён — был заглушкой)
 │   ├── trainer.py          # Trainer, TrainingHistory
 │   └── callbacks.py        # DivergenceDetector, GradientMonitor, ExperimentLogger
 │
@@ -90,47 +110,51 @@ neuraltide/
 ├── utils/
 │   ├── __init__.py
 │   ├── summary.py            # print_summary()
-│   ├── reproducibility.py    # seed_everything(), log_versions(), save_experiment_state()
-│   └── sparse.py             # SparseMask (v0.2)
+│   └── reproducibility.py    # seed_everything(), log_versions(), save_experiment_state()
+│                             # (sparse.py удалён)
+│
+├── data/                     # датасеты/загрузчики (добавлено после v0.1.0)
+│   └── __init__.py
+│
+├── model/                    # BrainModelKeras — keras-обёртка над NetworkRNN
+│   └── __init__.py
 │
 ├── config/
-│   ├── __init__.py           # set_dtype(), get_dtype(),
-│   │                         # register_population(), register_synapse(),
+│   ├── __init__.py           # set_dtype(), get_dtype(), debug_numerics,
+│   │                         # register_population(), register_synapse(), register_input(),
 │   │                         # POPULATION_REGISTRY, SYNAPSE_REGISTRY, INPUT_REGISTRY
-│   └── schema.py             # NetworkConfig, PopulationConfig, SynapseConfig,
-│                             # InputConfig, build_network_from_config()
+│   └── schema.py             # NetworkConfig, ..., build_network_from_config()
 │
-├── tests/
-│   ├── conftest.py
-│   ├── unit/
-│   │   ├── test_config.py
-│   │   ├── test_constraints.py
-│   │   ├── test_populations.py
-│   │   ├── test_synapses.py
-│   │   ├── test_integrators.py
-│   │   ├── test_network.py
-│   │   ├── test_inputs.py
-│   │   ├── test_losses.py
-│   │   ├── test_readouts.py
-│   │   └── test_training.py
-│   └── integration/
-│       ├── test_gradient_check.py
-│       ├── test_analytic_solutions.py
-│       └── test_full_pipeline.py
+├── tests/                    # фактические имена файлов отличаются — см. tests/
+│   ├── conftest.py           # (test_populations.py/test_network.py объединены и переименованы:
+│   ├── unit/                 #  test_base_contracts, test_wilson_cowan, test_brunel_fp,
+│   │   ...                   #  test_inputs, test_synapses, test_integrators, test_adjoint,
+│   └── integration/          #  test_model, test_data, test_izhikevich_dimensional,
+│       ...                   #  test_gradient_methods)
 │
 ├── examples/
 │   ├── example_01_single_population.py
 │   ├── example_02_exc_inh_nmda.py
 │   ├── example_03_custom_population.py
 │   ├── example_04_fokker_planck.py
-│   └── example_05_lfp_proxy.py
+│   ├── example_05_lfp_proxy.py
+│   ├── example_06_brunel_fp.py
+│   └── ... (см. examples/)
 │
+├── docs/                     # актуальная документация (источник истины по API)
 ├── pyproject.toml
 ├── README.md
+├── AGENTS.md
 └── .gitignore
 ```
 
 ## 2.2 Поток данных
+
+**[устарело]** Схема ниже описывает поток через `InputPopulation` (deprecated).
+Актуальный поток: генераторы вызываются снаружи (`gen(t_seq, extra_inputs=...)`,
+`[batch, T, n_units]`), результаты упаковываются `graph.pack_inputs()` и передаются
+в `NetworkRNN.call(t_seq, inputs=...)`. Внутри цикла `_step_fn` каждому синапсу
+с внешним источником на шаге `t` подаётся срез предвычисленных частот.
 
 ```
 t (scalar) ──► InputPopulation.get_firing_rate(state=[t])
@@ -777,6 +801,10 @@ class InputPopulation(PopulationModel):
 
 ## 3.5 `core/state.py`
 
+**[устарело]** Модуль `core/state.py` удалён (фаза 1 чистки): `NetworkState`
+не использовался — состояние сети передаётся списками тензоров
+(`NetworkOutput.final_state`, `initial_state` в `call()`).
+
 ```python
 @dataclass
 class NetworkState:
@@ -1037,6 +1065,10 @@ class NetworkGraph:
 
 ### 3.6.2 `NetworkRNNCell`
 
+**[устарело]** Класса `NetworkRNNCell` больше нет: шаг динамики выполняет
+функция `_step_fn` внутри `tf.while_loop` (`NetworkRNN`). Интерфейс
+`AbstractRNNCell` не используется.
+
 ```python
 class NetworkRNNCell(tf.keras.layers.AbstractRNNCell):
     """
@@ -1232,6 +1264,11 @@ class NetworkRNNCell(tf.keras.layers.AbstractRNNCell):
 
 ### 3.6.3 `NetworkRNN` и `NetworkOutput`
 
+**[устарело]** Поле `hidden_states` и флаг `return_hidden_states` удалены
+(не были реализованы). Сигнатура вызова: `call(t_sequence, inputs=None,
+initial_state=None)` — внешние входы передаются предвычисленными через
+`inputs` (см. раздел 2.2 и `docs/network.md`).
+
 ```python
 @dataclass
 class NetworkOutput:
@@ -1252,7 +1289,6 @@ class NetworkOutput:
             0.0 если используется EulerIntegrator.
     """
     firing_rates:    Dict[str, TensorType]
-    hidden_states:   Optional[Dict[str, Dict[str, TensorType]]]
     stability_loss:  TensorType
 
 
@@ -2089,6 +2125,10 @@ class NetworkConfig:
 
 # Часть IV. Требования к тестам
 
+> **[устарело]** Имена файлов и часть перечисленных тестов не соответствуют
+> актуальному состоянию `tests/` (см. примечание к разделу 2.1). Раздел
+> сохранён как историческое описание покрытия.
+
 ## 4.1 `tests/conftest.py`
 
 ```python
@@ -2523,6 +2563,9 @@ register_population('MyRateModel', MyRateModel)
 ---
 
 # Часть VI. Пошаговый план реализации
+
+> **Исторический раздел.** План v0.1.0 выполнен (с отличиями, отмеченными
+> в шапке документа); актуальный код — источник истины.
 
 ## Шаг 0: Инфраструктура
 
