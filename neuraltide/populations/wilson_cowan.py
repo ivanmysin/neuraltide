@@ -1,3 +1,4 @@
+import numpy as np
 import tensorflow as tf
 
 import neuraltide
@@ -8,87 +9,130 @@ from neuraltide.core.types import TensorType, StateList, Dict
 
 class WilsonCowan(PopulationModel):
     """
-    Модель Wilson-Cowan.
+    Модель Вильсона–Коуэна в форме одной популяции (rate model).
 
-    Уравнения:
-        τ_E * dE/dt = -E + F_E(w_EE*E - w_IE*I + I_ext,E + I_syn,E)
-        τ_I * dI/dt = -I + F_I(w_EI*E - w_II*I + I_ext,I + I_syn,I)
-        F(x) = 1 / (1 + exp(-a_coeff*(x - theta)))
+    Одна популяция описывается одной переменной состояния E —
+    нормированной активностью (0..1). Торможение учитывается через
+    входящие синаптические токи (в том числе от отдельных тормозных
+    популяций с отрицательным весом).
 
-    Состояние: [E, I], каждое shape [1, n_units].
+    Уравнение:
+        τ · dE/dt = −E + F(w·E + I_ext + I_syn)
+        F(x) = 1 / (1 + exp(−a·(x − θ)))
+
+    Состояние: [E], shape [1, n_units] — по одной независимой
+    популяции на юнит, выход — частота разрядов relu(E)·max_rate,
+    как у среднеполевой модели Ижикевича.
+
+    Параметры (params, все обязательны):
+        tau:       постоянная времени (мс). Скаляр или [n_units].
+        a:         крутизна сигмоиды (безразмерная). Скаляр или [n_units].
+        theta:     порог сигмоиды (мВ). Скаляр или [n_units].
+        w:         рекуррентный вес (безразмерный). Скаляр или [n_units].
+        I_ext:     внешний ток (мВ). Скаляр или [n_units].
+        max_rate:  масштаб частоты разрядов (Гц). Скаляр или [n_units].
+
+    n_units выводится из максимальной длины параметров (как у
+    IzhikevichMeanField) и не передаётся явно.
+
+    Пример:
+        pop = WilsonCowan(
+            dt=0.5,
+            params={
+                'tau':      {'value': [10.0, 10.0], 'trainable': False},
+                'a':        {'value': [1.0, 1.2],   'trainable': False},
+                'theta':    {'value': [0.0, 0.0],   'trainable': False},
+                'w':        {'value': [1.0, 0.8],   'trainable': True},
+                'I_ext':    {'value': [1.0, 0.5],   'trainable': True},
+                'max_rate': {'value': [100.0, 100.0], 'trainable': False},
+            },
+        )
+        # n_units=2
     """
 
-    def __init__(self, n_units: int, dt: float, params: dict, **kwargs):
-        super().__init__(n_units=n_units, dt=dt, **kwargs)
+    def __init__(self, dt: float, params: dict, name: str = "wilson_cowan", **kwargs):
+        self._params = params
+        self._infer_n_units()
+        self._validate_params()
+        self._validate_param_dimensions()
 
-        self.tau_E = self._make_param(params, 'tau_E')
-        self.tau_I = self._make_param(params, 'tau_I')
-        self.a_E = self._make_param(params, 'a_E')
-        self.a_I = self._make_param(params, 'a_I')
-        self.theta_E = self._make_param(params, 'theta_E')
-        self.theta_I = self._make_param(params, 'theta_I')
-        self.w_EE = self._make_param(params, 'w_EE')
-        self.w_IE = self._make_param(params, 'w_IE')
-        self.w_EI = self._make_param(params, 'w_EI')
-        self.w_II = self._make_param(params, 'w_II')
-        self.I_ext_E = self._make_param(params, 'I_ext_E')
-        self.I_ext_I = self._make_param(params, 'I_ext_I')
-        self.max_rate = self._make_param(params, 'max_rate')
+        super().__init__(n_units=self.n_units, dt=dt, name=name, **kwargs)
+
+        self.tau = self._make_param(self._params, "tau")
+        self.a = self._make_param(self._params, "a")
+        self.theta = self._make_param(self._params, "theta")
+        self.w = self._make_param(self._params, "w")
+        self.I_ext = self._make_param(self._params, "I_ext")
+        self.max_rate = self._make_param(self._params, "max_rate")
 
         self.state_size = [
-            tf.TensorShape([1, n_units]),
-            tf.TensorShape([1, n_units]),
+            tf.TensorShape([1, self.n_units]),
         ]
 
-    def _sigmoid(self, x: TensorType, a: TensorType, theta: TensorType) -> TensorType:
-        return 1.0 / (1.0 + tf.exp(-a * (x - theta)))
+    def _infer_n_units(self) -> None:
+        """Определяет n_units из максимальной длины параметров."""
+        max_len = 1
+        for key, spec in self._params.items():
+            value = spec.get("value") if isinstance(spec, dict) else spec
+            if value is None:
+                continue
+            if isinstance(value, (list, tuple)):
+                max_len = max(max_len, len(value))
+            elif isinstance(value, np.ndarray) and value.ndim == 1:
+                max_len = max(max_len, len(value))
+        self.n_units = max_len
+
+    def _validate_params(self) -> None:
+        """Проверяет наличие всех обязательных параметров."""
+        required = ["tau", "a", "theta", "w", "I_ext", "max_rate"]
+        for name in required:
+            if name not in self._params:
+                raise ValueError(
+                    f"WilsonCowan: required parameter '{name}' not found in params."
+                )
+
+    def _validate_param_dimensions(self) -> None:
+        """Проверяет согласованность размерностей параметров (1 или n_units)."""
+        for key, spec in self._params.items():
+            value = spec.get("value") if isinstance(spec, dict) else spec
+            if value is None:
+                continue
+            if isinstance(value, (list, tuple)):
+                if len(value) != 1 and len(value) != self.n_units:
+                    raise ValueError(
+                        f"WilsonCowan '{self.name}': parameter '{key}' "
+                        f"has length {len(value)}, expected 1 or {self.n_units}."
+                    )
+            elif isinstance(value, np.ndarray) and value.ndim == 1:
+                if len(value) != 1 and len(value) != self.n_units:
+                    raise ValueError(
+                        f"WilsonCowan '{self.name}': parameter '{key}' "
+                        f"has length {len(value)}, expected 1 or {self.n_units}."
+                    )
 
     def get_initial_state(self, batch_size: int = 1) -> StateList:
         dtype = neuraltide.config.get_dtype()
-        return [
-            tf.zeros([1, self.n_units], dtype=dtype),
-            tf.zeros([1, self.n_units], dtype=dtype),
-        ]
-
-    @staticmethod
-    def _maybe_cast(val, dtype):
-        if isinstance(val, tf.Tensor) and val.dtype == dtype:
-            return val
-        return tf.cast(val, dtype)
+        return [tf.zeros([1, self.n_units], dtype=dtype)]
 
     def derivatives(
         self,
         state: StateList,
         total_synaptic_input: Dict[str, TensorType],
     ) -> StateList:
-        E, I_inh = state
-        I_syn = total_synaptic_input['I_syn']
+        E = state[0]
+        I_syn = total_synaptic_input["I_syn"]
 
         dtype = neuraltide.config.get_dtype()
-        _c = self._maybe_cast
-        tau_E = _c(self.tau_E, dtype)
-        tau_I = _c(self.tau_I, dtype)
-        a_E = _c(self.a_E, dtype)
-        a_I = _c(self.a_I, dtype)
-        theta_E = _c(self.theta_E, dtype)
-        theta_I = _c(self.theta_I, dtype)
-        w_EE = _c(self.w_EE, dtype)
-        w_IE = _c(self.w_IE, dtype)
-        w_EI = _c(self.w_EI, dtype)
-        w_II = _c(self.w_II, dtype)
-        I_ext_E = _c(self.I_ext_E, dtype)
-        I_ext_I = _c(self.I_ext_I, dtype)
+        tau = tf.cast(self.tau, dtype)
+        a = tf.cast(self.a, dtype)
+        theta = tf.cast(self.theta, dtype)
+        w = tf.cast(self.w, dtype)
+        I_ext = tf.cast(self.I_ext, dtype)
 
-        x_E = w_EE * E - w_IE * I_inh + I_ext_E + I_syn
-        x_I = w_EI * E - w_II * I_inh + I_ext_I
-
-        F_E = self._sigmoid(x_E, a_E, theta_E)
-        F_I = self._sigmoid(x_I, a_I, theta_I)
-
-        dEdt = (-E + F_E) / tau_E
-        dIdt = (-I_inh + F_I) / tau_I
-
-        return [dEdt, dIdt]
+        x = w * E + I_ext + I_syn
+        F = 1.0 / (1.0 + tf.exp(-a * (x - theta)))
+        dEdt = (-E + F) / tau
+        return [dEdt]
 
     def get_firing_rate(self, state: StateList) -> TensorType:
         E = state[0]
@@ -96,87 +140,50 @@ class WilsonCowan(PopulationModel):
         return tf.nn.relu(E) * max_rate
 
     def observables(self, state: StateList) -> Dict[str, TensorType]:
-        return {'firing_rate': self.get_firing_rate(state)}
+        return {"firing_rate": self.get_firing_rate(state)}
 
     @property
     def parameter_spec(self) -> Dict[str, Dict[str, any]]:
         return {
-            'tau_E': {
-                'shape': (self.n_units,),
-                'trainable': False,
-                'constraint': None,
-                'units': 'ms',
+            "tau": {
+                "shape": (self.n_units,),
+                "trainable": self.tau.trainable,
+                "constraint": self._get_constraint_name(self.tau),
+                "units": "ms",
             },
-            'tau_I': {
-                'shape': (self.n_units,),
-                'trainable': False,
-                'constraint': None,
-                'units': 'ms',
+            "a": {
+                "shape": (self.n_units,),
+                "trainable": self.a.trainable,
+                "constraint": self._get_constraint_name(self.a),
+                "units": "dimensionless",
             },
-            'a_E': {
-                'shape': (self.n_units,),
-                'trainable': False,
-                'constraint': None,
-                'units': 'dimensionless',
+            "theta": {
+                "shape": (self.n_units,),
+                "trainable": self.theta.trainable,
+                "constraint": self._get_constraint_name(self.theta),
+                "units": "mV",
             },
-            'a_I': {
-                'shape': (self.n_units,),
-                'trainable': False,
-                'constraint': None,
-                'units': 'dimensionless',
+            "w": {
+                "shape": (self.n_units,),
+                "trainable": self.w.trainable,
+                "constraint": self._get_constraint_name(self.w),
+                "units": "dimensionless",
             },
-            'theta_E': {
-                'shape': (self.n_units,),
-                'trainable': False,
-                'constraint': None,
-                'units': 'mV',
+            "I_ext": {
+                "shape": (self.n_units,),
+                "trainable": self.I_ext.trainable,
+                "constraint": self._get_constraint_name(self.I_ext),
+                "units": "mV",
             },
-            'theta_I': {
-                'shape': (self.n_units,),
-                'trainable': False,
-                'constraint': None,
-                'units': 'mV',
-            },
-            'w_EE': {
-                'shape': (self.n_units,),
-                'trainable': False,
-                'constraint': None,
-                'units': 'dimensionless',
-            },
-            'w_IE': {
-                'shape': (self.n_units,),
-                'trainable': False,
-                'constraint': None,
-                'units': 'dimensionless',
-            },
-            'w_EI': {
-                'shape': (self.n_units,),
-                'trainable': False,
-                'constraint': None,
-                'units': 'dimensionless',
-            },
-            'w_II': {
-                'shape': (self.n_units,),
-                'trainable': False,
-                'constraint': None,
-                'units': 'dimensionless',
-            },
-            'I_ext_E': {
-                'shape': (self.n_units,),
-                'trainable': False,
-                'constraint': None,
-                'units': 'mV',
-            },
-            'I_ext_I': {
-                'shape': (self.n_units,),
-                'trainable': False,
-                'constraint': None,
-                'units': 'mV',
-            },
-            'max_rate': {
-                'shape': (self.n_units,),
-                'trainable': False,
-                'constraint': None,
-                'units': 'Hz',
+            "max_rate": {
+                "shape": (self.n_units,),
+                "trainable": self.max_rate.trainable,
+                "constraint": self._get_constraint_name(self.max_rate),
+                "units": "Hz",
             },
         }
+
+    def _get_constraint_name(self, var: tf.Variable) -> str:
+        if var.constraint is not None:
+            return var.constraint.__class__.__name__
+        return None

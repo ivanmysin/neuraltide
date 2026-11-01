@@ -1,73 +1,85 @@
 """
 Tests for AdjointSolver: gradient computation via adjoint state method.
 """
+
 import pytest
 import tensorflow as tf
 import numpy as np
 
-import neuraltide
-import neuraltide.config
 from neuraltide.core.network import NetworkGraph, NetworkRNN
 from neuraltide.populations import IzhikevichMeanField
-from neuraltide.synapses import TsodyksMarkramSynapse, StaticSynapse
+from neuraltide.synapses import TsodyksMarkramSynapse
 from neuraltide.inputs import VonMisesGenerator
-from neuraltide.integrators import EulerIntegrator, RK4Integrator
+from neuraltide.integrators import RK4Integrator
 from neuraltide.training import MSELoss, StabilityPenalty, CompositeLoss
 
 
 def _make_simple_small_network(dt=0.05):
     """Create a simple network for testing: 1 input -> 1 population."""
-    pop = IzhikevichMeanField(dt=dt, params={
-        'tau_pop':   {'value': [1.0, 1.0],   'trainable': False},
-        'alpha':     {'value': [0.5, 0.5],   'trainable': False},
-        'a':         {'value': [0.02, 0.02], 'trainable': False},
-        'b':         {'value': [0.2, 0.2],   'trainable': False},
-        'w_jump':    {'value': [0.1, 0.1],   'trainable': False},
-        'Delta_I':   {'value': [0.5, 0.5],   'trainable': True,
-                      'min': 0.01, 'max': 2.0},
-        'I_ext':     {'value': [0.1, 0.1],   'trainable': True,
-                      'min': -2.0, 'max': 2.0},
-    })
+    pop = IzhikevichMeanField(
+        dt=dt,
+        params={
+            "tau_pop": {"value": [1.0, 1.0], "trainable": False},
+            "alpha": {"value": [0.5, 0.5], "trainable": False},
+            "a": {"value": [0.02, 0.02], "trainable": False},
+            "b": {"value": [0.2, 0.2], "trainable": False},
+            "w_jump": {"value": [0.1, 0.1], "trainable": False},
+            "Delta_I": {
+                "value": [0.5, 0.5],
+                "trainable": True,
+                "min": 0.01,
+                "max": 2.0,
+            },
+            "I_ext": {"value": [0.1, 0.1], "trainable": True, "min": -2.0, "max": 2.0},
+        },
+    )
 
     gen = VonMisesGenerator(
         dt=dt,
         params={
-            'mean_rate': 20.0,
-            'R': 0.5,
-            'freq': 8.0,
-            'phase': 0.0,
+            "mean_rate": 20.0,
+            "R": 0.5,
+            "freq": 8.0,
+            "phase": 0.0,
         },
-        name='theta_gen'
+        name="theta_gen",
     )
 
-    syn = TsodyksMarkramSynapse(n_pre=1, n_post=2, dt=dt, params={
-        'gsyn_max': {'value': [[0.1, 0.1]], 'trainable': True},
-        'tau_f':    {'value': 20.0,  'trainable': True, 'min': 6.0,  'max': 240.0},
-        'tau_d':    {'value': 5.0,   'trainable': True, 'min': 2.0,  'max': 15.0},
-        'tau_r':    {'value': 200.0, 'trainable': True, 'min': 91.0, 'max': 1300.0},
-        'Uinc':     {'value': 0.2,   'trainable': True, 'min': 0.04, 'max': 0.7},
-        'pconn':    {'value': [[1.0, 1.0]], 'trainable': False},
-        'e_r':      {'value': 0.0,   'trainable': False},
-    })
+    syn = TsodyksMarkramSynapse(
+        n_pre=1,
+        n_post=2,
+        dt=dt,
+        params={
+            "gsyn_max": {"value": [[0.1, 0.1]], "trainable": True},
+            "tau_f": {"value": 20.0, "trainable": True, "min": 6.0, "max": 240.0},
+            "tau_d": {"value": 5.0, "trainable": True, "min": 2.0, "max": 15.0},
+            "tau_r": {"value": 200.0, "trainable": True, "min": 91.0, "max": 1300.0},
+            "Uinc": {"value": 0.2, "trainable": True, "min": 0.04, "max": 0.7},
+            "pconn": {"value": [[1.0, 1.0]], "trainable": False},
+            "e_r": {"value": 0.0, "trainable": False},
+        },
+    )
 
     graph = NetworkGraph(dt=dt)
-    graph.declare_input('theta', n_units=gen.n_units)
-    graph.add_population('exc', pop)
-    graph.add_synapse('theta->exc', syn, src='theta', tgt='exc')
+    graph.declare_input("theta", n_units=gen.n_units)
+    graph.add_population("exc", pop)
+    graph.add_synapse("theta->exc", syn, src="theta", tgt="exc")
 
     return graph, gen
 
 
 def _make_inputs(graph, gen, t_seq):
     """Create input tensor from generator."""
-    return graph.pack_inputs({'theta': gen(t_seq)})
+    return graph.pack_inputs({"theta": gen(t_seq)})
 
 
 def _compute_bptt_gradients(network, t_seq, inputs, target):
     """Compute gradients via BPTT (standard tf.GradientTape)."""
-    loss_fn = CompositeLoss([
-        (1.0, MSELoss(target)),
-    ])
+    loss_fn = CompositeLoss(
+        [
+            (1.0, MSELoss(target)),
+        ]
+    )
 
     with tf.GradientTape() as tape:
         output = network(t_seq, inputs=inputs, training=False)
@@ -82,10 +94,12 @@ def _compute_adjoint_gradients(network, t_seq, inputs, target):
     from neuraltide.training.adjoint import AdjointSolver
 
     solver = AdjointSolver(network, network._integrator)
-    
-    loss_fn = CompositeLoss([
-        (1.0, MSELoss(target)),
-    ])
+
+    loss_fn = CompositeLoss(
+        [
+            (1.0, MSELoss(target)),
+        ]
+    )
 
     grads, variables, output = solver.compute_gradients(t_seq, inputs, target, loss_fn)
     return grads, variables, output
@@ -98,6 +112,8 @@ class TestAdjointBasics:
         """AdjointSolver should be importable from neuraltide.training.adjoint."""
         try:
             from neuraltide.training.adjoint import AdjointSolver
+
+            assert AdjointSolver is not None
         except ImportError:
             pytest.fail("AdjointSolver not found in neuraltide.training.adjoint")
 
@@ -126,9 +142,9 @@ class TestAdjointBasics:
         init_pop, init_syn, pop_stacked, syn_stacked = state_info
 
         assert output is not None, "forward_pass should return output"
-        assert hasattr(output, 'firing_rates'), "output should have firing_rates"
-        assert hasattr(output, 'stability_loss'), "output should have stability_loss"
-        assert 'exc' in output.firing_rates, "firing_rates should contain 'exc'"
+        assert hasattr(output, "firing_rates"), "output should have firing_rates"
+        assert hasattr(output, "stability_loss"), "output should have stability_loss"
+        assert "exc" in output.firing_rates, "firing_rates should contain 'exc'"
         assert len(pop_stacked) > 0, "pop_stacked should contain state tensors"
         assert len(syn_stacked) > 0, "syn_stacked should contain state tensors"
 
@@ -153,27 +169,34 @@ class TestAdjointGradientCorrectness:
         target_0 = 10.0 + 5.0 * np.sin(2 * np.pi * 8.0 * t_values / 1000.0)
         target_1 = 8.0 + 4.0 * np.sin(2 * np.pi * 8.0 * t_values / 1000.0 + 0.5)
         target = {
-            'exc': tf.constant(
-                np.stack([target_0, target_1], axis=-1)[None, :, :],
-                dtype=tf.float32
+            "exc": tf.constant(
+                np.stack([target_0, target_1], axis=-1)[None, :, :], dtype=tf.float32
             )
         }
 
-        bptt_grads, bptt_output = _compute_bptt_gradients(network, t_seq, inputs, target)
+        bptt_grads, bptt_output = _compute_bptt_gradients(
+            network, t_seq, inputs, target
+        )
 
         solver = AdjointSolver(network, network._integrator)
-        loss_fn = CompositeLoss([
-            (1.0, MSELoss(target)),
-        ])
-        adj_grads, variables, adj_output = solver.compute_gradients(t_seq, inputs, target, loss_fn)
+        loss_fn = CompositeLoss(
+            [
+                (1.0, MSELoss(target)),
+            ]
+        )
+        adj_grads, variables, adj_output = solver.compute_gradients(
+            t_seq, inputs, target, loss_fn
+        )
 
         assert len(bptt_grads) == len(adj_grads), "Should have same number of gradients"
 
         for bptt_g, adj_g in zip(bptt_grads, adj_grads):
             if bptt_g is None and adj_g is None:
                 continue
-            assert bptt_g is not None or adj_g is not None, "At least one gradient should exist"
-            
+            assert bptt_g is not None or adj_g is not None, (
+                "At least one gradient should exist"
+            )
+
             if bptt_g is not None and adj_g is not None:
                 diff = tf.reduce_mean(tf.abs(bptt_g - adj_g))
                 assert diff < 3e-2, f"Gradient diff {diff:.6f} should be < 3e-2"
@@ -186,34 +209,25 @@ class TestAdjointGradientCorrectness:
         T = 10
         n_steps = int(T / dt)
         graph, gen = _make_simple_small_network(dt=dt)
-        network = NetworkRNN(graph, integrator=RK4Integrator(), stability_penalty_weight=1e-3)
+        network = NetworkRNN(
+            graph, integrator=RK4Integrator(), stability_penalty_weight=1e-3
+        )
 
         t_values = np.arange(n_steps, dtype=np.float32) * dt
         t_seq = tf.constant(t_values[None, :, None])
         inputs = _make_inputs(graph, gen, t_seq)
 
-        target_0 = 10.0 + 5.0 * np.sin(2 * np.pi * 8.0 * t_values / 1000.0)
-        target_1 = 8.0 + 4.0 * np.sin(2 * np.pi * 8.0 * t_values / 1000.0 + 0.5)
-        target = {
-            'exc': tf.constant(
-                np.stack([target_0, target_1], axis=-1)[None, :, :],
-                dtype=tf.float32
-            )
-        }
-
         bptt_output = network(t_seq, inputs=inputs, training=False)
 
         solver = AdjointSolver(network, network._integrator)
-        loss_fn = CompositeLoss([
-            (1.0, MSELoss(target)),
-        ])
         adj_output, _, _ = solver.forward_pass(t_seq, inputs)
 
         bptt_stability = float(bptt_output.stability_loss)
         adj_stability = float(adj_output.stability_loss)
 
-        assert abs(bptt_stability - adj_stability) < 1e-6, \
+        assert abs(bptt_stability - adj_stability) < 1e-6, (
             f"Stability loss mismatch: BPTT={bptt_stability}, Adj={adj_stability}"
+        )
 
 
 class TestAdjointBackwardPass:
@@ -221,33 +235,42 @@ class TestAdjointBackwardPass:
 
     def _make_network(self, dt=0.1, n_units=1):
         from neuraltide.synapses import TsodyksMarkramSynapse
-        pop = IzhikevichMeanField(dt=dt, params={
-            'tau_pop': {'value': 1.0,  'trainable': False},
-            'alpha':   {'value': 0.5,  'trainable': False},
-            'a':       {'value': 0.02, 'trainable': False},
-            'b':       {'value': 0.2,  'trainable': False},
-            'w_jump':  {'value': 0.1,  'trainable': False},
-            'Delta_I': {'value': 0.5,  'trainable': True},
-            'I_ext':   {'value': 0.1,  'trainable': True},
-        })
+
+        pop = IzhikevichMeanField(
+            dt=dt,
+            params={
+                "tau_pop": {"value": 1.0, "trainable": False},
+                "alpha": {"value": 0.5, "trainable": False},
+                "a": {"value": 0.02, "trainable": False},
+                "b": {"value": 0.2, "trainable": False},
+                "w_jump": {"value": 0.1, "trainable": False},
+                "Delta_I": {"value": 0.5, "trainable": True},
+                "I_ext": {"value": 0.1, "trainable": True},
+            },
+        )
         gen = VonMisesGenerator(
             dt=dt,
-            params={'mean_rate': 20.0, 'R': 0.5, 'freq': 8.0, 'phase': 0.0},
-            name='theta_gen'
+            params={"mean_rate": 20.0, "R": 0.5, "freq": 8.0, "phase": 0.0},
+            name="theta_gen",
         )
-        syn = TsodyksMarkramSynapse(n_pre=1, n_post=1, dt=dt, params={
-            'gsyn_max': {'value': [[0.1]], 'trainable': True},
-            'tau_f':    {'value': 20.0,  'trainable': False},
-            'tau_d':    {'value': 5.0,   'trainable': False},
-            'tau_r':    {'value': 200.0, 'trainable': False},
-            'Uinc':     {'value': 0.2,   'trainable': False},
-            'pconn':    {'value': [[1.0]], 'trainable': False},
-            'e_r':      {'value': 0.0,   'trainable': False},
-        })
+        syn = TsodyksMarkramSynapse(
+            n_pre=1,
+            n_post=1,
+            dt=dt,
+            params={
+                "gsyn_max": {"value": [[0.1]], "trainable": True},
+                "tau_f": {"value": 20.0, "trainable": False},
+                "tau_d": {"value": 5.0, "trainable": False},
+                "tau_r": {"value": 200.0, "trainable": False},
+                "Uinc": {"value": 0.2, "trainable": False},
+                "pconn": {"value": [[1.0]], "trainable": False},
+                "e_r": {"value": 0.0, "trainable": False},
+            },
+        )
         graph = NetworkGraph(dt=dt)
-        graph.declare_input('theta', n_units=gen.n_units)
-        graph.add_population('exc', pop)
-        graph.add_synapse('theta->exc', syn, src='theta', tgt='exc')
+        graph.declare_input("theta", n_units=gen.n_units)
+        graph.add_population("exc", pop)
+        graph.add_synapse("theta->exc", syn, src="theta", tgt="exc")
         return NetworkRNN(graph, integrator=RK4Integrator()), gen
 
     def test_backward_pass_matches_bptt(self):
@@ -263,8 +286,10 @@ class TestAdjointBackwardPass:
         t_seq = tf.constant(t_values[None, :, None])
         inputs = _make_inputs(network._graph, gen, t_seq)
 
-        target_arr = (10.0 + 5.0 * np.sin(2 * np.pi * 8.0 * t_values / 1000.0))[None, :, None]
-        target = {'exc': tf.constant(target_arr, dtype=tf.float32)}
+        target_arr = (10.0 + 5.0 * np.sin(2 * np.pi * 8.0 * t_values / 1000.0))[
+            None, :, None
+        ]
+        target = {"exc": tf.constant(target_arr, dtype=tf.float32)}
         loss_fn = MSELoss(target)
 
         # BPTT baseline
@@ -280,9 +305,7 @@ class TestAdjointBackwardPass:
 
         assert len(bptt_grads) == len(adj_grads), "Should have same number of gradients"
 
-        for v, bptt_g, adj_g in zip(
-            network.trainable_variables, bptt_grads, adj_grads
-        ):
+        for v, bptt_g, adj_g in zip(network.trainable_variables, bptt_grads, adj_grads):
             if bptt_g is None:
                 continue
             assert adj_g is not None, f"{v.name}: adjoint gradient should not be None"
@@ -304,8 +327,10 @@ class TestAdjointBackwardPass:
         t_seq = tf.constant(t_values[None, :, None])
         inputs = _make_inputs(network._graph, gen, t_seq)
 
-        target_arr = (10.0 + 5.0 * np.sin(2 * np.pi * 8.0 * t_values / 1000.0))[None, :, None]
-        target = {'exc': tf.constant(target_arr, dtype=tf.float32)}
+        target_arr = (10.0 + 5.0 * np.sin(2 * np.pi * 8.0 * t_values / 1000.0))[
+            None, :, None
+        ]
+        target = {"exc": tf.constant(target_arr, dtype=tf.float32)}
         loss_fn = MSELoss(target)
 
         with tf.GradientTape() as bptt_tape:
@@ -317,15 +342,11 @@ class TestAdjointBackwardPass:
         _, _, state_info = solver.forward_pass(t_seq, inputs)
         adj_grads = solver.backward_pass(t_seq, inputs, state_info, target, loss_fn)
 
-        for v, bptt_g, adj_g in zip(
-            network.trainable_variables, bptt_grads, adj_grads
-        ):
+        for v, bptt_g, adj_g in zip(network.trainable_variables, bptt_grads, adj_grads):
             if bptt_g is None:
                 continue
             diff = float(tf.reduce_mean(tf.abs(bptt_g - adj_g)))
-            assert diff < 5e-2, (
-                f"{v.name}: T={T} diff={diff:.6f} should be < 5e-2"
-            )
+            assert diff < 5e-2, f"{v.name}: T={T} diff={diff:.6f} should be < 5e-2"
 
     def test_backward_pass_gradient_direction(self):
         """backward_pass gradients should point in the same direction as BPTT."""
@@ -341,7 +362,7 @@ class TestAdjointBackwardPass:
         inputs = _make_inputs(network._graph, gen, t_seq)
 
         target_arr = (5.0 * np.ones(n_steps))[None, :, None]
-        target = {'exc': tf.constant(target_arr, dtype=tf.float32)}
+        target = {"exc": tf.constant(target_arr, dtype=tf.float32)}
         loss_fn = MSELoss(target)
 
         with tf.GradientTape() as bptt_tape:
@@ -353,9 +374,7 @@ class TestAdjointBackwardPass:
         _, _, state_info = solver.forward_pass(t_seq, inputs)
         adj_grads = solver.backward_pass(t_seq, inputs, state_info, target, loss_fn)
 
-        for v, bptt_g, adj_g in zip(
-            network.trainable_variables, bptt_grads, adj_grads
-        ):
+        for v, bptt_g, adj_g in zip(network.trainable_variables, bptt_grads, adj_grads):
             if bptt_g is None:
                 continue
             if tf.reduce_sum(tf.abs(bptt_g)) < 1e-8:
@@ -377,7 +396,9 @@ class TestAdjointWithStabilityPenalty:
         T = 10
         n_steps = int(T / dt)
         graph, gen = _make_simple_small_network(dt=dt)
-        network = NetworkRNN(graph, integrator=RK4Integrator(), stability_penalty_weight=1e-3)
+        network = NetworkRNN(
+            graph, integrator=RK4Integrator(), stability_penalty_weight=1e-3
+        )
 
         t_values = np.arange(n_steps, dtype=np.float32) * dt
         t_seq = tf.constant(t_values[None, :, None])
@@ -386,19 +407,22 @@ class TestAdjointWithStabilityPenalty:
         target_0 = 10.0 + 5.0 * np.sin(2 * np.pi * 8.0 * t_values / 1000.0)
         target_1 = 8.0 + 4.0 * np.sin(2 * np.pi * 8.0 * t_values / 1000.0 + 0.5)
         target = {
-            'exc': tf.constant(
-                np.stack([target_0, target_1], axis=-1)[None, :, :],
-                dtype=tf.float32
+            "exc": tf.constant(
+                np.stack([target_0, target_1], axis=-1)[None, :, :], dtype=tf.float32
             )
         }
 
-        loss_fn = CompositeLoss([
-            (1.0, MSELoss(target)),
-            (1e-3, StabilityPenalty()),
-        ])
+        loss_fn = CompositeLoss(
+            [
+                (1.0, MSELoss(target)),
+                (1e-3, StabilityPenalty()),
+            ]
+        )
 
         solver = AdjointSolver(network, network._integrator)
-        adj_grads, variables, adj_output = solver.compute_gradients(t_seq, inputs, target, loss_fn)
+        adj_grads, variables, adj_output = solver.compute_gradients(
+            t_seq, inputs, target, loss_fn
+        )
 
         assert len(adj_grads) > 0, "Should compute some gradients"
 
@@ -423,17 +447,20 @@ class TestAdjointNumericalGradient:
         target_0 = 10.0 + 5.0 * np.sin(2 * np.pi * 8.0 * t_values / 1000.0)
         target_1 = 8.0 + 4.0 * np.sin(2 * np.pi * 8.0 * t_values / 1000.0 + 0.5)
         target = {
-            'exc': tf.constant(
-                np.stack([target_0, target_1], axis=-1)[None, :, :],
-                dtype=tf.float32
+            "exc": tf.constant(
+                np.stack([target_0, target_1], axis=-1)[None, :, :], dtype=tf.float32
             )
         }
 
         solver = AdjointSolver(network, network._integrator)
-        loss_fn = CompositeLoss([
-            (1.0, MSELoss(target)),
-        ])
-        adj_grads, variables, _ = solver.compute_gradients(t_seq, inputs, target, loss_fn)
+        loss_fn = CompositeLoss(
+            [
+                (1.0, MSELoss(target)),
+            ]
+        )
+        adj_grads, variables, _ = solver.compute_gradients(
+            t_seq, inputs, target, loss_fn
+        )
 
         has_nonzero_grad = False
         for g in adj_grads:
@@ -462,15 +489,16 @@ class TestAdjointTrainStep:
         target_0 = 10.0 + 5.0 * np.sin(2 * np.pi * 8.0 * t_values / 1000.0)
         target_1 = 8.0 + 4.0 * np.sin(2 * np.pi * 8.0 * t_values / 1000.0 + 0.5)
         target = {
-            'exc': tf.constant(
-                np.stack([target_0, target_1], axis=-1)[None, :, :],
-                dtype=tf.float32
+            "exc": tf.constant(
+                np.stack([target_0, target_1], axis=-1)[None, :, :], dtype=tf.float32
             )
         }
 
-        loss_fn = CompositeLoss([
-            (1.0, MSELoss(target)),
-        ])
+        loss_fn = CompositeLoss(
+            [
+                (1.0, MSELoss(target)),
+            ]
+        )
 
         initial_output = network(t_seq, inputs=inputs, training=False)
         initial_loss = float(loss_fn(initial_output, network))
@@ -480,14 +508,18 @@ class TestAdjointTrainStep:
 
         for epoch in range(10):
             solver = AdjointSolver(network, network._integrator)
-            grads, variables, _ = solver.compute_gradients(t_seq, inputs, target, loss_fn)
+            grads, variables, _ = solver.compute_gradients(
+                t_seq, inputs, target, loss_fn
+            )
 
             grads_and_vars = [(g, v) for g, v in zip(grads, variables) if g is not None]
             if grads_and_vars:
                 clipped_grads, _ = tf.clip_by_global_norm(
                     [g for g, v in grads_and_vars], 1.0
                 )
-                optimizer.apply_gradients(zip(clipped_grads, [v for g, v in grads_and_vars]))
+                optimizer.apply_gradients(
+                    zip(clipped_grads, [v for g, v in grads_and_vars])
+                )
 
         final_output = network(t_seq, inputs=inputs, training=False)
         final_loss = float(loss_fn(final_output, network))

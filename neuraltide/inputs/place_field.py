@@ -81,7 +81,9 @@ class PlaceFieldGenerator(BaseInputGenerator):
         dt: float,
         params: Dict[str, Any],
         arena_size: Tuple[Tuple[float, float], Tuple[float, float]] = (
-            (-100.0, 100.0), (-100.0, 100.0)),
+            (-100.0, 100.0),
+            (-100.0, 100.0),
+        ),
         arena_radius: float = 100.0,
         name: str = "place_field_generator",
         **kwargs,
@@ -94,13 +96,13 @@ class PlaceFieldGenerator(BaseInputGenerator):
         self._dt = dt
         super().__init__(params=params, dt=dt, name=name, **kwargs)
 
-        self.center_x = self._make_param(self._params, 'center_x')
-        self.center_y = self._make_param(self._params, 'center_y')
-        self.radius = self._make_param(self._params, 'radius')
+        self.center_x = self._make_param(self._params, "center_x")
+        self.center_y = self._make_param(self._params, "center_y")
+        self.radius = self._make_param(self._params, "radius")
 
-        peak_rate_raw = self._params.get('peak_rate', 20.0)
+        peak_rate_raw = self._params.get("peak_rate", 20.0)
         if isinstance(peak_rate_raw, dict):
-            peak_rate_raw = peak_rate_raw['value']
+            peak_rate_raw = peak_rate_raw["value"]
         pk_np = np.atleast_1d(np.array(peak_rate_raw, dtype=np.float64))
         if pk_np.shape == ():
             pk_np = np.array([pk_np.item()], dtype=np.float64)
@@ -110,12 +112,12 @@ class PlaceFieldGenerator(BaseInputGenerator):
             initializer=tf.keras.initializers.Constant(pk_np),
             trainable=False,
             dtype=neuraltide.config.get_dtype(),
-            name='peak_rate',
+            name="peak_rate",
         )
 
-        bg_raw = self._params.get('background_rate', 0.0)
+        bg_raw = self._params.get("background_rate", 0.0)
         if isinstance(bg_raw, dict):
-            bg_raw = bg_raw['value']
+            bg_raw = bg_raw["value"]
         bg_np = np.atleast_1d(np.array(bg_raw, dtype=np.float64))
         if bg_np.shape == ():
             bg_np = np.array([bg_np.item()], dtype=np.float64)
@@ -124,12 +126,12 @@ class PlaceFieldGenerator(BaseInputGenerator):
             initializer=tf.keras.initializers.Constant(bg_np),
             trainable=False,
             dtype=neuraltide.config.get_dtype(),
-            name='background_rate',
+            name="background_rate",
         )
 
-        tmf_raw = self._params.get('theta_modulation_factor', 0.0)
+        tmf_raw = self._params.get("theta_modulation_factor", 0.0)
         if isinstance(tmf_raw, dict):
-            tmf_raw = tmf_raw['value']
+            tmf_raw = tmf_raw["value"]
         tmf_np = np.atleast_1d(np.array(tmf_raw, dtype=np.float64))
         if tmf_np.shape == ():
             tmf_np = np.array([tmf_np.item()], dtype=np.float64)
@@ -138,12 +140,12 @@ class PlaceFieldGenerator(BaseInputGenerator):
             initializer=tf.keras.initializers.Constant(tmf_np),
             trainable=False,
             dtype=neuraltide.config.get_dtype(),
-            name='theta_modulation_factor',
+            name="theta_modulation_factor",
         )
 
-        slp_raw = self._params.get('precession_slope', 0.0)
+        slp_raw = self._params.get("precession_slope", 0.0)
         if isinstance(slp_raw, dict):
-            slp_raw = slp_raw['value']
+            slp_raw = slp_raw["value"]
         slp_np = np.atleast_1d(np.array(slp_raw, dtype=np.float64))
         if slp_np.shape == ():
             slp_np = np.array([slp_np.item()], dtype=np.float64)
@@ -153,12 +155,12 @@ class PlaceFieldGenerator(BaseInputGenerator):
             initializer=tf.keras.initializers.Constant(slp_rad_per_cm),
             trainable=False,
             dtype=neuraltide.config.get_dtype(),
-            name='precession_slope_rad',
+            name="precession_slope_rad",
         )
 
-        ph_raw = self._params.get('precession_init_phase', 0.0)
+        ph_raw = self._params.get("precession_init_phase", 0.0)
         if isinstance(ph_raw, dict):
-            ph_raw = ph_raw['value']
+            ph_raw = ph_raw["value"]
         ph_np = np.atleast_1d(np.array(ph_raw, dtype=np.float64))
         if ph_np.shape == ():
             ph_np = np.array([ph_np.item()], dtype=np.float64)
@@ -168,12 +170,12 @@ class PlaceFieldGenerator(BaseInputGenerator):
             initializer=tf.keras.initializers.Constant(ph_rad),
             trainable=False,
             dtype=neuraltide.config.get_dtype(),
-            name='precession_init_phase',
+            name="precession_init_phase",
         )
 
-        pout_raw = self._params.get('phase_outside', 0.0)
+        pout_raw = self._params.get("phase_outside", 0.0)
         if isinstance(pout_raw, dict):
-            pout_raw = pout_raw['value']
+            pout_raw = pout_raw["value"]
         pout_np = np.atleast_1d(np.array(pout_raw, dtype=np.float64))
         if pout_np.shape == ():
             pout_np = np.array([pout_np.item()], dtype=np.float64)
@@ -183,12 +185,12 @@ class PlaceFieldGenerator(BaseInputGenerator):
             initializer=tf.keras.initializers.Constant(pout_rad),
             trainable=False,
             dtype=neuraltide.config.get_dtype(),
-            name='phase_outside',
+            name="phase_outside",
         )
 
-        raw_R = self._params.get('R')
+        raw_R = self._params.get("R")
         if isinstance(raw_R, dict):
-            raw_R = raw_R.get('value', raw_R)
+            raw_R = raw_R.get("value", raw_R)
         R_array = np.array(raw_R)
         if R_array.ndim == 0:
             R_array = np.array([R_array.item()])
@@ -197,11 +199,10 @@ class PlaceFieldGenerator(BaseInputGenerator):
         i0k_np = self._i0_np(kappa_np)
         self.kappa = tf.constant(kappa_np, dtype=neuraltide.config.get_dtype())
         self.i0_kappa = tf.constant(i0k_np, dtype=neuraltide.config.get_dtype())
-        self.freq = self._make_param(self._params, 'freq')
+        self.freq = self._make_param(self._params, "freq")
 
         self._R_mean = float(np.mean(R_array))
         self._kappa_mean = float(np.mean(kappa_np))
-
 
     @property
     def arena_size(self) -> Tuple[Tuple[float, float], Tuple[float, float]]:
@@ -221,7 +222,7 @@ class PlaceFieldGenerator(BaseInputGenerator):
 
     @staticmethod
     def _i0_np(kappa):
-        return tf.math.bessel_i0(kappa)
+        return tf.math.bessel_i0(tf.constant(kappa, dtype=tf.float64)).numpy()
 
     @staticmethod
     def _r2kappa_np(R):
@@ -229,17 +230,19 @@ class PlaceFieldGenerator(BaseInputGenerator):
         mask1 = R < 0.53
         mask2 = (R >= 0.53) & (R < 0.85)
         mask3 = R >= 0.85
-        result[mask1] = 2 * R[mask1] + R[mask1]**3 + (5/6) * R[mask1]**5
+        result[mask1] = 2 * R[mask1] + R[mask1] ** 3 + (5 / 6) * R[mask1] ** 5
         result[mask2] = -0.4 + 1.39 * R[mask2] + 0.43 / (1 - R[mask2])
-        result[mask3] = 1.0 / (3 * R[mask3] - 4 * R[mask3]**2 + R[mask3]**3)
-        return result.astype(np.float32)
+        result[mask3] = 1.0 / (3 * R[mask3] - 4 * R[mask3] ** 2 + R[mask3] ** 3)
+        return result
 
     def build(self, input_shape):
         super().build(input_shape)
         self._two_pi = 2.0 * np.pi
         self._ms_per_s = 1000.0
 
-    def call(self, t: TensorType, extra_inputs: Optional[TensorType] = None) -> TensorType:
+    def call(
+        self, t: TensorType, extra_inputs: Optional[TensorType] = None
+    ) -> TensorType:
         """
         Args:
             t: время в мс, shape [batch, T, 1], [batch, T] или [T].
@@ -256,26 +259,24 @@ class PlaceFieldGenerator(BaseInputGenerator):
             tf.Tensor, shape [batch, T, n_units], в Гц.
         """
         t_rank = tf.rank(t)
-        t = tf.cond(tf.equal(t_rank, 1),
-                    lambda: tf.expand_dims(t, 0),
-                    lambda: t)
-        t = tf.cond(tf.equal(tf.rank(t), 2),
-                    lambda: tf.expand_dims(t, -1),
-                    lambda: t)
+        t = tf.cond(tf.equal(t_rank, 1), lambda: tf.expand_dims(t, 0), lambda: t)
+        t = tf.cond(tf.equal(tf.rank(t), 2), lambda: tf.expand_dims(t, -1), lambda: t)
 
         batch_n = tf.shape(t)[0]
         T_n = tf.shape(t)[1]
         n_units = self.n_units
 
         def _bcast(p):
-            return tf.broadcast_to(tf.reshape(p, [1, 1, n_units]),
-                                   [batch_n, T_n, n_units])
+            return tf.broadcast_to(
+                tf.reshape(p, [1, 1, n_units]), [batch_n, T_n, n_units]
+            )
 
         cx = _bcast(self.center_x)
         cy = _bcast(self.center_y)
         r = _bcast(self.radius)
         rate_peak = _bcast(self.peak_rate)
         bg_rate = _bcast(self.background_rate)
+        tmf = _bcast(self.theta_modulation_factor)
         slp_rad = _bcast(self.precession_slope_rad)
         ph = _bcast(self.precession_init_phase)
         ph_out = _bcast(self.phase_outside)
@@ -288,31 +289,35 @@ class PlaceFieldGenerator(BaseInputGenerator):
 
         if extra_inputs is not None:
             extra_rank = tf.rank(extra_inputs)
-            extra = tf.cond(tf.equal(extra_rank, 2),
-                            lambda: tf.expand_dims(extra_inputs, 1),
-                            lambda: extra_inputs)
+            extra = tf.cond(
+                tf.equal(extra_rank, 2),
+                lambda: tf.expand_dims(extra_inputs, 1),
+                lambda: extra_inputs,
+            )
             extra_cols = tf.shape(extra)[-1]
         else:
             extra_cols = tf.constant(0, dtype=tf.int32)
 
         def _has_position():
             e = extra
-            e = tf.cond(tf.not_equal(tf.shape(e)[1], T_n),
-                        lambda: tf.tile(e, [1, T_n, 1]),
-                        lambda: e)
+            e = tf.cond(
+                tf.equal(tf.shape(e)[1], 1), lambda: tf.tile(e, [1, T_n, 1]), lambda: e
+            )
             px = tf.broadcast_to(e[:, :, 0:1], [batch_n, T_n, 1])
             py = tf.broadcast_to(e[:, :, 1:2], [batch_n, T_n, 1])
             dx = (px - cx) / r
             dy = (py - cy) / r
-            spatial = tf.exp(-0.5 * (dx ** 2 + dy ** 2))
+            spatial = tf.exp(-0.5 * (dx**2 + dy**2))
 
             has_vel = tf.greater_equal(extra_cols, 4)
 
             def _dphi_with_vel():
                 vx = tf.broadcast_to(e[:, :, 2:3], [batch_n, T_n, 1])
                 vy = tf.broadcast_to(e[:, :, 3:4], [batch_n, T_n, 1])
-                v_norm = tf.sqrt(vx ** 2 + vy ** 2)
-                signed_dist = ((px - cx) * vx + (py - cy) * vy) / tf.maximum(v_norm, 1e-6)
+                v_norm = tf.sqrt(vx**2 + vy**2)
+                signed_dist = ((px - cx) * vx + (py - cy) * vy) / tf.maximum(
+                    v_norm, 1e-6
+                )
                 return -slp_rad * signed_dist
 
             def _dphi_no_vel():
@@ -322,25 +327,30 @@ class PlaceFieldGenerator(BaseInputGenerator):
             return px, py, spatial, dphi
 
         def _no_position():
-            spatial = tf.zeros([batch_n, T_n, n_units], dtype=tf.float32)
-            dphi = tf.zeros([batch_n, T_n, n_units], dtype=tf.float32)
-            px = tf.zeros([batch_n, T_n, 1], dtype=tf.float32)
-            py = tf.zeros([batch_n, T_n, 1], dtype=tf.float32)
+            dtype = neuraltide.config.get_dtype()
+            spatial = tf.zeros([batch_n, T_n, n_units], dtype=dtype)
+            dphi = tf.zeros([batch_n, T_n, n_units], dtype=dtype)
+            px = tf.zeros([batch_n, T_n, 1], dtype=dtype)
+            py = tf.zeros([batch_n, T_n, 1], dtype=dtype)
             return px, py, spatial, dphi
 
         pos_x, pos_y, spatial, dphi = tf.cond(
-            tf.greater_equal(extra_cols, 2), _has_position, _no_position)
+            tf.greater_equal(extra_cols, 2), _has_position, _no_position
+        )
 
         theta_inside_arg = two_pi * fq * t / ms_per_s + ph + dphi
-        theta_mod_inside = tf.exp(kap * tf.cos(theta_inside_arg)) / tf.maximum(i0k, 1e-5)
+        theta_mod_inside = tf.exp(kap * tf.cos(theta_inside_arg)) / tf.maximum(
+            i0k, 1e-5
+        )
 
         theta_outside_arg = two_pi * fq * t / ms_per_s + ph_out
-        theta_mod_outside = tf.exp(kap * tf.cos(theta_outside_arg)) / tf.maximum(i0k, 1e-5)
+        theta_mod_outside = tf.exp(kap * tf.cos(theta_outside_arg)) / tf.maximum(
+            i0k, 1e-5
+        )
 
-        inside_mean_rate = (rate_peak - bg_rate) / (bg_rate + 1)
-
-        rate = ( inside_mean_rate * spatial * theta_mod_inside
-                + bg_rate * (1.0 - spatial) * theta_mod_outside)
+        rate = rate_peak * spatial * theta_mod_inside + bg_rate * (1.0 - spatial) * (
+            1.0 - tmf + tmf * theta_mod_outside
+        )
 
         rate = tf.nn.relu(rate)
         return rate
@@ -348,71 +358,71 @@ class PlaceFieldGenerator(BaseInputGenerator):
     @property
     def parameter_spec(self) -> Dict[str, Dict[str, Any]]:
         return {
-            'center_x': {
-                'shape': (self.n_units,),
-                'trainable': self.center_x.trainable,
-                'constraint': self._get_constraint_name(self.center_x),
-                'units': 'cm',
+            "center_x": {
+                "shape": (self.n_units,),
+                "trainable": self.center_x.trainable,
+                "constraint": self._get_constraint_name(self.center_x),
+                "units": "cm",
             },
-            'center_y': {
-                'shape': (self.n_units,),
-                'trainable': self.center_y.trainable,
-                'constraint': self._get_constraint_name(self.center_y),
-                'units': 'cm',
+            "center_y": {
+                "shape": (self.n_units,),
+                "trainable": self.center_y.trainable,
+                "constraint": self._get_constraint_name(self.center_y),
+                "units": "cm",
             },
-            'radius': {
-                'shape': (self.n_units,),
-                'trainable': self.radius.trainable,
-                'constraint': self._get_constraint_name(self.radius),
-                'units': 'cm',
+            "radius": {
+                "shape": (self.n_units,),
+                "trainable": self.radius.trainable,
+                "constraint": self._get_constraint_name(self.radius),
+                "units": "cm",
             },
-            'peak_rate': {
-                'shape': (self.n_units,),
-                'trainable': False,
-                'constraint': None,
-                'units': 'Hz',
+            "peak_rate": {
+                "shape": (self.n_units,),
+                "trainable": False,
+                "constraint": None,
+                "units": "Hz",
             },
-            'background_rate': {
-                'shape': (self.n_units,),
-                'trainable': False,
-                'constraint': None,
-                'units': 'Hz',
+            "background_rate": {
+                "shape": (self.n_units,),
+                "trainable": False,
+                "constraint": None,
+                "units": "Hz",
             },
-            'theta_modulation_factor': {
-                'shape': (self.n_units,),
-                'trainable': False,
-                'constraint': None,
-                'units': 'dimensionless',
+            "theta_modulation_factor": {
+                "shape": (self.n_units,),
+                "trainable": False,
+                "constraint": None,
+                "units": "dimensionless",
             },
-            'precession_slope': {
-                'shape': (self.n_units,),
-                'trainable': False,
-                'constraint': None,
-                'units': 'deg/cm',
+            "precession_slope": {
+                "shape": (self.n_units,),
+                "trainable": False,
+                "constraint": None,
+                "units": "deg/cm",
             },
-            'precession_init_phase': {
-                'shape': (self.n_units,),
-                'trainable': False,
-                'constraint': None,
-                'units': 'deg',
+            "precession_init_phase": {
+                "shape": (self.n_units,),
+                "trainable": False,
+                "constraint": None,
+                "units": "deg",
             },
-            'phase_outside': {
-                'shape': (self.n_units,),
-                'trainable': False,
-                'constraint': None,
-                'units': 'deg',
+            "phase_outside": {
+                "shape": (self.n_units,),
+                "trainable": False,
+                "constraint": None,
+                "units": "deg",
             },
-            'kappa': {
-                'shape': (self.n_units,),
-                'trainable': self.kappa.trainable,
-                'constraint': self._get_constraint_name(self.kappa),
-                'units': 'dimensionless',
+            "kappa": {
+                "shape": (self.n_units,),
+                "trainable": self.kappa.trainable,
+                "constraint": self._get_constraint_name(self.kappa),
+                "units": "dimensionless",
             },
-            'freq': {
-                'shape': (self.n_units,),
-                'trainable': self.freq.trainable,
-                'constraint': self._get_constraint_name(self.freq),
-                'units': 'Hz',
+            "freq": {
+                "shape": (self.n_units,),
+                "trainable": self.freq.trainable,
+                "constraint": self._get_constraint_name(self.freq),
+                "units": "Hz",
             },
         }
 

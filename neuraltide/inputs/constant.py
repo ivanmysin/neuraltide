@@ -37,33 +37,41 @@ class ConstantRateGenerator(BaseInputGenerator):
         dt: float,
         params: Dict[str, Any],
         name: str = "constant_rate_generator",
-        **kwargs
+        **kwargs,
     ):
         super().__init__(params=params, dt=dt, name=name, **kwargs)
 
-        self.rate = self._make_param(self._params, 'rate')
+        self.rate = self._make_param(self._params, "rate")
 
-    def call(self, t: TensorType, extra_inputs: Optional[TensorType] = None) -> TensorType:
+    def call(
+        self, t: TensorType, extra_inputs: Optional[TensorType] = None
+    ) -> TensorType:
         """
         Args:
-            t: текущее время в мс. shape = [batch, 1].
+            t: время в мс. shape [batch, T, 1], [batch, T] или [batch, 1].
             extra_inputs: дополнительные входные данные (игнорируется).
 
         Returns:
-            tf.Tensor, shape = [batch, n_units], в Гц.
+            tf.Tensor, shape [batch, T, n_units], в Гц.
         """
-        rate = tf.reshape(self.rate, [1, self.n_units])
-        batch_size = tf.shape(t)[0]
-        return tf.broadcast_to(rate, [batch_size, self.n_units])
+        rate = tf.reshape(self.rate, [1, 1, self.n_units])
+        batch_n = tf.shape(t)[0]
+        t_rank = tf.rank(t)
+        T_n = tf.cond(
+            tf.equal(t_rank, 1),
+            lambda: tf.constant(1, dtype=tf.int32),
+            lambda: tf.shape(t)[1],
+        )
+        return tf.broadcast_to(rate, [batch_n, T_n, self.n_units])
 
     @property
     def parameter_spec(self) -> Dict[str, Dict[str, Any]]:
         return {
-            'rate': {
-                'shape': (self.n_units,),
-                'trainable': self.rate.trainable,
-                'constraint': self._get_constraint_name(self.rate),
-                'units': 'Hz',
+            "rate": {
+                "shape": (self.n_units,),
+                "trainable": self.rate.trainable,
+                "constraint": self._get_constraint_name(self.rate),
+                "units": "Hz",
             },
         }
 

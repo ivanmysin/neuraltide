@@ -1,44 +1,45 @@
-import pytest
 import tensorflow as tf
 import numpy as np
 
-import neuraltide
-import neuraltide.config
-from neuraltide.core.base import SynapseModel
-from neuraltide.integrators import EulerIntegrator, RK4Integrator
-from neuraltide.synapses import TsodyksMarkramSynapse, NMDASynapse, StaticSynapse, CompositeSynapse
+from neuraltide.integrators import EulerIntegrator
+from neuraltide.synapses import (
+    TsodyksMarkramSynapse,
+    NMDASynapse,
+    StaticSynapse,
+    CompositeSynapse,
+)
 
 
 def _make_default_synapse_params(n_pre, n_post):
     return {
-        'gsyn_max': np.ones((n_pre, n_post)) * 0.01,
-        'tau_f': np.ones((n_pre, n_post)) * 100.0,
-        'tau_d': np.ones((n_pre, n_post)) * 200.0,
-        'tau_r': np.ones((n_pre, n_post)) * 10.0,
-        'Uinc': np.ones((n_pre, n_post)) * 0.5,
-        'pconn': np.ones((n_pre, n_post)),
-        'e_r': np.zeros((n_pre, n_post)),
+        "gsyn_max": np.ones((n_pre, n_post)) * 0.01,
+        "tau_f": np.ones((n_pre, n_post)) * 100.0,
+        "tau_d": np.ones((n_pre, n_post)) * 200.0,
+        "tau_r": np.ones((n_pre, n_post)) * 10.0,
+        "Uinc": np.ones((n_pre, n_post)) * 0.5,
+        "pconn": np.ones((n_pre, n_post)),
+        "e_r": np.zeros((n_pre, n_post)),
     }
 
 
 def _make_default_nmda_params(n_pre, n_post):
     return {
-        'gsyn_max_nmda': np.ones((n_pre, n_post)) * 0.01,
-        'tau1_nmda': np.ones((n_pre, n_post)) * 5.0,
-        'tau2_nmda': np.ones((n_pre, n_post)) * 70.0,
-        'Mgb': np.ones((n_pre, n_post)) * 0.2,
-        'av_nmda': np.ones((n_pre, n_post)) * 0.08,
-        'pconn_nmda': np.ones((n_pre, n_post)),
-        'e_r_nmda': np.zeros((n_pre, n_post)),
-        'v_ref': np.zeros((n_pre, n_post)),
+        "gsyn_max_nmda": np.ones((n_pre, n_post)) * 0.01,
+        "tau1_nmda": np.ones((n_pre, n_post)) * 5.0,
+        "tau2_nmda": np.ones((n_pre, n_post)) * 70.0,
+        "Mgb": np.ones((n_pre, n_post)) * 0.2,
+        "av_nmda": np.ones((n_pre, n_post)) * 0.08,
+        "pconn_nmda": np.ones((n_pre, n_post)),
+        "e_r_nmda": np.zeros((n_pre, n_post)),
+        "v_ref": np.zeros((n_pre, n_post)),
     }
 
 
 def _make_default_static_params(n_pre, n_post):
     return {
-        'gsyn_max': np.ones((n_pre, n_post)) * 0.01,
-        'pconn': np.ones((n_pre, n_post)),
-        'e_r': np.zeros((n_pre, n_post)),
+        "gsyn_max": np.ones((n_pre, n_post)) * 0.01,
+        "pconn": np.ones((n_pre, n_post)),
+        "e_r": np.zeros((n_pre, n_post)),
     }
 
 
@@ -51,7 +52,7 @@ class TestTsodyksMarkramDerivatives:
         params = _make_default_synapse_params(n_pre, n_post)
         syn = TsodyksMarkramSynapse(n_pre=n_pre, n_post=n_post, dt=0.1, params=params)
 
-        assert hasattr(syn, 'derivatives'), "Synapse should have derivatives method"
+        assert hasattr(syn, "derivatives"), "Synapse should have derivatives method"
         assert callable(syn.derivatives), "derivatives should be callable"
 
     def test_derivatives_shape(self):
@@ -69,7 +70,9 @@ class TestTsodyksMarkramDerivatives:
 
         assert len(derivs) == len(state), "derivatives should have same length as state"
         for d, s in zip(derivs, state):
-            assert d.shape == s.shape, f"Derivative shape {d.shape} should match state shape {s.shape}"
+            assert d.shape == s.shape, (
+                f"Derivative shape {d.shape} should match state shape {s.shape}"
+            )
 
     def test_derivatives_zero_input_no_change(self):
         """With zero input, derivatives should reflect decay."""
@@ -89,7 +92,9 @@ class TestTsodyksMarkramDerivatives:
         derivs = syn.derivatives(state, pre_rate, post_v)
 
         for d in derivs:
-            assert not tf.reduce_any(tf.math.is_nan(d)), "Derivatives should not contain NaN"
+            assert not tf.reduce_any(tf.math.is_nan(d)), (
+                "Derivatives should not contain NaN"
+            )
 
     def test_derivatives_euler_integration(self):
         """Euler integration of derivatives should produce similar results to forward."""
@@ -109,13 +114,9 @@ class TestTsodyksMarkramDerivatives:
             state = new_state
 
         state = syn.get_initial_state()
-        integrator = EulerIntegrator()
         for _ in range(100):
             derivs = syn.derivatives(state, pre_rate, post_v)
-            new_state = [
-                state[i] + dt * derivs[i]
-                for i in range(len(state))
-            ]
+            new_state = [state[i] + dt * derivs[i] for i in range(len(state))]
             state = new_state
 
         for i in range(len(state)):
@@ -132,7 +133,7 @@ class TestNMDADerivatives:
         params = _make_default_nmda_params(n_pre, n_post)
         syn = NMDASynapse(n_pre=n_pre, n_post=n_post, dt=0.1, params=params)
 
-        assert hasattr(syn, 'derivatives'), "Synapse should have derivatives method"
+        assert hasattr(syn, "derivatives"), "Synapse should have derivatives method"
         assert callable(syn.derivatives), "derivatives should be callable"
 
     def test_derivatives_shape(self):
@@ -150,7 +151,9 @@ class TestNMDADerivatives:
 
         assert len(derivs) == len(state), "derivatives should have same length as state"
         for d, s in zip(derivs, state):
-            assert d.shape == s.shape, f"Derivative shape {d.shape} should match state shape {s.shape}"
+            assert d.shape == s.shape, (
+                f"Derivative shape {d.shape} should match state shape {s.shape}"
+            )
 
     def test_derivatives_euler_integration(self):
         """Euler integration of derivatives should produce similar results to forward."""
@@ -172,10 +175,7 @@ class TestNMDADerivatives:
         state = syn.get_initial_state()
         for _ in range(100):
             derivs = syn.derivatives(state, pre_rate, post_v)
-            new_state = [
-                state[i] + dt * derivs[i]
-                for i in range(len(state))
-            ]
+            new_state = [state[i] + dt * derivs[i] for i in range(len(state))]
             state = new_state
 
         for i in range(len(state)):
@@ -192,7 +192,7 @@ class TestStaticSynapseDerivatives:
         params = _make_default_static_params(n_pre, n_post)
         syn = StaticSynapse(n_pre=n_pre, n_post=n_post, dt=0.1, params=params)
 
-        assert hasattr(syn, 'derivatives'), "Synapse should have derivatives method"
+        assert hasattr(syn, "derivatives"), "Synapse should have derivatives method"
         assert callable(syn.derivatives), "derivatives should be callable"
 
     def test_derivatives_returns_empty_or_zero(self):
@@ -219,17 +219,23 @@ class TestCompositeSynapseDerivatives:
         n_pre, n_post = 2, 3
 
         tm_params = _make_default_synapse_params(n_pre, n_post)
-        tm_syn = TsodyksMarkramSynapse(n_pre=n_pre, n_post=n_post, dt=0.1, params=tm_params)
+        tm_syn = TsodyksMarkramSynapse(
+            n_pre=n_pre, n_post=n_post, dt=0.1, params=tm_params
+        )
 
         nmda_params = _make_default_nmda_params(n_pre, n_post)
         nmda_syn = NMDASynapse(n_pre=n_pre, n_post=n_post, dt=0.1, params=nmda_params)
 
         composite = CompositeSynapse(
-            n_pre=n_pre, n_post=n_post, dt=0.1,
-            components=[('tm', tm_syn), ('nmda', nmda_syn)]
+            n_pre=n_pre,
+            n_post=n_post,
+            dt=0.1,
+            components=[("tm", tm_syn), ("nmda", nmda_syn)],
         )
 
-        assert hasattr(composite, 'derivatives'), "CompositeSynapse should have derivatives method"
+        assert hasattr(composite, "derivatives"), (
+            "CompositeSynapse should have derivatives method"
+        )
         assert callable(composite.derivatives), "derivatives should be callable"
 
     def test_derivatives_shape(self):
@@ -237,14 +243,18 @@ class TestCompositeSynapseDerivatives:
         n_pre, n_post = 2, 3
 
         tm_params = _make_default_synapse_params(n_pre, n_post)
-        tm_syn = TsodyksMarkramSynapse(n_pre=n_pre, n_post=n_post, dt=0.1, params=tm_params)
+        tm_syn = TsodyksMarkramSynapse(
+            n_pre=n_pre, n_post=n_post, dt=0.1, params=tm_params
+        )
 
         nmda_params = _make_default_nmda_params(n_pre, n_post)
         nmda_syn = NMDASynapse(n_pre=n_pre, n_post=n_post, dt=0.1, params=nmda_params)
 
         composite = CompositeSynapse(
-            n_pre=n_pre, n_post=n_post, dt=0.1,
-            components=[('tm', tm_syn), ('nmda', nmda_syn)]
+            n_pre=n_pre,
+            n_post=n_post,
+            dt=0.1,
+            components=[("tm", tm_syn), ("nmda", nmda_syn)],
         )
 
         state = composite.get_initial_state()
@@ -255,7 +265,9 @@ class TestCompositeSynapseDerivatives:
 
         assert len(derivs) == len(state), "derivatives should have same length as state"
         for d, s in zip(derivs, state):
-            assert d.shape == s.shape, f"Derivative shape {d.shape} should match state shape {s.shape}"
+            assert d.shape == s.shape, (
+                f"Derivative shape {d.shape} should match state shape {s.shape}"
+            )
 
 
 class TestSynapseIntegratorInterface:
@@ -274,7 +286,9 @@ class TestSynapseIntegratorInterface:
         state = syn.get_initial_state()
 
         integrator = EulerIntegrator()
-        new_state, local_error = integrator.step_synapse(syn, state, pre_rate, post_v, dt)
+        new_state, local_error = integrator.step_synapse(
+            syn, state, pre_rate, post_v, dt
+        )
 
         assert len(new_state) == len(state), "New state should have same length"
         assert local_error is not None, "Local error should be returned"

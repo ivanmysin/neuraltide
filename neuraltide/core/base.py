@@ -37,8 +37,7 @@ class PopulationModel(tf.keras.layers.Layer):
         name (str): имя слоя Keras.
     """
 
-    def __init__(self, n_units: int, dt: float,
-                 name: str = "population", **kwargs):
+    def __init__(self, n_units: int, dt: float, name: str = "population", **kwargs):
         super().__init__(name=name, **kwargs)
         self.n_units = n_units
         self.dt = dt
@@ -81,15 +80,19 @@ class PopulationModel(tf.keras.layers.Layer):
                 f"parameter '{name}' not found in params."
             )
         if not isinstance(spec, dict):
-            spec = {'value': spec, 'trainable': False}
+            spec = {"value": spec, "trainable": False}
 
-        raw = spec['value']
-        train = spec.get('trainable', False)
-        lo = spec.get('min', None)
-        hi = spec.get('max', None)
+        raw = spec["value"]
+        train = spec.get("trainable", False)
+        lo = spec.get("min", None)
+        hi = spec.get("max", None)
 
         if train:
-            constraint = MinMaxConstraint(min_val=lo, max_val=hi) if (lo is not None or hi is not None) else None
+            constraint = (
+                MinMaxConstraint(min_val=lo, max_val=hi)
+                if (lo is not None or hi is not None)
+                else None
+            )
         else:
             constraint = None
 
@@ -194,34 +197,13 @@ class PopulationModel(tf.keras.layers.Layer):
 
         По умолчанию возвращает только {'firing_rate': get_firing_rate(state)}.
         """
-        return {'firing_rate': self.get_firing_rate(state)}
+        return {"firing_rate": self.get_firing_rate(state)}
 
     @property
     @abstractmethod
     def parameter_spec(self) -> Dict[str, Dict[str, Any]]:
         """
         Спецификация параметров генератора для summary и сериализации.
-        """
-        raise NotImplementedError
-
-    @abstractmethod
-    def call(
-        self,
-        t: TensorType,
-        extra_inputs: Optional[TensorType] = None,
-    ) -> TensorType:
-        """
-        Compute the generator output for the given time sequence.
-
-        Args:
-            t: time in ms. shape = [batch, T, 1] or [batch, T].
-            extra_inputs: extra data (e.g. 2D coordinates).
-                          shape = [batch, T, n_extra_cols].
-                          First column always matches t.
-                          If None, use internal trajectory.
-
-        Returns:
-            tf.Tensor, shape = [batch, n_units].
         """
         raise NotImplementedError
 
@@ -339,8 +321,9 @@ class SynapseModel(tf.keras.layers.Layer):
         name (str): имя слоя Keras.
     """
 
-    def __init__(self, n_pre: int, n_post: int, dt: float,
-                 name: str = "synapse", **kwargs):
+    def __init__(
+        self, n_pre: int, n_post: int, dt: float, name: str = "synapse", **kwargs
+    ):
         super().__init__(name=name, **kwargs)
         self.n_pre = n_pre
         self.n_post = n_post
@@ -375,19 +358,22 @@ class SynapseModel(tf.keras.layers.Layer):
         spec = params.get(name)
         if spec is None:
             raise ValueError(
-                f"SynapseModel '{self.name}': "
-                f"parameter '{name}' not found in params."
+                f"SynapseModel '{self.name}': parameter '{name}' not found in params."
             )
         if not isinstance(spec, dict):
-            spec = {'value': spec, 'trainable': False}
+            spec = {"value": spec, "trainable": False}
 
-        raw = spec['value']
-        train = spec.get('trainable', False)
-        lo = spec.get('min', None)
-        hi = spec.get('max', None)
+        raw = spec["value"]
+        train = spec.get("trainable", False)
+        lo = spec.get("min", None)
+        hi = spec.get("max", None)
 
         if train:
-            constraint = MinMaxConstraint(min_val=lo, max_val=hi) if (lo is not None or hi is not None) else None
+            constraint = (
+                MinMaxConstraint(min_val=lo, max_val=hi)
+                if (lo is not None or hi is not None)
+                else None
+            )
         else:
             constraint = None
 
@@ -413,22 +399,17 @@ class SynapseModel(tf.keras.layers.Layer):
         rank = value.shape.rank
 
         if rank == 0:
-            return tf.broadcast_to(
-                tf.reshape(value, [1, 1]),
-                [self.n_pre, self.n_post]
-            )
+            return tf.broadcast_to(tf.reshape(value, [1, 1]), [self.n_pre, self.n_post])
 
         elif rank == 1:
             length = int(value.shape[0])
             if length == self.n_pre:
                 return tf.broadcast_to(
-                    tf.reshape(value, [self.n_pre, 1]),
-                    [self.n_pre, self.n_post]
+                    tf.reshape(value, [self.n_pre, 1]), [self.n_pre, self.n_post]
                 )
             elif length == self.n_post and self.n_pre != self.n_post:
                 return tf.broadcast_to(
-                    tf.reshape(value, [1, self.n_post]),
-                    [self.n_pre, self.n_post]
+                    tf.reshape(value, [1, self.n_post]), [self.n_pre, self.n_post]
                 )
             else:
                 raise ValueError(
@@ -669,9 +650,13 @@ class BaseInputGenerator(tf.keras.layers.Layer):
         name: имя слоя Keras.
     """
 
-    def __init__(self, params: Dict[str, Any], dt: float,
-                 name: str = "input_generator", **kwargs):
+    def __init__(
+        self, params: Dict[str, Any], dt: float, name: str = "input_generator", **kwargs
+    ):
         super().__init__(name=name, **kwargs)
+        # Не даём Keras автокасту приводить входы к float32:
+        # генератор работает в глобальном neuraltide.config.get_dtype().
+        self.autocast = False
         self.dt = dt
         self._params = params
 
@@ -683,10 +668,11 @@ class BaseInputGenerator(tf.keras.layers.Layer):
     def _infer_n_units_from_params(self) -> None:
         """Определяет n_units из размерности параметров."""
         import numpy as np
+
         max_len = 1
         for key, spec in self._params.items():
             if isinstance(spec, dict):
-                value = spec.get('value', None)
+                value = spec.get("value", None)
             else:
                 value = spec
 
@@ -704,9 +690,10 @@ class BaseInputGenerator(tf.keras.layers.Layer):
     def _validate_param_dimensions(self) -> None:
         """Проверяет согласованность размерностей параметров."""
         import numpy as np
+
         for key, spec in self._params.items():
             if isinstance(spec, dict):
-                value = spec.get('value', None)
+                value = spec.get("value", None)
             else:
                 value = spec
 
@@ -753,15 +740,20 @@ class BaseInputGenerator(tf.keras.layers.Layer):
                 f"parameter '{name}' not found in params."
             )
         if not isinstance(spec, dict):
-            spec = {'value': spec, 'trainable': False}
+            spec = {"value": spec, "trainable": False}
 
-        raw = spec['value']
-        train = spec.get('trainable', False)
-        lo = spec.get('min', None)
-        hi = spec.get('max', None)
+        raw = spec["value"]
+        train = spec.get("trainable", False)
+        lo = spec.get("min", None)
+        hi = spec.get("max", None)
 
         from neuraltide.constraints import MinMaxConstraint
-        constraint = MinMaxConstraint(min_val=lo, max_val=hi) if (lo is not None or hi is not None) else None
+
+        constraint = (
+            MinMaxConstraint(min_val=lo, max_val=hi)
+            if (lo is not None or hi is not None)
+            else None
+        )
 
         value = tf.constant(raw, dtype=neuraltide.config.get_dtype())
         if value.shape.rank == 0:
