@@ -703,16 +703,13 @@ rates_no_pos = gen(t_seq, extra_inputs=None)
 ### Поток данных
 
 ```
-pos_x, pos_y, vx, vy (см, см/мс)  ──→  extra_inputs [batch, T, 4]
-                                              │
-    t [batch, T, 1]  ────────────────────────┤
-                                              │
+pos_x, pos_y (см)  ──→  extra_inputs [batch, T, 2]
+                              │
+    t [batch, T, 1]  ────────┤
+                              │
                     PlaceFieldGenerator.call(t, extra_inputs=extra)
-                                              │
+                              │
                     rates [batch, T, n_units]  (Hz)
-                                              │
-              dphi = -slope * ((px-cx)*vx + (py-cy)*vy) / |v|
-              (различает заход в поле и выход)
                               │
                     graph.pack_inputs({'place': rates})
                               │

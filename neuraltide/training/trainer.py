@@ -21,14 +21,13 @@ except ImportError:
 @dataclass
 class TrainingHistory:
     """История обучения."""
-
     loss_history: List[float]
     epochs: int
 
     def to_dict(self) -> dict:
         return {
-            "loss_history": self.loss_history,
-            "epochs": self.epochs,
+            'loss_history': self.loss_history,
+            'epochs': self.epochs,
         }
 
 
@@ -65,8 +64,20 @@ class Trainer:
         if grad_method == "adjoint" and AdjointSolver is None:
             raise ImportError("adjoint method not available")
 
-        if not run_eagerly:
-            self._train_step = tf.function(self._train_step)
+        self._compiled_train_step: Optional[tf.types.experimental.ConcreteFunction] = None
+        if grad_method != "adjoint" and not run_eagerly:
+            self._compiled_train_step = tf.function(self._compute_and_apply_grads)
+
+    @staticmethod
+    def _extract_targets(loss_fn) -> Dict[str, TensorType]:
+        """Collect target tensors from a (possibly composite) loss."""
+        targets: Dict[str, TensorType] = {}
+        terms = loss_fn.terms if isinstance(loss_fn, CompositeLoss) else [(1.0, loss_fn)]
+        for _, sub in terms:
+            tgt = getattr(sub, 'target', None)
+            if isinstance(tgt, dict):
+                targets.update(tgt)
+        return targets
 
     def _get_adjoint_solver(self):
         if self._adjoint_solver is None:
@@ -79,40 +90,61 @@ class Trainer:
             if c is not None:
                 v.assign(c(v))
 
-    def _train_step(
+    def _apply_grads(self, grads_and_vars: List[Tuple[tf.Tensor, tf.Variable]]) -> None:
+        """Опционально клипает по глобальной норме, применяет к оптимизатору, накладывает constraints."""
+        if not grads_and_vars:
+            return
+        if self.grad_clip_norm > 0:
+            grads_only = [g for g, _ in grads_and_vars]
+            clipped_grads, _ = tf.clip_by_global_norm(grads_only, self.grad_clip_norm)
+            grads_and_vars = [(g, v) for (_, v), g in zip(grads_and_vars, clipped_grads)]
+        self.optimizer.apply_gradients(grads_and_vars)
+        self._apply_constraints()
+
+    def _compute_and_apply_grads(
         self,
         t_sequence: TensorType,
         inputs: TensorType,
         initial_state: Optional[Tuple[StateList, StateList]] = None,
     ) -> Dict[str, float]:
         with tf.GradientTape() as tape:
-            output = self.network(
-                t_sequence, inputs=inputs, training=True, initial_state=initial_state
-            )
+            output = self.network(t_sequence, inputs=inputs,
+                                  training=True, initial_state=initial_state)
             loss = self.loss_fn(output, self.network)
 
         grads = tape.gradient(loss, self.network.trainable_variables)
-
         grads_and_vars = [
-            (g, v)
-            for g, v in zip(grads, self.network.trainable_variables)
+            (g, v) for g, v in zip(grads, self.network.trainable_variables)
             if g is not None
         ]
+        self._apply_grads(grads_and_vars)
+        return {'loss': loss}
 
-        if not grads_and_vars:
-            return {"loss": loss}
+    def _train_step_adjoint(
+        self,
+        t_sequence: TensorType,
+        inputs: TensorType,
+        initial_state: Optional[Tuple[StateList, StateList]] = None,
+    ) -> Dict[str, float]:
+        """Train step using AdjointSolver (memory-efficient gradients).
 
-        if self.grad_clip_norm > 0:
-            grads_only = [g for g, v in grads_and_vars]
-            clipped_grads, _ = tf.clip_by_global_norm(grads_only, self.grad_clip_norm)
-            grads_and_vars = [
-                (g, v) for g, (_, v) in zip(clipped_grads, grads_and_vars)
-            ]
+        initial_state is accepted for API parity but ignored: AdjointSolver
+        currently runs the forward pass from the network's default zero state.
+        """
+        del initial_state  # not supported by AdjointSolver.compute_gradients yet
 
-        self.optimizer.apply_gradients(grads_and_vars)
-        self._apply_constraints()
+        target = self._extract_targets(self.loss_fn)
+        solver = self._get_adjoint_solver()
+        grads, variables, output = solver.compute_gradients(
+            t_sequence, inputs, target, self.loss_fn
+        )
 
-        return {"loss": loss}
+        loss = self.loss_fn(output, self.network)
+        grads_and_vars = [
+            (g, v) for g, v in zip(grads, variables) if g is not None
+        ]
+        self._apply_grads(grads_and_vars)
+        return {'loss': loss}
 
     def train_step(
         self,
@@ -120,44 +152,11 @@ class Trainer:
         inputs: TensorType,
         initial_state: Optional[Tuple[StateList, StateList]] = None,
     ) -> Dict[str, float]:
-        if self.run_eagerly:
-            return self._train_step_eager(t_sequence, inputs, initial_state)
-        return self._train_step(t_sequence, inputs, initial_state)
-
-    def _train_step_eager(
-        self,
-        t_sequence: TensorType,
-        inputs: TensorType,
-        initial_state: Optional[Tuple[StateList, StateList]] = None,
-    ) -> Dict[str, float]:
-        with tf.GradientTape() as tape:
-            output = self.network(
-                t_sequence, inputs=inputs, training=True, initial_state=initial_state
-            )
-            loss = self.loss_fn(output, self.network)
-
-        grads = tape.gradient(loss, self.network.trainable_variables)
-
-        grads_and_vars = [
-            (g, v)
-            for g, v in zip(grads, self.network.trainable_variables)
-            if g is not None
-        ]
-
-        if not grads_and_vars:
-            return {"loss": loss}
-
-        if self.grad_clip_norm > 0:
-            grads_only = [g for g, v in grads_and_vars]
-            clipped_grads, _ = tf.clip_by_global_norm(grads_only, self.grad_clip_norm)
-            grads_and_vars = [
-                (g, v) for g, (_, v) in zip(clipped_grads, grads_and_vars)
-            ]
-
-        self.optimizer.apply_gradients(grads_and_vars)
-        self._apply_constraints()
-
-        return {"loss": loss}
+        if self.grad_method == "adjoint":
+            return self._train_step_adjoint(t_sequence, inputs, initial_state)
+        if self._compiled_train_step is not None:
+            return self._compiled_train_step(t_sequence, inputs, initial_state)
+        return self._compute_and_apply_grads(t_sequence, inputs, initial_state)
 
     def fit(
         self,
@@ -172,10 +171,9 @@ class Trainer:
         history = TrainingHistory(loss_history=[], epochs=epochs)
 
         for epoch in range(epochs):
-            step_result = self.train_step(
-                t_sequence, inputs, initial_state=initial_state
-            )
-            loss_val = float(step_result["loss"])
+            step_result = self.train_step(t_sequence, inputs,
+                                          initial_state=initial_state)
+            loss_val = float(step_result['loss'])
 
             if verbose > 0:
                 print(f"Epoch {epoch + 1}/{epochs} - loss: {loss_val:.6f}")
@@ -184,8 +182,8 @@ class Trainer:
 
             if callbacks:
                 for callback in callbacks:
-                    if hasattr(callback, "on_epoch_end"):
-                        callback.on_epoch_end(epoch, {"loss": loss_val})
+                    if hasattr(callback, 'on_epoch_end'):
+                        callback.on_epoch_end(epoch, {'loss': loss_val})
 
         self._last_history = history
         return history
@@ -220,87 +218,37 @@ class Trainer:
             training=False,
         )
 
-    def train_step_with_state(
-        self,
-        t_sequence: TensorType,
-        inputs: TensorType,
-        initial_state: Optional[Tuple[StateList, StateList]] = None,
-    ) -> Dict[str, any]:
-        """
-        Один шаг обучения с заданным начальным состоянием.
-
-        Args:
-            t_sequence: tf.Tensor shape [batch, T, 1].
-            inputs: tf.Tensor shape [batch, T, total_input_units].
-            initial_state: начальное состояние (pop_states, syn_states).
-
-        Returns:
-            dict с 'loss' и опционально 'final_state'.
-        """
-        with tf.GradientTape() as tape:
-            output = self.network(
-                t_sequence, inputs=inputs, initial_state=initial_state, training=True
-            )
-            loss = self.loss_fn(output, self.network)
-
-        grads = tape.gradient(loss, self.network.trainable_variables)
-
-        grads_and_vars = [
-            (g, v)
-            for g, v in zip(grads, self.network.trainable_variables)
-            if g is not None
-        ]
-
-        if not grads_and_vars:
-            return {"loss": loss}
-
-        if self.grad_clip_norm > 0:
-            grads_only = [g for g, v in grads_and_vars]
-            clipped_grads, _ = tf.clip_by_global_norm(grads_only, self.grad_clip_norm)
-            grads_and_vars = [
-                (g, v) for g, (_, v) in zip(clipped_grads, grads_and_vars)
-            ]
-
-        self.optimizer.apply_gradients(grads_and_vars)
-        self._apply_constraints()
-
-        return {"loss": loss}
-
     def save_experiment(self, path: str) -> None:
         """Сохранение состояния эксперимента."""
         os.makedirs(path, exist_ok=True)
 
-        checkpoint_dir = os.path.join(path, "checkpoint")
+        checkpoint_dir = os.path.join(path, 'checkpoint')
         checkpoint = tf.train.Checkpoint(
             optimizer=self.optimizer,
             network=self.network,
         )
-        checkpoint.save(file_prefix=os.path.join(checkpoint_dir, "ckpt"))
+        checkpoint.save(file_prefix=os.path.join(checkpoint_dir, 'ckpt'))
 
         config_data = {
-            "stability_penalty_weight": self.network._stability_penalty_weight,
-            "grad_clip_norm": self.grad_clip_norm,
+            'stability_penalty_weight': self.network._stability_penalty_weight,
+            'grad_clip_norm': self.grad_clip_norm,
         }
-        with open(os.path.join(path, "config.json"), "w") as f:
+        with open(os.path.join(path, 'config.json'), 'w') as f:
             json.dump(config_data, f)
 
         versions_data = {
-            "neuraltide": neuraltide.__version__,
-            "tensorflow": tf.__version__,
+            'neuraltide': neuraltide.__version__,
+            'tensorflow': tf.__version__,
         }
-        with open(os.path.join(path, "versions.json"), "w") as f:
+        with open(os.path.join(path, 'versions.json'), 'w') as f:
             json.dump(versions_data, f)
 
     @classmethod
-    def load_experiment(
-        cls,
-        path: str,
-        network: NetworkRNN,
-        loss_fn: CompositeLoss,
-        optimizer: tf.keras.optimizers.Optimizer,
-    ) -> "Trainer":
+    def load_experiment(cls, path: str, network: NetworkRNN,
+                        loss_fn: CompositeLoss,
+                        optimizer: tf.keras.optimizers.Optimizer) -> 'Trainer':
         """Загрузка состояния эксперимента."""
-        checkpoint_dir = os.path.join(path, "checkpoint")
+        checkpoint_dir = os.path.join(path, 'checkpoint')
         checkpoint = tf.train.Checkpoint(
             optimizer=optimizer,
             network=network,
@@ -309,14 +257,14 @@ class Trainer:
         if latest is not None:
             checkpoint.restore(latest)
 
-        with open(os.path.join(path, "config.json"), "r") as f:
+        with open(os.path.join(path, 'config.json'), 'r') as f:
             config_data = json.load(f)
 
         trainer = cls(
             network=network,
             loss_fn=loss_fn,
             optimizer=optimizer,
-            grad_clip_norm=config_data.get("grad_clip_norm", 1.0),
+            grad_clip_norm=config_data.get('grad_clip_norm', 1.0),
         )
 
         return trainer
@@ -342,30 +290,26 @@ class Trainer:
         else:
             raise ValueError(f"Unknown format: {format}")
 
-    def _export_json(
-        self, path_or_fd: Union[str, os.PathLike], include_config: bool
-    ) -> None:
+    def _export_json(self, path_or_fd: Union[str, os.PathLike], include_config: bool) -> None:
         results = {
-            "trainable_variables": [],
-            "loss_history": [],
+            'trainable_variables': [],
+            'loss_history': [],
         }
 
         for v in self.network.trainable_variables:
-            results["trainable_variables"].append(
-                {
-                    "name": v.name,
-                    "value": v.numpy().tolist(),
-                }
-            )
+            results['trainable_variables'].append({
+                'name': v.name,
+                'value': v.numpy().tolist(),
+            })
 
-        if hasattr(self, "_last_history"):
-            results["loss_history"] = self._last_history.loss_history
+        if hasattr(self, '_last_history'):
+            results['loss_history'] = self._last_history.loss_history
 
         if include_config:
-            results["config"] = self._get_config()
+            results['config'] = self._get_config()
 
         if isinstance(path_or_fd, (str, os.PathLike)):
-            with open(path_or_fd, "w") as f:
+            with open(path_or_fd, 'w') as f:
                 json.dump(results, f, indent=2)
         else:
             json.dump(results, path_or_fd, indent=2)
@@ -373,13 +317,13 @@ class Trainer:
     def _export_csv(self, path_or_fd: Union[str, os.PathLike]) -> None:
         rows = []
 
-        rows.append(["name", "value"])
+        rows.append(['name', 'value'])
 
         for v in self.network.trainable_variables:
             rows.append([v.name, v.numpy().tolist()])
 
         if isinstance(path_or_fd, (str, os.PathLike)):
-            with open(path_or_fd, "w", newline="") as f:
+            with open(path_or_fd, 'w', newline='') as f:
                 writer = csv.writer(f)
                 writer.writerows(rows)
         else:
@@ -390,22 +334,22 @@ class Trainer:
         config = {}
 
         for name, pop in self.network._graph._populations.items():
-            config[f"pop_{name}"] = {}
+            config[f'pop_{name}'] = {}
             spec = pop.parameter_spec
             for param_name in spec:
                 if hasattr(pop, param_name):
                     param = getattr(pop, param_name)
                     value = param.numpy().tolist()
-                    config[f"pop_{name}"][param_name] = value
+                    config[f'pop_{name}'][param_name] = value
 
         for name, entry in self.network._graph._synapses.items():
-            config[f"syn_{name}"] = {}
+            config[f'syn_{name}'] = {}
             syn = entry.model
             spec = syn.parameter_spec
             for param_name in spec:
                 if hasattr(syn, param_name):
                     param = getattr(syn, param_name)
                     value = param.numpy().tolist()
-                    config[f"syn_{name}"][param_name] = value
+                    config[f'syn_{name}'][param_name] = value
 
         return config

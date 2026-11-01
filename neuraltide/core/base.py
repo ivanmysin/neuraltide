@@ -7,6 +7,115 @@ from neuraltide.constraints import MinMaxConstraint
 from neuraltide.core.types import TensorType, StateList
 
 
+def _make_minmax_constraint(
+    min_val: Optional[float],
+    max_val: Optional[float],
+) -> Optional[MinMaxConstraint]:
+    """Возвращает MinMaxConstraint, если задана хотя бы одна граница, иначе None."""
+    if min_val is not None or max_val is not None:
+        return MinMaxConstraint(min_val=min_val, max_val=max_val)
+    return None
+
+
+def _parse_param_spec(
+    params: dict,
+    name: str,
+    owner_label: str,
+) -> Tuple[Any, bool, Optional[float], Optional[float]]:
+    """
+    Парсит спецификацию одного параметра из user-params.
+
+    Поддерживаемые форматы (на params[name]):
+        - скаляр/список без словаря → (raw, False, None, None)
+        - словарь → (raw, train, lo, hi), где
+            raw   = spec['value']
+            train = spec.get('trainable', False)
+            lo    = spec.get('min', None)
+            hi    = spec.get('max', None)
+
+    Raises:
+        ValueError: если name отсутствует в params.
+    """
+    spec = params.get(name)
+    if spec is None:
+        raise ValueError(
+            f"{owner_label}: parameter '{name}' not found in params."
+        )
+    if not isinstance(spec, dict):
+        spec = {'value': spec, 'trainable': False}
+
+    raw = spec['value']
+    train = spec.get('trainable', False)
+    lo = spec.get('min', None)
+    hi = spec.get('max', None)
+    return raw, train, lo, hi
+
+
+def _infer_n_units_from_params(params: Dict[str, Any]) -> int:
+    """
+    Определяет n_units как максимальную длину среди параметров.
+
+    Поддерживает list/tuple/np.ndarray длины 1 или n.
+    Скаляры и None игнорируются (минимум = 1).
+    """
+    import numpy as np
+    max_len = 1
+    for spec in params.values():
+        if isinstance(spec, dict):
+            value = spec.get('value', None)
+        else:
+            value = spec
+        if value is None:
+            continue
+        if isinstance(value, (list, tuple)):
+            max_len = max(max_len, len(value))
+        elif isinstance(value, np.ndarray):
+            if value.ndim == 1:
+                max_len = max(max_len, len(value))
+    return max_len
+
+
+def _validate_param_dimensions(
+    params: Dict[str, Any],
+    n_units: int,
+    owner_label: str,
+) -> None:
+    """
+    Проверяет, что все параметры имеют согласованную длину (1 или n_units).
+
+    Raises:
+        ValueError: при несовпадении длины.
+    """
+    import numpy as np
+    for key, spec in params.items():
+        if isinstance(spec, dict):
+            value = spec.get('value', None)
+        else:
+            value = spec
+        if value is None:
+            continue
+        if isinstance(value, (list, tuple)):
+            length = len(value)
+        elif isinstance(value, np.ndarray):
+            if value.ndim != 1:
+                continue
+            length = len(value)
+        else:
+            continue
+        if length != 1 and length != n_units:
+            raise ValueError(
+                f"{owner_label}: parameter '{key}' "
+                f"has length {length}, expected 1 or {n_units}."
+            )
+
+
+def _get_constraint_name(var: tf.Variable) -> Optional[str]:
+    """Возвращает имя класса ограничения, применённого к переменной, или None."""
+    if var.constraint is not None:
+        return var.constraint.__class__.__name__
+    return None
+
+
 class PopulationModel(tf.keras.layers.Layer):
     """
     Абстрактный базовый класс для популяционной модели.
@@ -37,7 +146,8 @@ class PopulationModel(tf.keras.layers.Layer):
         name (str): имя слоя Keras.
     """
 
-    def __init__(self, n_units: int, dt: float, name: str = "population", **kwargs):
+    def __init__(self, n_units: int, dt: float,
+                 name: str = "population", **kwargs):
         super().__init__(name=name, **kwargs)
         self.n_units = n_units
         self.dt = dt
@@ -73,26 +183,11 @@ class PopulationModel(tf.keras.layers.Layer):
             ValueError: если name не найден в params.
             ValueError: если длина списка не совпадает с n_units.
         """
-        spec = params.get(name)
-        if spec is None:
-            raise ValueError(
-                f"PopulationModel '{self.name}': "
-                f"parameter '{name}' not found in params."
-            )
-        if not isinstance(spec, dict):
-            spec = {"value": spec, "trainable": False}
-
-        raw = spec["value"]
-        train = spec.get("trainable", False)
-        lo = spec.get("min", None)
-        hi = spec.get("max", None)
-
+        raw, train, lo, hi = _parse_param_spec(
+            params, name, f"PopulationModel '{self.name}'"
+        )
         if train:
-            constraint = (
-                MinMaxConstraint(min_val=lo, max_val=hi)
-                if (lo is not None or hi is not None)
-                else None
-            )
+            constraint = _make_minmax_constraint(lo, hi)
         else:
             constraint = None
 
@@ -197,7 +292,7 @@ class PopulationModel(tf.keras.layers.Layer):
 
         По умолчанию возвращает только {'firing_rate': get_firing_rate(state)}.
         """
-        return {"firing_rate": self.get_firing_rate(state)}
+        return {'firing_rate': self.get_firing_rate(state)}
 
     @property
     @abstractmethod
@@ -321,9 +416,8 @@ class SynapseModel(tf.keras.layers.Layer):
         name (str): имя слоя Keras.
     """
 
-    def __init__(
-        self, n_pre: int, n_post: int, dt: float, name: str = "synapse", **kwargs
-    ):
+    def __init__(self, n_pre: int, n_post: int, dt: float,
+                 name: str = "synapse", **kwargs):
         super().__init__(name=name, **kwargs)
         self.n_pre = n_pre
         self.n_post = n_post
@@ -355,25 +449,11 @@ class SynapseModel(tf.keras.layers.Layer):
             ValueError: если name не найден в params.
             ValueError: если форма значения несовместима с [n_pre, n_post].
         """
-        spec = params.get(name)
-        if spec is None:
-            raise ValueError(
-                f"SynapseModel '{self.name}': parameter '{name}' not found in params."
-            )
-        if not isinstance(spec, dict):
-            spec = {"value": spec, "trainable": False}
-
-        raw = spec["value"]
-        train = spec.get("trainable", False)
-        lo = spec.get("min", None)
-        hi = spec.get("max", None)
-
+        raw, train, lo, hi = _parse_param_spec(
+            params, name, f"SynapseModel '{self.name}'"
+        )
         if train:
-            constraint = (
-                MinMaxConstraint(min_val=lo, max_val=hi)
-                if (lo is not None or hi is not None)
-                else None
-            )
+            constraint = _make_minmax_constraint(lo, hi)
         else:
             constraint = None
 
@@ -399,17 +479,22 @@ class SynapseModel(tf.keras.layers.Layer):
         rank = value.shape.rank
 
         if rank == 0:
-            return tf.broadcast_to(tf.reshape(value, [1, 1]), [self.n_pre, self.n_post])
+            return tf.broadcast_to(
+                tf.reshape(value, [1, 1]),
+                [self.n_pre, self.n_post]
+            )
 
         elif rank == 1:
             length = int(value.shape[0])
             if length == self.n_pre:
                 return tf.broadcast_to(
-                    tf.reshape(value, [self.n_pre, 1]), [self.n_pre, self.n_post]
+                    tf.reshape(value, [self.n_pre, 1]),
+                    [self.n_pre, self.n_post]
                 )
             elif length == self.n_post and self.n_pre != self.n_post:
                 return tf.broadcast_to(
-                    tf.reshape(value, [1, self.n_post]), [self.n_pre, self.n_post]
+                    tf.reshape(value, [1, self.n_post]),
+                    [self.n_pre, self.n_post]
                 )
             else:
                 raise ValueError(
@@ -650,9 +735,8 @@ class BaseInputGenerator(tf.keras.layers.Layer):
         name: имя слоя Keras.
     """
 
-    def __init__(
-        self, params: Dict[str, Any], dt: float, name: str = "input_generator", **kwargs
-    ):
+    def __init__(self, params: Dict[str, Any], dt: float,
+                 name: str = "input_generator", **kwargs):
         super().__init__(name=name, **kwargs)
         # Не даём Keras автокасту приводить входы к float32:
         # генератор работает в глобальном neuraltide.config.get_dtype().
@@ -667,51 +751,15 @@ class BaseInputGenerator(tf.keras.layers.Layer):
 
     def _infer_n_units_from_params(self) -> None:
         """Определяет n_units из размерности параметров."""
-        import numpy as np
-
-        max_len = 1
-        for key, spec in self._params.items():
-            if isinstance(spec, dict):
-                value = spec.get("value", None)
-            else:
-                value = spec
-
-            if value is None:
-                continue
-
-            if isinstance(value, (list, tuple)):
-                max_len = max(max_len, len(value))
-            elif isinstance(value, np.ndarray):
-                if value.ndim == 1:
-                    max_len = max(max_len, len(value))
-
-        self._n_units = max_len
+        self._n_units = _infer_n_units_from_params(self._params)
 
     def _validate_param_dimensions(self) -> None:
         """Проверяет согласованность размерностей параметров."""
-        import numpy as np
-
-        for key, spec in self._params.items():
-            if isinstance(spec, dict):
-                value = spec.get("value", None)
-            else:
-                value = spec
-
-            if value is None:
-                continue
-
-            if isinstance(value, (list, tuple)):
-                if len(value) != 1 and len(value) != self._n_units:
-                    raise ValueError(
-                        f"BaseInputGenerator '{self.name}': parameter '{key}' "
-                        f"has length {len(value)}, expected 1 or {self._n_units}."
-                    )
-            elif isinstance(value, np.ndarray):
-                if value.ndim == 1 and len(value) != 1 and len(value) != self._n_units:
-                    raise ValueError(
-                        f"BaseInputGenerator '{self.name}': parameter '{key}' "
-                        f"has length {len(value)}, expected 1 or {self._n_units}."
-                    )
+        _validate_param_dimensions(
+            self._params,
+            self._n_units,
+            f"BaseInputGenerator '{self.name}'",
+        )
 
     def _make_param(self, params: dict, name: str) -> tf.Variable:
         """
@@ -733,40 +781,26 @@ class BaseInputGenerator(tf.keras.layers.Layer):
         Returns:
             tf.Variable, зарегистрированная как вес слоя.
         """
-        spec = params.get(name)
-        if spec is None:
-            raise ValueError(
-                f"BaseInputGenerator '{self.name}': "
-                f"parameter '{name}' not found in params."
-            )
-        if not isinstance(spec, dict):
-            spec = {"value": spec, "trainable": False}
-
-        raw = spec["value"]
-        train = spec.get("trainable", False)
-        lo = spec.get("min", None)
-        hi = spec.get("max", None)
-
-        from neuraltide.constraints import MinMaxConstraint
-
-        constraint = (
-            MinMaxConstraint(min_val=lo, max_val=hi)
-            if (lo is not None or hi is not None)
-            else None
+        raw, train, lo, hi = _parse_param_spec(
+            params, name, f"BaseInputGenerator '{self.name}'"
         )
+        if train:
+            constraint = _make_minmax_constraint(lo, hi)
+        else:
+            constraint = None
 
         value = tf.constant(raw, dtype=neuraltide.config.get_dtype())
         if value.shape.rank == 0:
-            value = tf.fill([self._n_units], value)
+            value = tf.fill([self.n_units], value)
         else:
-            if int(value.shape[0]) != self._n_units:
+            if value.shape[0] != self.n_units:
                 raise ValueError(
                     f"BaseInputGenerator '{self.name}': parameter '{name}' "
-                    f"has length {int(value.shape[0])}, expected {self._n_units}."
+                    f"has length {value.shape[0]}, expected {self.n_units}."
                 )
 
         return self.add_weight(
-            shape=(self._n_units,),
+            shape=(self.n_units,),
             initializer=tf.keras.initializers.Constant(value.numpy()),
             trainable=train,
             constraint=constraint,

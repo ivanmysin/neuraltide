@@ -277,7 +277,7 @@ output = network(t_sequence, inputs=None, initial_state=None, training=False)
 
 **Аргументы**:
 - `t_sequence`: tf.Tensor shape `[batch, T, 1]` или `[batch, T]` — временная последовательность в мс
-- `inputs`: Optional tf.Tensor shape `[batch, T, total_input_units]` — предвычисленные частоты разрядов внешних входов, упакованные через `graph.pack_inputs()` (входные последовательности генерируются снаружи сети — например, PlaceFieldGenerator с координатами `(x, y, vx, vy)`). Если граф не содержит объявленных входов — `None`
+- `inputs`: Optional tf.Tensor shape `[batch, T, total_input_units]` — предвычисленные частоты разрядов внешних входов, упакованные через `graph.pack_inputs()`. Если граф не содержит объявленных входов — `None`
 - `initial_state`: Optional[Tuple[pop_states, syn_states]] — начальное состояние. Если None, используется нулевое.
 - `training`: bool — режим обучения
 
@@ -404,17 +404,15 @@ T = 5000
 t_values = np.arange(0, T, 0.5, dtype=np.float32)
 t_seq = tf.constant(t_values[None, :, None])  # [1, T/dt, 1]
 
-# Траектория: позиции (x, y) + скорость (vx, vy) в см/мс передаются при генерации входов
+# Траектория: позиции (x, y) в см
 n_steps = len(t_values)
 r_traj = 70.0  # см
 theta = 2.0 * np.pi * np.arange(n_steps) / n_steps * 2  # 2 оборота
 pos_x = r_traj * np.cos(theta)
 pos_y = r_traj * np.sin(theta)
-vx = np.gradient(pos_x, 0.5)   # см/мс
-vy = np.gradient(pos_y, 0.5)
 extra = tf.constant(
-    np.stack([pos_x, pos_y, vx, vy], axis=-1).astype(np.float32)[None, :, :]
-)  # [1, T/dt, 4]
+    np.stack([pos_x, pos_y], axis=-1).astype(np.float32)[None, :, :]
+)  # [1, T/dt, 2]
 
 # Упаковка входов: PlaceFieldGenerator генерирует частоты с учётом координат
 rates = gen(t_seq, extra_inputs=extra)

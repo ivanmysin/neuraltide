@@ -22,18 +22,6 @@ class _SynapseEntry:
     tgt: str
 
 
-def compute_synapse_current(
-    synapse: SynapseModel,
-    state: StateList,
-    pre_firing_rate: TensorType,
-    post_voltage: TensorType,
-) -> Dict[str, TensorType]:
-    """
-    Compute synaptic current and conductance from synapse state.
-    """
-    return synapse.compute_current(state, pre_firing_rate, post_voltage)
-
-
 class NetworkGraph:
     """
     Описание топологии сети: популяции, внешние входы и синаптические проекции.
@@ -379,8 +367,8 @@ def _step_fn(
             entry.model, syn_state, pre_rate, post_v, entry.model.dt
         )
 
-        current_dict = compute_synapse_current(
-            entry.model, new_syn_state, pre_rate, post_v
+        current_dict = entry.model.compute_current(
+            new_syn_state, pre_rate, post_v
         )
 
         syn_I[entry.tgt] = syn_I[entry.tgt] + current_dict["I_syn"]
@@ -505,6 +493,7 @@ class NetworkRNN(tf.keras.layers.Layer):
             vars_.extend(entry.model.trainable_variables)
         return vars_
 
+    @tf.function
     def _scan_forward(
         self,
         t_sequence: TensorType,
@@ -627,6 +616,7 @@ class NetworkRNN(tf.keras.layers.Layer):
 
         return all_rates, stability_loss, final_pop_states, final_syn_states
 
+    @tf.function
     def _scan_forward_states(
         self,
         t_sequence: TensorType,
