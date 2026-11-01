@@ -23,11 +23,11 @@ class SecondOrderSynapse(SynapseModel):
     def __init__(self, n_pre: int, n_post: int, dt: float, params: dict, **kwargs):
         super().__init__(n_pre=n_pre, n_post=n_post, dt=dt, **kwargs)
 
-        self.gsyn_max = self._make_param(params, 'gsyn_max')
-        self.tau1 = self._make_param(params, 'tau1')
-        self.tau2 = self._make_param(params, 'tau2')
-        self.pconn = self._make_param(params, 'pconn')
-        self.e_r = self._make_param(params, 'e_r')
+        self.gsyn_max = self._make_param(params, "gsyn_max")
+        self.tau1 = self._make_param(params, "tau1")
+        self.tau2 = self._make_param(params, "tau2")
+        self.pconn = self._make_param(params, "pconn")
+        self.e_r = self._make_param(params, "e_r")
 
         self.state_size = [
             tf.TensorShape([n_pre, n_post]),
@@ -71,7 +71,7 @@ class SecondOrderSynapse(SynapseModel):
         I_syn = tf.reduce_sum(I_pair, axis=0, keepdims=True)
         g_syn = tf.reduce_sum(gsyn_max * g_s_new, axis=0, keepdims=True)
 
-        return ({'I_syn': I_syn, 'g_syn': g_syn}, [g_s_new, dg_s_new])
+        return ({"I_syn": I_syn, "g_syn": g_syn}, [g_s_new, dg_s_new])
 
     def derivatives(
         self,
@@ -95,8 +95,12 @@ class SecondOrderSynapse(SynapseModel):
         d_g_s_dt = dg_s
         d_dg_s_dt = (s_input - t12_sum * dg_s - g_s) / tau12
 
-        d_g_s_dt = neuraltide.config.maybe_check_numerics(d_g_s_dt, 'SecondOrder d(g_s)/dt NaN')
-        d_dg_s_dt = neuraltide.config.maybe_check_numerics(d_dg_s_dt, 'SecondOrder d(dg_s)/dt NaN')
+        d_g_s_dt = neuraltide.config.maybe_check_numerics(
+            d_g_s_dt, "SecondOrder d(g_s)/dt NaN"
+        )
+        d_dg_s_dt = neuraltide.config.maybe_check_numerics(
+            d_dg_s_dt, "SecondOrder d(dg_s)/dt NaN"
+        )
 
         return [d_g_s_dt, d_dg_s_dt]
 
@@ -117,7 +121,7 @@ class SecondOrderSynapse(SynapseModel):
         I_syn = tf.reduce_sum(I_pair, axis=0, keepdims=True)
         g_syn = tf.reduce_sum(gsyn_max * g_s, axis=0, keepdims=True)
 
-        return {'I_syn': I_syn, 'g_syn': g_syn}
+        return {"I_syn": I_syn, "g_syn": g_syn}
 
     def adjoint_derivatives(
         self,
@@ -137,8 +141,12 @@ class SecondOrderSynapse(SynapseModel):
         dlam_g = lam_dg / tau12
         dlam_dg = -lam_g + t12_sum / tau12 * lam_dg
 
-        dlam_g = neuraltide.config.maybe_check_numerics(dlam_g, 'SecondOrder adjoint dlam_g NaN')
-        dlam_dg = neuraltide.config.maybe_check_numerics(dlam_dg, 'SecondOrder adjoint dlam_dg NaN')
+        dlam_g = neuraltide.config.maybe_check_numerics(
+            dlam_g, "SecondOrder adjoint dlam_g NaN"
+        )
+        dlam_dg = neuraltide.config.maybe_check_numerics(
+            dlam_dg, "SecondOrder adjoint dlam_dg NaN"
+        )
 
         return [dlam_g, dlam_dg]
 
@@ -162,7 +170,7 @@ class SecondOrderSynapse(SynapseModel):
         """
         g_s, dg_s = state
 
-        if param_name in ('tau1', 'tau2'):
+        if param_name in ("tau1", "tau2"):
             dtype = neuraltide.config.get_dtype()
             tau1 = tf.maximum(tf.cast(self.tau1, dtype), 1e-6)
             tau2 = tf.maximum(tf.cast(self.tau2, dtype), 1e-6)
@@ -173,13 +181,14 @@ class SecondOrderSynapse(SynapseModel):
 
             dg_s_ddot = (s_input - t12_sum * dg_s - g_s) / tau12
 
-            if param_name == 'tau1':
+            if param_name == "tau1":
                 dtau = -dg_s_ddot / tau1
             else:
                 dtau = -dg_s_ddot / tau2
 
             return neuraltide.config.maybe_check_numerics(
-                dtau, f'SecondOrder parameter_jacobian {param_name} NaN')
+                dtau, f"SecondOrder parameter_jacobian {param_name} NaN"
+            )
         else:
             return tf.zeros_like(g_s)
 
@@ -225,39 +234,39 @@ class SecondOrderSynapse(SynapseModel):
         else:
             dgsyn_max = tf.zeros_like(g_s)
 
-        return {'gsyn_max': dgsyn_max}
+        return {"gsyn_max": dgsyn_max}
 
     @property
     def parameter_spec(self) -> Dict[str, Dict[str, any]]:
         return {
-            'gsyn_max': {
-                'shape': (self.n_pre, self.n_post),
-                'trainable': self.gsyn_max.trainable,
-                'constraint': 'NonNegConstraint',
-                'units': 'mS/cm^2',
+            "gsyn_max": {
+                "shape": (self.n_pre, self.n_post),
+                "trainable": self.gsyn_max.trainable,
+                "constraint": "NonNegConstraint",
+                "units": "mS/cm^2",
             },
-            'tau1': {
-                'shape': (self.n_pre, self.n_post),
-                'trainable': self.tau1.trainable,
-                'constraint': 'MinMaxConstraint',
-                'units': 'ms',
+            "tau1": {
+                "shape": (self.n_pre, self.n_post),
+                "trainable": self.tau1.trainable,
+                "constraint": "MinMaxConstraint",
+                "units": "ms",
             },
-            'tau2': {
-                'shape': (self.n_pre, self.n_post),
-                'trainable': self.tau2.trainable,
-                'constraint': 'MinMaxConstraint',
-                'units': 'ms',
+            "tau2": {
+                "shape": (self.n_pre, self.n_post),
+                "trainable": self.tau2.trainable,
+                "constraint": "MinMaxConstraint",
+                "units": "ms",
             },
-            'pconn': {
-                'shape': (self.n_pre, self.n_post),
-                'trainable': False,
-                'constraint': 'UnitIntervalConstraint',
-                'units': 'dimensionless',
+            "pconn": {
+                "shape": (self.n_pre, self.n_post),
+                "trainable": False,
+                "constraint": "UnitIntervalConstraint",
+                "units": "dimensionless",
             },
-            'e_r': {
-                'shape': (self.n_pre, self.n_post),
-                'trainable': False,
-                'constraint': None,
-                'units': 'mV',
+            "e_r": {
+                "shape": (self.n_pre, self.n_post),
+                "trainable": False,
+                "constraint": None,
+                "units": "mV",
             },
         }

@@ -14,6 +14,7 @@ Two modes:
   - Analytical adjoint (use_analytical_adjoint=True): uses explicit
     adjoint_derivatives() + parameter_jacobian() — no GradientTape in the loop
 """
+
 import tensorflow as tf
 from typing import Dict, List, Tuple, Optional
 
@@ -41,10 +42,10 @@ def _get_named_vars(layer: tf.keras.layers.Layer) -> Dict[str, tf.Variable]:
     result = {}
     for v in layer.trainable_variables:
         raw = v.name
-        if '/' in raw:
-            raw = raw.rsplit('/', 1)[-1]
-        if ':' in raw:
-            raw = raw.rsplit(':', 1)[0]
+        if "/" in raw:
+            raw = raw.rsplit("/", 1)[-1]
+        if ":" in raw:
+            raw = raw.rsplit(":", 1)[0]
         result[raw] = v
     return result
 
@@ -112,8 +113,11 @@ class AdjointSolver(tf.Module):
             entry = graph._synapses[name]
             offset = self._network._syn_state_offsets[name]
             size = len(entry.model.state_size)
-            src_idx = (self._ap_pop_names.index(entry.src)
-                       if entry.src in graph._populations else -1)
+            src_idx = (
+                self._ap_pop_names.index(entry.src)
+                if entry.src in graph._populations
+                else -1
+            )
             tgt_idx = self._ap_pop_names.index(entry.tgt)
             self._as_syn_names.append(name)
             self._as_syn_offsets.append(offset)
@@ -122,11 +126,13 @@ class AdjointSolver(tf.Module):
             self._as_syn_tgt_idx.append(tgt_idx)
 
         self._ap_n_dynamic = sum(
-            1 for name in graph.population_names
+            1
+            for name in graph.population_names
             if not isinstance(graph._populations[name], InputPopulation)
         )
         self._ap_dynamic_idx = [
-            i for i, name in enumerate(self._ap_pop_names)
+            i
+            for i, name in enumerate(self._ap_pop_names)
             if not isinstance(graph._populations[name], InputPopulation)
         ]
 
@@ -137,8 +143,7 @@ class AdjointSolver(tf.Module):
                 pop = graph._populations[pop_name]
                 for pname, pvar in _get_named_vars(pop).items():
                     if pvar is var:
-                        self._aparam_info.append(
-                            (p_i, 'pop', pop_name, pname))
+                        self._aparam_info.append((p_i, "pop", pop_name, pname))
                         found = True
                         break
                 if found:
@@ -148,18 +153,17 @@ class AdjointSolver(tf.Module):
                     syn = graph._synapses[syn_name].model
                     for pname, pvar in _get_named_vars(syn).items():
                         if pvar is var:
-                            self._aparam_info.append(
-                                (p_i, 'syn', syn_name, pname))
+                            self._aparam_info.append((p_i, "syn", syn_name, pname))
                             found = True
                             break
                     if found:
                         break
             if not found:
-                self._aparam_info.append((p_i, 'unknown', '', ''))
+                self._aparam_info.append((p_i, "unknown", "", ""))
 
         self._aparam_rev: Dict[Tuple[str, str, str], int] = {}
         for p_i, ctype, cname, pname in self._aparam_info:
-            if ctype != 'unknown':
+            if ctype != "unknown":
                 self._aparam_rev[(ctype, cname, pname)] = p_i
 
     # ── Forward pass (compiled scan, O(1) Python objects) ────────────────────
@@ -180,7 +184,8 @@ class AdjointSolver(tf.Module):
         if inputs is None:
             inputs = tf.zeros(
                 [tf.shape(t_sequence)[0], tf.shape(t_sequence)[1], 0],
-                dtype=neuraltide.config.get_dtype())
+                dtype=neuraltide.config.get_dtype(),
+            )
 
         batch_size = int(t_sequence.shape[0])
 
@@ -189,10 +194,11 @@ class AdjointSolver(tf.Module):
         else:
             init_pop, init_syn = initial_state
 
-        (all_rates, stability_loss,
-         final_pop, final_syn,
-         pop_stacked, syn_stacked) = self._network._scan_forward_states(
-            t_sequence, tuple(init_pop), tuple(init_syn), inputs=inputs)
+        (all_rates, stability_loss, final_pop, final_syn, pop_stacked, syn_stacked) = (
+            self._network._scan_forward_states(
+                t_sequence, tuple(init_pop), tuple(init_syn), inputs=inputs
+            )
+        )
 
         final_state = (list(final_pop), list(final_syn))
 
@@ -202,8 +208,11 @@ class AdjointSolver(tf.Module):
             stability_loss=stability_loss,
             final_state=final_state,
         )
-        return output, final_state, (list(init_pop), list(init_syn),
-                                      pop_stacked, syn_stacked)
+        return (
+            output,
+            final_state,
+            (list(init_pop), list(init_syn), pop_stacked, syn_stacked),
+        )
 
     def _build_state_full(
         self,
@@ -243,7 +252,11 @@ class AdjointSolver(tf.Module):
     ]:
         new_pop, new_syn, _ = _step_fn(
             (pop_tup, syn_tup, tf.constant([0.0], dtype=dtype)),
-            t_val, input_rates_step, self._graph, self._integrator)
+            t_val,
+            input_rates_step,
+            self._graph,
+            self._integrator,
+        )
         npl = list(new_pop)
         nsl = list(new_syn)
 
@@ -279,13 +292,13 @@ class AdjointSolver(tf.Module):
         pop_states_dict = {}
         idx = 0
         for name, pop, n in graph._pop_info_cache:
-            pop_states_dict[name] = pop_states_list[idx:idx + n]
+            pop_states_dict[name] = pop_states_list[idx : idx + n]
             idx += n
 
         syn_states_dict = {}
         idx = 0
         for name, entry, n in graph._syn_info_cache:
-            syn_states_dict[name] = syn_states_list[idx:idx + n]
+            syn_states_dict[name] = syn_states_list[idx : idx + n]
             idx += n
 
         pre_rates_dict: Dict[str, TensorType] = {}
@@ -296,7 +309,8 @@ class AdjointSolver(tf.Module):
             pre_rates_dict[name] = pop.get_firing_rate(state)
             obs = pop.observables(state)
             post_vs_dict[name] = obs.get(
-                'v_mean', tf.zeros([1, pop.n_units], dtype=dtype))
+                "v_mean", tf.zeros([1, pop.n_units], dtype=dtype)
+            )
 
         syn_I: Dict[str, TensorType] = {}
         syn_g: Dict[str, TensorType] = {}
@@ -313,10 +327,9 @@ class AdjointSolver(tf.Module):
             else:
                 pre_rate = pre_rates_dict[entry.src]
             post_v = post_vs_dict[entry.tgt]
-            current_dict = entry.model.compute_current(
-                syn_state, pre_rate, post_v)
-            syn_I[entry.tgt] = syn_I[entry.tgt] + current_dict['I_syn']
-            syn_g[entry.tgt] = syn_g[entry.tgt] + current_dict['g_syn']
+            current_dict = entry.model.compute_current(syn_state, pre_rate, post_v)
+            syn_I[entry.tgt] = syn_I[entry.tgt] + current_dict["I_syn"]
+            syn_g[entry.tgt] = syn_g[entry.tgt] + current_dict["g_syn"]
 
         return syn_I, syn_g, pre_rates_dict, post_vs_dict
 
@@ -353,7 +366,6 @@ class AdjointSolver(tf.Module):
         n_ap = len(self._ap_pop_names)
         n_as = len(self._as_syn_names)
 
-
         def cond(counter, lp, ls, da):
             return counter >= 0
 
@@ -369,17 +381,23 @@ class AdjointSolver(tf.Module):
             for name in graph._input_names:
                 offset = graph._input_offsets[name]
                 size = graph._external_inputs[name]
-                input_step[name] = inputs_T[t, :, offset:offset + size]
+                input_step[name] = inputs_T[t, :, offset : offset + size]
 
-            target_t = {name: t_tensor[:, t, :]
-                        for name, t_tensor in target.items()}
+            target_t = {name: t_tensor[:, t, :] for name, t_tensor in target.items()}
 
             syn_I, syn_g, pre_rates, post_vs = self._compute_synaptic_context(
-                pop_t, syn_t, input_step, dtype)
+                pop_t, syn_t, input_step, dtype
+            )
 
             new_pop, new_syn, y_dict, l_t1 = self._forward_only(
-                pop_t, syn_t, t_val, input_step, target_t,
-                loss_fn_obj, T_val, dtype,
+                pop_t,
+                syn_t,
+                t_val,
+                input_step,
+                target_t,
+                loss_fn_obj,
+                T_val,
+                dtype,
             )
 
             new_lp = list(lp)
@@ -395,12 +413,12 @@ class AdjointSolver(tf.Module):
                 name = self._ap_pop_names[pi]
                 pop_model = graph._populations[name]
 
-                ps = pop_t[off:off + sz]
-                pl = list(new_lp[off:off + sz])
+                ps = pop_t[off : off + sz]
+                pl = list(new_lp[off : off + sz])
 
                 total_syn = {
-                    'I_syn': syn_I.get(name, tf.zeros_like(ps[0])),
-                    'g_syn': syn_g.get(name, tf.zeros_like(ps[0])),
+                    "I_syn": syn_I.get(name, tf.zeros_like(ps[0])),
+                    "g_syn": syn_g.get(name, tf.zeros_like(ps[0])),
                 }
 
                 try:
@@ -417,12 +435,13 @@ class AdjointSolver(tf.Module):
                 name = self._as_syn_names[si]
                 entry = graph._synapses[name]
 
-                ss = syn_t[off:off + sz]
-                sl = list(new_ls[off:off + sz])
+                ss = syn_t[off : off + sz]
+                sl = list(new_ls[off : off + sz])
 
                 try:
                     dlam = entry.model.adjoint_derivatives(
-                        sl, ss, pre_rates[entry.src], post_vs[entry.tgt])
+                        sl, ss, pre_rates[entry.src], post_vs[entry.tgt]
+                    )
                     for k in range(sz):
                         new_ls[off + k] = new_ls[off + k] - dt_val * dlam[k]
                 except NotImplementedError:
@@ -442,12 +461,12 @@ class AdjointSolver(tf.Module):
 
                 ps_off = self._ap_pop_offsets[tgt_pi]
                 ps_sz = self._ap_pop_sizes[tgt_pi]
-                ps = pop_t[ps_off:ps_off + ps_sz]
-                pl = list(lp[ps_off:ps_off + ps_sz])
+                ps = pop_t[ps_off : ps_off + ps_sz]
+                pl = list(lp[ps_off : ps_off + ps_sz])
 
                 total_syn = {
-                    'I_syn': syn_I.get(tgt_name, tf.zeros_like(ps[0])),
-                    'g_syn': syn_g.get(tgt_name, tf.zeros_like(ps[0])),
+                    "I_syn": syn_I.get(tgt_name, tf.zeros_like(ps[0])),
+                    "g_syn": syn_g.get(tgt_name, tf.zeros_like(ps[0])),
                 }
 
                 try:
@@ -457,48 +476,51 @@ class AdjointSolver(tf.Module):
                     lam_g = tf.zeros_like(ps[0])
 
                 try:
-                    ss = syn_t[off:off + sz]
+                    ss = syn_t[off : off + sz]
                     coupling = syn_model.compute_current_state_vjp(
-                        lam_I, lam_g, ss,
-                        pre_rates[entry.src], post_vs[entry.tgt])
+                        lam_I, lam_g, ss, pre_rates[entry.src], post_vs[entry.tgt]
+                    )
                     for k in range(len(coupling)):
                         new_ls[off + k] = new_ls[off + k] + dt_val * coupling[k]
                 except NotImplementedError:
                     pass
 
-                ss = syn_t[off:off + sz]
+                ss = syn_t[off : off + sz]
                 try:
                     cur_param_grads = syn_model.compute_current_param_grad(
-                        lam_I, lam_g, ss,
-                        pre_rates[entry.src], post_vs[entry.tgt])
+                        lam_I, lam_g, ss, pre_rates[entry.src], post_vs[entry.tgt]
+                    )
                 except NotImplementedError:
                     cur_param_grads = {}
                 for pname, pgrad in cur_param_grads.items():
-                    key = ('syn', name, pname)
+                    key = ("syn", name, pname)
                     p_idx_c = self._aparam_rev.get(key)
                     if p_idx_c is not None:
-                        cur_param_updates.append(
-                            (p_idx_c, dt_val * pgrad))
+                        cur_param_updates.append((p_idx_c, dt_val * pgrad))
 
             # Loss coupling: ∂L/∂rate → ∂rate/∂pop_state
             if len(y_dict) > 0:
-                y_list = [y_dict[name] for name in graph.dynamic_population_names
-                          if name in y_dict]
+                y_list = [
+                    y_dict[name]
+                    for name in graph.dynamic_population_names
+                    if name in y_dict
+                ]
                 if len(y_list) > 0:
                     with tf.GradientTape() as lt:
                         lt.watch(y_list)
                         l_check = loss_fn_obj.per_step_loss(
-                            {name: y_list[i]
-                             for i, name in enumerate(
-                                graph.dynamic_population_names)
-                             if name in y_dict},
-                            target_t)
+                            {
+                                name: y_list[i]
+                                for i, name in enumerate(graph.dynamic_population_names)
+                                if name in y_dict
+                            },
+                            target_t,
+                        )
                         T_f = tf.cast(T_val, dtype)
                         l_check = tf.cond(
-                            T_val > 1,
-                            lambda: l_check / T_f, lambda: l_check)
-                    dl_dy = lt.gradient(l_check, y_list,
-                                        unconnected_gradients="zero")
+                            T_val > 1, lambda: l_check / T_f, lambda: l_check
+                        )
+                    dl_dy = lt.gradient(l_check, y_list, unconnected_gradients="zero")
 
                     dy_idx = 0
                     for pi in self._ap_dynamic_idx:
@@ -514,58 +536,50 @@ class AdjointSolver(tf.Module):
                         off = self._ap_pop_offsets[pi]
                         sz = self._ap_pop_sizes[pi]
 
-
-                        scaling = tf.cast(
-                            1.0 / (pop_model.dt * 1e-3),
-                            dtype)
-                        new_lp[off] = (
-                            new_lp[off]
-                            + dt_val * dl * tf.cast(scaling, dl.dtype)
+                        scaling = tf.cast(1.0 / (pop_model.dt * 1e-3), dtype)
+                        new_lp[off] = new_lp[off] + dt_val * dl * tf.cast(
+                            scaling, dl.dtype
                         )
 
             # Parameter gradients
             new_da = list(da)
             for p_i, comp_type, comp_name, param_name in self._aparam_info:
-                if comp_type == 'pop':
-                    if param_name == '':
+                if comp_type == "pop":
+                    if param_name == "":
                         continue
                     pop_model = graph._populations[comp_name]
                     pi_idx = self._ap_pop_names.index(comp_name)
                     off = self._ap_pop_offsets[pi_idx]
                     sz = self._ap_pop_sizes[pi_idx]
-                    ps = pop_t[off:off + sz]
-                    pl = list(new_lp[off:off + sz])
+                    ps = pop_t[off : off + sz]
+                    pl = list(new_lp[off : off + sz])
                     total_syn = {
-                        'I_syn': syn_I.get(
-                            comp_name, tf.zeros_like(ps[0])),
-                        'g_syn': syn_g.get(
-                            comp_name, tf.zeros_like(ps[0])),
+                        "I_syn": syn_I.get(comp_name, tf.zeros_like(ps[0])),
+                        "g_syn": syn_g.get(comp_name, tf.zeros_like(ps[0])),
                     }
                     try:
-                        jac = pop_model.parameter_jacobian(
-                            param_name, ps, total_syn)
+                        jac = pop_model.parameter_jacobian(param_name, ps, total_syn)
                         grad = tf.zeros(tf.shape(jac)[1:], dtype=jac.dtype)
                         for k, lam in enumerate(pl):
-                            grad = grad + tf.reduce_sum(
-                                lam * jac, axis=0)
+                            grad = grad + tf.reduce_sum(lam * jac, axis=0)
                         new_da[p_i] = new_da[p_i] + dt_val * grad
                     except NotImplementedError:
                         pass
 
-                elif comp_type == 'syn':
-                    if param_name == '':
+                elif comp_type == "syn":
+                    if param_name == "":
                         continue
                     entry = graph._synapses[comp_name]
                     syn_model = entry.model
                     si_idx = self._as_syn_names.index(comp_name)
                     off = self._as_syn_offsets[si_idx]
                     sz = self._as_syn_sizes[si_idx]
-                    ss = syn_t[off:off + sz]
-                    sl = list(new_ls[off:off + sz])
+                    ss = syn_t[off : off + sz]
+                    sl = list(new_ls[off : off + sz])
                     try:
                         jac = syn_model.parameter_jacobian(
-                            param_name, ss,
-                            pre_rates[entry.src], post_vs[entry.tgt])
+                            param_name, ss, pre_rates[entry.src], post_vs[entry.tgt]
+                        )
                         grad = tf.zeros_like(jac)
                         for k, lam in enumerate(sl):
                             grad = grad + lam * jac
@@ -573,30 +587,32 @@ class AdjointSolver(tf.Module):
                     except NotImplementedError:
                         pass
 
-                elif comp_type == 'unknown':
+                elif comp_type == "unknown":
                     pop_list = list(pop_t)
                     syn_list = list(syn_t)
                     with tf.GradientTape() as pt:
                         pt.watch(pop_list)
                         pt.watch(syn_list)
-                        new_pop2, new_syn2, y_dict2, l_t2 = (
-                            self._forward_only(
-                                pop_t, syn_t, t_val, target_t,
-                                loss_fn_obj, T_val, dtype,
-                            ))
-                        proxy2 = (
-                            sum(tf.reduce_sum(p * lm)
-                                for p, lm in zip(new_pop2, new_lp))
-                            + sum(tf.reduce_sum(s * lm)
-                                  for s, lm in zip(new_syn2, new_ls))
+                        new_pop2, new_syn2, y_dict2, l_t2 = self._forward_only(
+                            pop_t,
+                            syn_t,
+                            t_val,
+                            target_t,
+                            loss_fn_obj,
+                            T_val,
+                            dtype,
+                        )
+                        proxy2 = sum(
+                            tf.reduce_sum(p * lm) for p, lm in zip(new_pop2, new_lp)
+                        ) + sum(
+                            tf.reduce_sum(s * lm) for s, lm in zip(new_syn2, new_ls)
                         )
                         combined2 = proxy2 + l_t2
                     all_grads = pt.gradient(
-                        combined2, self._trainable,
-                        unconnected_gradients="zero")
+                        combined2, self._trainable, unconnected_gradients="zero"
+                    )
                     if all_grads[p_i] is not None:
-                        new_da[p_i] = (
-                            new_da[p_i] + all_grads[p_i])
+                        new_da[p_i] = new_da[p_i] + all_grads[p_i]
 
             for p_idx_u, pgrad_u in cur_param_updates:
                 new_da[p_idx_u] = new_da[p_idx_u] + pgrad_u
@@ -604,9 +620,9 @@ class AdjointSolver(tf.Module):
             return counter - 1, tuple(new_lp), tuple(new_ls), tuple(new_da)
 
         _, _, _, dtheta_acc = tf.while_loop(
-            cond, body,
-            (tf.constant(T - 1, dtype=tf.int32),
-             lam_pop, lam_syn, dtheta_acc),
+            cond,
+            body,
+            (tf.constant(T - 1, dtype=tf.int32), lam_pop, lam_syn, dtheta_acc),
             parallel_iterations=1,
         )
 
@@ -650,10 +666,9 @@ class AdjointSolver(tf.Module):
             for name in self._graph._input_names:
                 offset = self._graph._input_offsets[name]
                 size = self._graph._external_inputs[name]
-                input_step[name] = inputs_T[t, :, offset:offset + size]
+                input_step[name] = inputs_T[t, :, offset : offset + size]
 
-            target_t = {name: t_tensor[:, t, :]
-                        for name, t_tensor in target.items()}
+            target_t = {name: t_tensor[:, t, :] for name, t_tensor in target.items()}
 
             pop_list = list(pop_t)
             syn_list = list(syn_t)
@@ -664,8 +679,14 @@ class AdjointSolver(tf.Module):
                 tape.watch(syn_list)
 
                 new_pop, new_syn, y_dict, l_t1 = self._forward_only(
-                    pop_t, syn_t, t_val, input_step, target_t,
-                    loss_fn_obj, T_val, dtype,
+                    pop_t,
+                    syn_t,
+                    t_val,
+                    input_step,
+                    target_t,
+                    loss_fn_obj,
+                    T_val,
+                    dtype,
                 )
 
                 npl = list(new_pop)
@@ -673,26 +694,25 @@ class AdjointSolver(tf.Module):
                 lpl = list(lp)
                 lsl = list(ls)
 
-                proxy = (
-                    sum(tf.reduce_sum(p * lm) for p, lm in zip(npl, lpl))
-                    + sum(tf.reduce_sum(s * lm) for s, lm in zip(nsl, lsl))
+                proxy = sum(tf.reduce_sum(p * lm) for p, lm in zip(npl, lpl)) + sum(
+                    tf.reduce_sum(s * lm) for s, lm in zip(nsl, lsl)
                 )
                 combined = proxy + l_t1
 
             grads = tape.gradient(combined, all_src, unconnected_gradients="zero")
 
             new_lp = tuple(grads[:n_pop])
-            new_ls = tuple(grads[n_pop:n_pop + n_syn])
-            ds = grads[n_pop + n_syn:]
+            new_ls = tuple(grads[n_pop : n_pop + n_syn])
+            ds = grads[n_pop + n_syn :]
 
             new_da = tuple(a + g for a, g in zip(da, ds))
 
             return counter - 1, new_lp, new_ls, new_da
 
         _, _, _, dtheta_acc = tf.while_loop(
-            cond, body,
-            (tf.constant(T - 1, dtype=tf.int32),
-             lam_pop, lam_syn, dtheta_acc),
+            cond,
+            body,
+            (tf.constant(T - 1, dtype=tf.int32), lam_pop, lam_syn, dtheta_acc),
             parallel_iterations=1,
         )
 
@@ -717,20 +737,33 @@ class AdjointSolver(tf.Module):
         variables = self._network.trainable_variables
 
         pop_full, syn_full = self._build_state_full(
-            init_pop, init_syn, pop_stacked, syn_stacked)
+            init_pop, init_syn, pop_stacked, syn_stacked
+        )
 
         # Pre-transpose inputs: [batch, T, total] -> [T, batch, total]
         inputs_T = tf.transpose(inputs, [1, 0, 2])
 
         if self._use_analytical_adjoint:
             dtheta_step_list = self._analytical_backward_loop(
-                pop_full, syn_full, t_sequence, inputs_T, target,
-                loss_fn, tf.constant(T, dtype=tf.int32), dtype,
+                pop_full,
+                syn_full,
+                t_sequence,
+                inputs_T,
+                target,
+                loss_fn,
+                tf.constant(T, dtype=tf.int32),
+                dtype,
             )
         else:
             dtheta_step_list = self._compiled_backward_loop(
-                pop_full, syn_full, t_sequence, inputs_T, target,
-                loss_fn, tf.constant(T, dtype=tf.int32), dtype,
+                pop_full,
+                syn_full,
+                t_sequence,
+                inputs_T,
+                target,
+                loss_fn,
+                tf.constant(T, dtype=tf.int32),
+                dtype,
             )
 
         grad_list: List[TensorType] = list(dtheta_step_list)
@@ -759,7 +792,11 @@ class AdjointSolver(tf.Module):
             input_step[name] = tf.zeros([1, n], dtype=dtype)
         return _step_fn(
             (pop_tup, syn_tup, stab_acc),
-            t_val, input_step, self._graph, self._integrator)
+            t_val,
+            input_step,
+            self._graph,
+            self._integrator,
+        )
 
     # ── Compute gradients ────────────────────────────────────────────────────
 
@@ -791,8 +828,7 @@ class AdjointSolver(tf.Module):
             total_stab_weight = sum(w for w, _ in stab_terms)
             stab_grads = self._stability_gradients()
             total_grads = [
-                mg + sg * total_stab_weight
-                for mg, sg in zip(main_grads, stab_grads)
+                mg + sg * total_stab_weight for mg, sg in zip(main_grads, stab_grads)
             ]
         else:
             total_grads = main_grads
@@ -805,10 +841,14 @@ class AdjointSolver(tf.Module):
     ) -> Tuple[Optional[BaseLoss], List[Tuple[float, BaseLoss]]]:
         from neuraltide.training.losses import StabilityPenalty
 
-        main_terms = [(w, loss) for w, loss in loss_fn.terms
-                      if not isinstance(loss, StabilityPenalty)]
-        stab_terms = [(w, loss) for w, loss in loss_fn.terms
-                      if isinstance(loss, StabilityPenalty)]
+        main_terms = [
+            (w, loss)
+            for w, loss in loss_fn.terms
+            if not isinstance(loss, StabilityPenalty)
+        ]
+        stab_terms = [
+            (w, loss) for w, loss in loss_fn.terms if isinstance(loss, StabilityPenalty)
+        ]
 
         if not main_terms:
             return None, stab_terms
@@ -836,12 +876,12 @@ class AdjointSolver(tf.Module):
         with tf.GradientTape() as tape:
             for _ in range(10):
                 pop_states, syn_states, stability_acc = self._stab_forward_step(
-                    pop_states, syn_states, stability_acc, t_val, dtype)
+                    pop_states, syn_states, stability_acc, t_val, dtype
+                )
             stability_loss = tf.reduce_mean(stability_acc)
 
         grads = tape.gradient(stability_loss, variables)
 
         return [
-            g if g is not None else tf.zeros_like(v)
-            for g, v in zip(grads, variables)
+            g if g is not None else tf.zeros_like(v) for g, v in zip(grads, variables)
         ]

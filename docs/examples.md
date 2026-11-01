@@ -653,7 +653,7 @@ trainer.export_results('results.csv', format='csv')
 
 Полный пример: `examples/example_place_field_phase_precession.py`
 
-Демонстрирует прямой вызов `PlaceFieldGenerator` с передачей пространственных координат `(x, y)` (в см) через параметр `extra_inputs`, зашумлённую круговую траекторию, диагностический вывод всех параметров и три графика (rate vs theta, фазовая прецессия, карта арены).
+Демонстрирует прямой вызов `PlaceFieldGenerator` с передачей пространственных координат `(x, y)` и скоростей `(vx, vy)` (в см и см/мс) через параметр `extra_inputs`, зашумлённую круговую траекторию, диагностический вывод всех параметров и три графика (rate vs theta, фазовая прецессия, карта арены).
 
 ```python
 import numpy as np
@@ -703,13 +703,16 @@ rates_no_pos = gen(t_seq, extra_inputs=None)
 ### Поток данных
 
 ```
-pos_x, pos_y (см)  ──→  extra_inputs [batch, T, 2]
+pos_x, pos_y, vx, vy (см, см/мс)  ──→  extra_inputs [batch, T, 4]
                               │
     t [batch, T, 1]  ────────┤
                               │
                     PlaceFieldGenerator.call(t, extra_inputs=extra)
                               │
                     rates [batch, T, n_units]  (Hz)
+                              │
+              dphi = -slope * ((px-cx)*vx + (py-cy)*vy) / |v|
+              (различает заход в поле и выход)
                               │
                     graph.pack_inputs({'place': rates})
                               │

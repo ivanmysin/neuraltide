@@ -34,8 +34,8 @@ gen = SinusoidalGenerator(dt=0.5, params={
 ### Вызов генератора
 
 ```python
-# t: shape [batch, 1] — текущее время в мс
-output = generator(t)  # Returns: shape [batch, n_units] в Гц
+# t: shape [batch, T, 1], [batch, T] или [T] — время в мс
+output = generator(t)  # Returns: shape [batch, T, n_units] в Гц
 ```
 
 ### Интеграция с NetworkGraph
@@ -269,9 +269,9 @@ VonMisesGenerator(
 def call(self, t: TensorType, extra_inputs: Optional[TensorType] = None) -> TensorType:
 ```
 
-- `t`: форма `[batch, 1]`, `[T]`, или `[batch, T, 1]` — время в мс
+- `t`: форма `[batch, 1]`, `[T]`, `[batch, T]` или `[batch, T, 1]` — время в мс
 - `extra_inputs`: опционально — дополнительные данные (игнорируется этим генератором)
-- Возвращает: `[batch, n_units]` в Hz
+- Возвращает: `[batch, T, n_units]` в Hz
 
 ### Примеры
 
@@ -473,10 +473,10 @@ class MyGenerator(BaseInputGenerator):
     def call(self, t: TensorType) -> TensorType:
         """
         Args:
-            t: текущее время в мс. shape = [batch, 1]
-        
+            t: время в мс. shape [batch, T, 1], [batch, T] или [T]
+
         Returns:
-            tf.Tensor, shape = [batch, n_units], в Гц
+            tf.Tensor, shape [batch, T, n_units], в Гц
         """
         # Реализация генератора
         # Используйте tf.reshape для broadcasting параметров

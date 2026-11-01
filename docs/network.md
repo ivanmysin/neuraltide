@@ -364,7 +364,7 @@ output = network(t_seq, inputs=inputs, initial_state=(init_pop, init_syn))
 
 ### Симуляция с позиционно-зависимым входом
 
-PlaceFieldGenerator использует координаты `(x, y)`, которые передаются как входные данные через `pack_inputs()`.
+PlaceFieldGenerator использует координаты `(x, y)`, которые передаются как входные данные через `pack_inputs()`. Опционально можно передать и скорости `(vx, vy)` (см/мс) — тогда фазовая прецессия использует проекцию на направление движения и различает заход в поле и выход из него.
 
 ```python
 import numpy as np
@@ -404,15 +404,18 @@ T = 5000
 t_values = np.arange(0, T, 0.5, dtype=np.float32)
 t_seq = tf.constant(t_values[None, :, None])  # [1, T/dt, 1]
 
-# Траектория: позиции (x, y) в см
+# Траектория: позиции (x, y) + скорости (vx, vy) в см и см/мс
 n_steps = len(t_values)
 r_traj = 70.0  # см
 theta = 2.0 * np.pi * np.arange(n_steps) / n_steps * 2  # 2 оборота
 pos_x = r_traj * np.cos(theta)
 pos_y = r_traj * np.sin(theta)
+dt = 0.5
+vx = np.gradient(pos_x, dt)  # см/мс
+vy = np.gradient(pos_y, dt)
 extra = tf.constant(
-    np.stack([pos_x, pos_y], axis=-1).astype(np.float32)[None, :, :]
-)  # [1, T/dt, 2]
+    np.stack([pos_x, pos_y, vx, vy], axis=-1).astype(np.float32)[None, :, :]
+)  # [1, T/dt, 4]
 
 # Упаковка входов: PlaceFieldGenerator генерирует частоты с учётом координат
 rates = gen(t_seq, extra_inputs=extra)

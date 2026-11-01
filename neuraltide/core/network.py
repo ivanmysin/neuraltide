@@ -367,9 +367,7 @@ def _step_fn(
             entry.model, syn_state, pre_rate, post_v, entry.model.dt
         )
 
-        current_dict = entry.model.compute_current(
-            new_syn_state, pre_rate, post_v
-        )
+        current_dict = entry.model.compute_current(new_syn_state, pre_rate, post_v)
 
         syn_I[entry.tgt] = syn_I[entry.tgt] + current_dict["I_syn"]
         syn_g[entry.tgt] = syn_g[entry.tgt] + current_dict["g_syn"]

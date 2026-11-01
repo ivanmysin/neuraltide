@@ -1,9 +1,13 @@
-import numpy as np
 import tensorflow as tf
 
 import neuraltide
 import neuraltide.config
-from neuraltide.core.base import PopulationModel
+from neuraltide.core.base import (
+    PopulationModel,
+    _get_constraint_name,
+    _infer_n_units_from_params,
+    _validate_param_dimensions,
+)
 from neuraltide.core.types import TensorType, StateList, Dict
 
 
@@ -51,8 +55,9 @@ class WilsonCowan(PopulationModel):
     """
 
     def __init__(self, dt: float, params: dict, name: str = "wilson_cowan", **kwargs):
+        self.name = name
         self._params = params
-        self._infer_n_units()
+        self.n_units = _infer_n_units_from_params(params)
         self._validate_params()
         self._validate_param_dimensions()
 
@@ -69,19 +74,6 @@ class WilsonCowan(PopulationModel):
             tf.TensorShape([1, self.n_units]),
         ]
 
-    def _infer_n_units(self) -> None:
-        """Определяет n_units из максимальной длины параметров."""
-        max_len = 1
-        for key, spec in self._params.items():
-            value = spec.get("value") if isinstance(spec, dict) else spec
-            if value is None:
-                continue
-            if isinstance(value, (list, tuple)):
-                max_len = max(max_len, len(value))
-            elif isinstance(value, np.ndarray) and value.ndim == 1:
-                max_len = max(max_len, len(value))
-        self.n_units = max_len
-
     def _validate_params(self) -> None:
         """Проверяет наличие всех обязательных параметров."""
         required = ["tau", "a", "theta", "w", "I_ext", "max_rate"]
@@ -93,22 +85,11 @@ class WilsonCowan(PopulationModel):
 
     def _validate_param_dimensions(self) -> None:
         """Проверяет согласованность размерностей параметров (1 или n_units)."""
-        for key, spec in self._params.items():
-            value = spec.get("value") if isinstance(spec, dict) else spec
-            if value is None:
-                continue
-            if isinstance(value, (list, tuple)):
-                if len(value) != 1 and len(value) != self.n_units:
-                    raise ValueError(
-                        f"WilsonCowan '{self.name}': parameter '{key}' "
-                        f"has length {len(value)}, expected 1 or {self.n_units}."
-                    )
-            elif isinstance(value, np.ndarray) and value.ndim == 1:
-                if len(value) != 1 and len(value) != self.n_units:
-                    raise ValueError(
-                        f"WilsonCowan '{self.name}': parameter '{key}' "
-                        f"has length {len(value)}, expected 1 or {self.n_units}."
-                    )
+        _validate_param_dimensions(
+            self._params,
+            self.n_units,
+            f"WilsonCowan '{self.name}'",
+        )
 
     def get_initial_state(self, batch_size: int = 1) -> StateList:
         dtype = neuraltide.config.get_dtype()
@@ -184,6 +165,4 @@ class WilsonCowan(PopulationModel):
         }
 
     def _get_constraint_name(self, var: tf.Variable) -> str:
-        if var.constraint is not None:
-            return var.constraint.__class__.__name__
-        return None
+        return _get_constraint_name(var)

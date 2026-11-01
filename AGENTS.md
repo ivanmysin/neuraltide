@@ -15,7 +15,7 @@ Python **>=3.12** (pyproject.toml; README says 3.9 but that is outdated).
 ## Architecture
 
 - **`neuraltide.populations`** — PopulationModel subclasses (IzhikevichMeanField, WilsonCowan, FokkerPlanckPopulation, BrunelFokkerPlanck, InputPopulation (deprecated)).
-- **`neuraltide.synapses`** — SynapseModel subclasses (TsodyksMarkram, NMDA, Static, Composite).
+- **`neuraltide.synapses`** — SynapseModel subclasses (TsodyksMarkram, NMDA, Static, SecondOrderSynapse (непластичный), Composite).
 - **`neuraltide.inputs`** — BaseInputGenerator subclasses (VonMises, Sinusoidal, ConstantRate, PlaceField). Внешние входы предвычисляются: `NetworkGraph.declare_input()` + `graph.pack_inputs()` → `NetworkRNN.call(t_seq, inputs=...)`.
 - **`neuraltide.integrators`** — Euler, Heun, RK4.
 - **`neuraltide.core.network`** — `NetworkGraph` (topology), `NetworkRNN` (simulation via `tf.while_loop` + TensorArray).

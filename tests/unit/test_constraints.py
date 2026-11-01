@@ -1,8 +1,8 @@
-import pytest
 import tensorflow as tf
 from neuraltide.constraints.param_constraints import (
     MinMaxConstraint,
 )
+
 
 class TestMinMaxConstraint:
     def test_clip_full_bounds(self):
@@ -29,12 +29,11 @@ class TestMinMaxConstraint:
     def test_get_config(self):
         constraint = MinMaxConstraint(0.1, 0.9)
         config = constraint.get_config()
-        assert config['min_val'] == 0.1
-        assert config['max_val'] == 0.9
+        assert config["min_val"] == 0.1
+        assert config["max_val"] == 0.9
 
     def test_from_config(self):
-        config = {'min_val': 0.0, 'max_val': 1.0}
+        config = {"min_val": 0.0, "max_val": 1.0}
         constraint = MinMaxConstraint.from_config(config)
         assert constraint.min_val == 0.0
         assert constraint.max_val == 1.0
-
