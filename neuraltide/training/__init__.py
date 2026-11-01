@@ -13,7 +13,6 @@ from neuraltide.training.readouts import (
     IdentityReadout,
     LinearReadout,
     BandpassReadout,
-    LFPProxyReadout,
     HemodynamicReadout,
 )
 from neuraltide.training.trainer import Trainer, TrainingHistory
@@ -37,7 +36,6 @@ __all__ = [
     "IdentityReadout",
     "LinearReadout",
     "BandpassReadout",
-    "LFPProxyReadout",
     "HemodynamicReadout",
     "Trainer",
     "TrainingHistory",

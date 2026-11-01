@@ -100,95 +100,27 @@ class PlaceFieldGenerator(BaseInputGenerator):
         self.center_y = self._make_param(self._params, "center_y")
         self.radius = self._make_param(self._params, "radius")
 
-        peak_rate_raw = self._params.get("peak_rate", 20.0)
-        if isinstance(peak_rate_raw, dict):
-            peak_rate_raw = peak_rate_raw["value"]
-        pk_np = np.atleast_1d(np.array(peak_rate_raw, dtype=np.float64))
-        if pk_np.shape == ():
-            pk_np = np.array([pk_np.item()], dtype=np.float64)
-
-        self.peak_rate = self.add_weight(
-            shape=(self.n_units,),
-            initializer=tf.keras.initializers.Constant(pk_np),
-            trainable=False,
-            dtype=neuraltide.config.get_dtype(),
-            name="peak_rate",
+        deg2rad = np.pi / 180.0
+        self.peak_rate = self._make_vector_param("peak_rate", default=20.0)
+        self.background_rate = self._make_vector_param("background_rate", default=0.0)
+        self.theta_modulation_factor = self._make_vector_param(
+            "theta_modulation_factor", default=0.0
         )
-
-        bg_raw = self._params.get("background_rate", 0.0)
-        if isinstance(bg_raw, dict):
-            bg_raw = bg_raw["value"]
-        bg_np = np.atleast_1d(np.array(bg_raw, dtype=np.float64))
-        if bg_np.shape == ():
-            bg_np = np.array([bg_np.item()], dtype=np.float64)
-        self.background_rate = self.add_weight(
-            shape=(self.n_units,),
-            initializer=tf.keras.initializers.Constant(bg_np),
-            trainable=False,
-            dtype=neuraltide.config.get_dtype(),
-            name="background_rate",
+        self.precession_slope_rad = self._make_vector_param(
+            "precession_slope", default=0.0, scale=deg2rad
         )
-
-        tmf_raw = self._params.get("theta_modulation_factor", 0.0)
-        if isinstance(tmf_raw, dict):
-            tmf_raw = tmf_raw["value"]
-        tmf_np = np.atleast_1d(np.array(tmf_raw, dtype=np.float64))
-        if tmf_np.shape == ():
-            tmf_np = np.array([tmf_np.item()], dtype=np.float64)
-        self.theta_modulation_factor = self.add_weight(
-            shape=(self.n_units,),
-            initializer=tf.keras.initializers.Constant(tmf_np),
-            trainable=False,
-            dtype=neuraltide.config.get_dtype(),
-            name="theta_modulation_factor",
+        self.precession_init_phase = self._make_vector_param(
+            "precession_init_phase", default=0.0, scale=deg2rad
         )
-
-        slp_raw = self._params.get("precession_slope", 0.0)
-        if isinstance(slp_raw, dict):
-            slp_raw = slp_raw["value"]
-        slp_np = np.atleast_1d(np.array(slp_raw, dtype=np.float64))
-        if slp_np.shape == ():
-            slp_np = np.array([slp_np.item()], dtype=np.float64)
-        slp_rad_per_cm = slp_np * (np.pi / 180.0)
-        self.precession_slope_rad = self.add_weight(
-            shape=(self.n_units,),
-            initializer=tf.keras.initializers.Constant(slp_rad_per_cm),
-            trainable=False,
-            dtype=neuraltide.config.get_dtype(),
-            name="precession_slope_rad",
-        )
-
-        ph_raw = self._params.get("precession_init_phase", 0.0)
-        if isinstance(ph_raw, dict):
-            ph_raw = ph_raw["value"]
-        ph_np = np.atleast_1d(np.array(ph_raw, dtype=np.float64))
-        if ph_np.shape == ():
-            ph_np = np.array([ph_np.item()], dtype=np.float64)
-        ph_rad = ph_np * np.pi / 180.0
-        self.precession_init_phase = self.add_weight(
-            shape=(self.n_units,),
-            initializer=tf.keras.initializers.Constant(ph_rad),
-            trainable=False,
-            dtype=neuraltide.config.get_dtype(),
-            name="precession_init_phase",
-        )
-
-        pout_raw = self._params.get("phase_outside", 0.0)
-        if isinstance(pout_raw, dict):
-            pout_raw = pout_raw["value"]
-        pout_np = np.atleast_1d(np.array(pout_raw, dtype=np.float64))
-        if pout_np.shape == ():
-            pout_np = np.array([pout_np.item()], dtype=np.float64)
-        pout_rad = pout_np * np.pi / 180.0
-        self.phase_outside = self.add_weight(
-            shape=(self.n_units,),
-            initializer=tf.keras.initializers.Constant(pout_rad),
-            trainable=False,
-            dtype=neuraltide.config.get_dtype(),
-            name="phase_outside",
+        self.phase_outside = self._make_vector_param(
+            "phase_outside", default=0.0, scale=deg2rad
         )
 
         raw_R = self._params.get("R")
+        if raw_R is None:
+            raise ValueError(
+                "PlaceFieldGenerator: required parameter 'R' not found in params."
+            )
         if isinstance(raw_R, dict):
             raw_R = raw_R.get("value", raw_R)
         R_array = np.array(raw_R)
@@ -197,6 +129,8 @@ class PlaceFieldGenerator(BaseInputGenerator):
         R_array = np.broadcast_to(R_array, [self.n_units])
         kappa_np = self._r2kappa_np(R_array)
         i0k_np = self._i0_np(kappa_np)
+        # kappa/i0_kappa — производные от R (не обучаемые), поэтому
+        # tf.constant, а не веса; parameter_spec отражает это явно.
         self.kappa = tf.constant(kappa_np, dtype=neuraltide.config.get_dtype())
         self.i0_kappa = tf.constant(i0k_np, dtype=neuraltide.config.get_dtype())
         self.freq = self._make_param(self._params, "freq")
@@ -414,8 +348,14 @@ class PlaceFieldGenerator(BaseInputGenerator):
             },
             "kappa": {
                 "shape": (self.n_units,),
-                "trainable": self.kappa.trainable,
-                "constraint": self._get_constraint_name(self.kappa),
+                "trainable": False,
+                "constraint": None,
+                "units": "dimensionless",
+            },
+            "i0_kappa": {
+                "shape": (self.n_units,),
+                "trainable": False,
+                "constraint": None,
                 "units": "dimensionless",
             },
             "freq": {

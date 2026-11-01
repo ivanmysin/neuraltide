@@ -204,7 +204,6 @@ class AdjointSolver(tf.Module):
 
         output = NetworkOutput(
             firing_rates=all_rates,
-            hidden_states=None,
             stability_loss=stability_loss,
             final_state=final_state,
         )

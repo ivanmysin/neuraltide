@@ -1,6 +1,9 @@
 """
-Пример 5: LFP Proxy readout.
-Использование LFPProxyReadout для взвешенной суммы токов.
+Пример 5: LFP-прокси из суммарной активности.
+
+LFP-подобный сигнал строится честно: взвешенная сумма частот разрядов
+популяций, отфильтрованных в тета-диапазоне (BandpassReadout).
+Затем сигнал сравнивается с целью через MSELoss.
 """
 
 import numpy as np
@@ -11,7 +14,7 @@ from neuraltide.populations import IzhikevichMeanField
 from neuraltide.synapses import TsodyksMarkramSynapse
 from neuraltide.inputs import SinusoidalGenerator
 from neuraltide.integrators import RK4Integrator
-from neuraltide.training import Trainer, CompositeLoss, MSELoss
+from neuraltide.training import Trainer, CompositeLoss, MSELoss, BandpassReadout
 from neuraltide.utils import seed_everything
 
 seed_everything(42)
@@ -67,18 +70,30 @@ t_values = np.arange(T, dtype=np.float32) * dt
 t_seq = tf.constant(t_values[None, :, None])
 inputs = graph.pack_inputs({"stim": gen(t_seq)})
 
+# --- LFP-прокси: взвешенная сумма тета-фильтрованных частот разрядов ---
+WEIGHTS = {"exc": 1.0}
+theta_readout = BandpassReadout(f_low=4.0, f_high=12.0, dt=dt)
+
+output = network(t_seq, inputs=inputs)
+rate_bp = theta_readout(output.firing_rates["exc"])  # [1, T, n_units]
+lfp_proxy = sum(
+    w * rate_bp[:, :, i : i + 1]
+    for name, w in WEIGHTS.items()
+    for i in range(output.firing_rates[name].shape[-1])
+)
+print(f"LFP proxy shape: {lfp_proxy.shape}")
+
+# --- Обучение: частоты 'exc' в тета-диапазоне подгоняются под цель ---
 target_0 = 10.0 + 5.0 * np.sin(2 * np.pi * 8.0 * t_values / 1000.0)
 target = {"exc": tf.constant(target_0[None, :, None], dtype=tf.float32)}
 
 loss_fn = CompositeLoss(
     [
-        (1.0, MSELoss(target)),
+        (1.0, MSELoss(target, readout=theta_readout)),
     ]
 )
 
 trainer = Trainer(network, loss_fn, optimizer=tf.keras.optimizers.Adam(1e-3))
 history = trainer.fit(t_seq, inputs=inputs, epochs=100, verbose=1)
 
-output = trainer.predict(t_seq, inputs=inputs)
-print(f"LFP output shape: {output.firing_rates['exc'].shape}")
 print("LFP Proxy example completed successfully!")

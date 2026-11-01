@@ -144,12 +144,7 @@ class BrunelFokkerPlanck(FokkerPlanckPopulation):
         ]
 
         dtype = neuraltide.config.get_dtype()
-        v_grid = tf.linspace(
-            tf.constant(v_min, dtype=dtype),
-            tf.constant(v_theta, dtype=dtype),
-            grid_size,
-        )
-        self._v_grid = tf.reshape(v_grid, [1, grid_size])
+        self._v_grid = self._v_grid_or_linspace(dtype)
         self._inject_mask = tf.one_hot(self._reset_index, self.grid_size, dtype=dtype)[
             tf.newaxis, :
         ]
@@ -176,11 +171,7 @@ class BrunelFokkerPlanck(FokkerPlanckPopulation):
         # Центр начального распределения — внутри сетки, даже если
         # mu_0 > v_theta (режим выше порога)
         center = tf.minimum(mu0, tf.cast(self.v_theta[0], dtype) - 3.0 * sigma)
-        var = tf.maximum(sigma * sigma, 1e-6)
-        P = tf.exp(-0.5 * (self._v_grid - center) ** 2 / var)
-        # Узел на пороге всегда поглощающий (P(θ) = 0)
-        P = tf.concat([P[:, :-1], tf.zeros_like(P[:, -1:])], axis=1)
-        P = P / (tf.reduce_sum(P) * self.dV)
+        P = self._gaussian_initial_state(center, sigma)
         p_r = tf.zeros([1, 1], dtype=dtype)
         nu_buf = tf.zeros([1, self._n_delay], dtype=dtype)
         return [P, p_r, nu_buf]

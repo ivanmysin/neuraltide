@@ -48,7 +48,6 @@ class NetworkConfig:
     synapses: List[SynapseConfig]
     inputs: List[InputConfig]
     stability_penalty_weight: float = 0.0
-    return_hidden_states: bool = False
 
 
 def _get_integrator(name: str) -> Any:
@@ -148,7 +147,6 @@ def build_network_from_config(
         graph=graph,
         integrator=integrator,
         stability_penalty_weight=config.stability_penalty_weight,
-        return_hidden_states=config.return_hidden_states,
     )
 
     return network, generators

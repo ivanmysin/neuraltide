@@ -804,6 +804,35 @@ class BaseInputGenerator(tf.keras.layers.Layer):
             name=name,
         )
 
+    def _make_vector_param(self, name: str, default: float, scale: float = 1.0):
+        """
+        Регистрирует НЕобучаемый векторный параметр из скаляра или списка
+        (с опциональным масштабированием, напр. градусы → радианы).
+
+        Args:
+            name: ключ в params (может отсутствовать — тогда default).
+            default: значение по умолчанию.
+            scale: множитель перед сохранением.
+
+        Returns:
+            tf.Variable shape (n_units,), trainable=False.
+        """
+        import numpy as np
+
+        raw = self._params.get(name, default)
+        if isinstance(raw, dict):
+            raw = raw["value"]
+        arr = np.atleast_1d(np.array(raw, dtype=np.float64) * scale)
+        if arr.shape == ():
+            arr = np.array([arr.item()], dtype=np.float64)
+        return self.add_weight(
+            shape=(self.n_units,),
+            initializer=tf.keras.initializers.Constant(arr),
+            trainable=False,
+            dtype=neuraltide.config.get_dtype(),
+            name=name,
+        )
+
     @property
     def parameter_spec(self) -> Dict[str, Dict[str, Any]]:
         """

@@ -405,7 +405,7 @@ def _step_fn(
 class NetworkOutput(
     namedtuple(
         "_NetworkOutputBase",
-        ["firing_rates", "hidden_states", "stability_loss", "final_state"],
+        ["firing_rates", "stability_loss", "final_state"],
     )
 ):
     """
@@ -415,7 +415,6 @@ class NetworkOutput(
         firing_rates: dict[str, tf.Tensor]
             Ключи — имена динамических популяций.
             Форма каждого тензора: [batch, T, n_units_i].
-        hidden_states: dict[str, dict[str, tf.Tensor]] или None.
         stability_loss: tf.Tensor, scalar.
         final_state: tuple[StateList, StateList]
             Конечное состояние (pop_states, syn_states)
@@ -437,7 +436,6 @@ class NetworkRNN(tf.keras.layers.Layer):
         self,
         graph: NetworkGraph,
         integrator: BaseIntegrator,
-        return_hidden_states: bool = False,
         stability_penalty_weight: float = 0.0,
         **kwargs,
     ):
@@ -445,7 +443,6 @@ class NetworkRNN(tf.keras.layers.Layer):
         graph.validate()
         self._graph = graph
         self._integrator = integrator
-        self._return_hidden_states = return_hidden_states
         self._stability_penalty_weight = stability_penalty_weight
 
         self._build()
@@ -491,7 +488,6 @@ class NetworkRNN(tf.keras.layers.Layer):
             vars_.extend(entry.model.trainable_variables)
         return vars_
 
-    @tf.function
     def _scan_forward(
         self,
         t_sequence: TensorType,
@@ -499,120 +495,11 @@ class NetworkRNN(tf.keras.layers.Layer):
         init_pop: Tuple[TensorType, ...],
         init_syn: Tuple[TensorType, ...],
     ) -> Tuple[Dict[str, TensorType], TensorType, StateList, StateList]:
-        """Сканирует временну́ю ось через tf.while_loop + TensorArray."""
-        dtype = neuraltide.config.get_dtype()
-        T = tf.shape(t_sequence)[1]
-        elems = tf.transpose(t_sequence, [1, 0, 2])
-
-        # Pre-transpose inputs: [batch, T, total] -> [T, batch, total]
-        inputs_T = tf.transpose(inputs, [1, 0, 2])
-
-        # Build dict of transposed slices per input name
-        input_seqs = {}
-        for name in self._graph._input_names:
-            offset = self._graph._input_offsets[name]
-            size = self._graph._external_inputs[name]
-            input_seqs[name] = inputs_T[:, :, offset : offset + size]
-
-        init_stability = tf.zeros([1], dtype=dtype)
-
-        pop_arrays = [
-            tf.TensorArray(
-                dtype,
-                size=T,
-                clear_after_read=False,
-                element_shape=self._pop_state_shapes[i],
-            )
-            for i in range(self._pop_state_count)
-        ]
-        syn_arrays = [
-            tf.TensorArray(
-                dtype,
-                size=T,
-                clear_after_read=False,
-                element_shape=_tensorarr_shape(init_syn[i]),
-            )
-            for i in range(self._syn_state_count)
-        ]
-        stab_array = tf.TensorArray(
-            dtype, size=T, clear_after_read=False, element_shape=[1]
+        """Сканирует временну́ю ось (обёртка над _scan_forward_states)."""
+        all_rates, stability_loss, final_pop, final_syn, _, _ = (
+            self._scan_forward_states(t_sequence, init_pop, init_syn, inputs=inputs)
         )
-
-        i0 = tf.constant(0)
-
-        def _cond(i, pop_carry, syn_carry, stab_carry, pop_arrs, syn_arrs, stab_arr):
-            return i < T
-
-        def _body(i, pop_carry, syn_carry, stab_carry, pop_arrs, syn_arrs, stab_arr):
-            t = elems[i]
-            # Slice inputs at this time step
-            input_step = {name: seq[i] for name, seq in input_seqs.items()}
-            new_pop, new_syn, new_stab = _step_fn(
-                (pop_carry, syn_carry, stab_carry),
-                t,
-                input_step,
-                self._graph,
-                self._integrator,
-            )
-            for j in range(self._pop_state_count):
-                pop_arrs[j] = pop_arrs[j].write(i, new_pop[j])
-            for j in range(self._syn_state_count):
-                syn_arrs[j] = syn_arrs[j].write(i, new_syn[j])
-            stab_arr = stab_arr.write(i, new_stab)
-            return (i + 1, new_pop, new_syn, new_stab, pop_arrs, syn_arrs, stab_arr)
-
-        loop_vars = (
-            i0,
-            init_pop,
-            init_syn,
-            init_stability,
-            pop_arrays,
-            syn_arrays,
-            stab_array,
-        )
-
-        pop_state_inv = tuple(
-            tf.TensorShape(s) if not isinstance(s, tf.TensorShape) else s
-            for s in self._pop_state_shapes
-        )
-        shape_inv = (
-            tf.TensorShape([]),
-            pop_state_inv,
-            tuple(t.shape for t in init_syn),
-            tf.TensorShape([1]),
-            [tf.TensorShape(None)] * len(pop_arrays),
-            [tf.TensorShape(None)] * len(syn_arrays),
-            tf.TensorShape(None),
-        )
-
-        (*_, final_pop, final_syn, _, pop_arrs, syn_arrs, stab_arr) = tf.while_loop(
-            _cond,
-            _body,
-            loop_vars,
-            parallel_iterations=1,
-            shape_invariants=shape_inv,
-        )
-
-        all_pop_stacked = tuple(ta.stack() for ta in pop_arrs)
-        all_syn_stacked = tuple(ta.stack() for ta in syn_arrs)
-        all_stability = stab_arr.stack()
-
-        all_rates = {}
-        for name in self._graph.dynamic_population_names:
-            idx = self._pop_state_offsets[name]
-            stacked_r = all_pop_stacked[idx]
-            pop = self._graph._populations[name]
-            rate = pop.get_firing_rate([stacked_r])
-            all_rates[name] = tf.transpose(rate, [1, 0, 2])
-
-        stability_loss = self._stability_penalty_weight * tf.reduce_mean(
-            all_stability[-1]
-        )
-
-        final_pop_states = [s[-1] for s in all_pop_stacked]
-        final_syn_states = [s[-1] for s in all_syn_stacked]
-
-        return all_rates, stability_loss, final_pop_states, final_syn_states
+        return all_rates, stability_loss, list(final_pop), list(final_syn)
 
     @tf.function
     def _scan_forward_states(
@@ -816,7 +703,6 @@ class NetworkRNN(tf.keras.layers.Layer):
 
         return NetworkOutput(
             firing_rates=all_rates,
-            hidden_states=None,
             stability_loss=stability_loss,
             final_state=(final_pop, final_syn),
         )

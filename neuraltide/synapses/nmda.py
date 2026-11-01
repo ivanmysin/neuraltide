@@ -4,7 +4,7 @@ from typing import Dict, Tuple
 import neuraltide
 import neuraltide.config
 from neuraltide.core.base import SynapseModel
-from neuraltide.core.types import TensorType, StateList
+from neuraltide.core.types import TensorType, StateList, cast_if_needed
 
 
 class NMDASynapse(SynapseModel):
@@ -45,12 +45,6 @@ class NMDASynapse(SynapseModel):
             tf.zeros([self.n_pre, self.n_post], dtype=dtype),
         ]
 
-    @staticmethod
-    def _maybe_cast(val, dtype):
-        if isinstance(val, tf.Tensor) and val.dtype == dtype:
-            return val
-        return tf.cast(val, dtype)
-
     def forward(
         self,
         pre_firing_rate: TensorType,
@@ -61,7 +55,7 @@ class NMDASynapse(SynapseModel):
         gnmda, dgnmda = state
 
         dtype = neuraltide.config.get_dtype()
-        _c = self._maybe_cast
+        _c = cast_if_needed
         gsyn_max_nmda = _c(self.gsyn_max_nmda, dtype)
         tau1_nmda = _c(self.tau1_nmda, dtype)
         tau2_nmda = _c(self.tau2_nmda, dtype)
@@ -107,7 +101,7 @@ class NMDASynapse(SynapseModel):
         gnmda, dgnmda = state
 
         dtype = neuraltide.config.get_dtype()
-        _c = self._maybe_cast
+        _c = cast_if_needed
         pconn = _c(self.pconn_nmda, dtype)
         tau1 = tf.maximum(_c(self.tau1_nmda, dtype), 1e-6)
         tau2 = tf.maximum(_c(self.tau2_nmda, dtype), 1e-6)
@@ -141,7 +135,7 @@ class NMDASynapse(SynapseModel):
         Includes magnesium block.
         """
         dtype = neuraltide.config.get_dtype()
-        _c = self._maybe_cast
+        _c = cast_if_needed
         gsyn_max_nmda = _c(self.gsyn_max_nmda, dtype)
         Mgb = _c(self.Mgb, dtype)
         av_nmda = _c(self.av_nmda, dtype)
@@ -176,7 +170,7 @@ class NMDASynapse(SynapseModel):
         lam_gnmda, lam_dgnmda = adjoint_state
 
         dtype = neuraltide.config.get_dtype()
-        _c = self._maybe_cast
+        _c = cast_if_needed
         tau1 = tf.maximum(_c(self.tau1_nmda, dtype), 1e-6)
         tau2 = tf.maximum(_c(self.tau2_nmda, dtype), 1e-6)
         t12 = tau1 * tau2
@@ -230,7 +224,7 @@ class NMDASynapse(SynapseModel):
         gnmda, dgnmda = state
 
         dtype = neuraltide.config.get_dtype()
-        _c = self._maybe_cast
+        _c = cast_if_needed
         gsyn_max = _c(self.gsyn_max_nmda, dtype)
         Mgb = _c(self.Mgb, dtype)
         av_nmda = _c(self.av_nmda, dtype)
@@ -262,7 +256,7 @@ class NMDASynapse(SynapseModel):
         gnmda, dgnmda = state
 
         dtype = neuraltide.config.get_dtype()
-        _c = self._maybe_cast
+        _c = cast_if_needed
         Mgb = _c(self.Mgb, dtype)
         av_nmda = _c(self.av_nmda, dtype)
         e_r_nmda = _c(self.e_r_nmda, dtype)

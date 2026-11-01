@@ -214,7 +214,6 @@ class Trainer:
             t_sequence: tf.Tensor shape [batch, T, 1] — временная последовательность.
             inputs: tf.Tensor shape [batch, T, total_input_units] — входы.
             initial_state: начальное состояние (pop_states, syn_states).
-            return_final_state: вернуть финальное состояние в output.hidden_states.
 
         Returns:
             NetworkOutput с firing_rates.

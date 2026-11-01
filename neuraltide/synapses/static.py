@@ -4,7 +4,7 @@ from typing import Dict, Tuple
 import neuraltide
 import neuraltide.config
 from neuraltide.core.base import SynapseModel
-from neuraltide.core.types import TensorType, StateList
+from neuraltide.core.types import TensorType, StateList, cast_if_needed
 
 
 class StaticSynapse(SynapseModel):
@@ -29,12 +29,6 @@ class StaticSynapse(SynapseModel):
     def get_initial_state(self, batch_size: int = 1) -> StateList:
         return []
 
-    @staticmethod
-    def _maybe_cast(val, dtype):
-        if isinstance(val, tf.Tensor) and val.dtype == dtype:
-            return val
-        return tf.cast(val, dtype)
-
     def forward(
         self,
         pre_firing_rate: TensorType,
@@ -43,7 +37,7 @@ class StaticSynapse(SynapseModel):
         dt: float,
     ) -> Tuple[Dict[str, TensorType], StateList]:
         dtype = neuraltide.config.get_dtype()
-        _c = self._maybe_cast
+        _c = cast_if_needed
         gsyn_max = _c(self.gsyn_max, dtype)
         pconn = _c(self.pconn, dtype)
         e_r = _c(self.e_r, dtype)
@@ -83,7 +77,7 @@ class StaticSynapse(SynapseModel):
         Used after numerical integration to compute currents.
         """
         dtype = neuraltide.config.get_dtype()
-        _c = self._maybe_cast
+        _c = cast_if_needed
         gsyn_max = _c(self.gsyn_max, dtype)
         pconn = _c(self.pconn, dtype)
         e_r = _c(self.e_r, dtype)

@@ -1,6 +1,5 @@
 import tensorflow as tf
 from abc import ABC, abstractmethod
-from typing import Dict
 
 import neuraltide
 import neuraltide.config
@@ -100,22 +99,6 @@ class BandpassReadout(BaseReadout):
             coeffs[tf.newaxis, :, tf.newaxis], dtype=neuraltide.config.get_dtype()
         )
         self._n_channels = n_channels
-
-    def call(self, x: TensorType) -> TensorType:
-        return x
-
-
-class LFPProxyReadout(BaseReadout):
-    """
-    Взвешенная сумма токов из hidden_states.
-
-    Args:
-        weights: веса для каждой популяции.
-    """
-
-    def __init__(self, weights: Dict[str, float], **kwargs):
-        super().__init__(**kwargs)
-        self.weights = weights
 
     def call(self, x: TensorType) -> TensorType:
         return x

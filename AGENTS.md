@@ -34,6 +34,12 @@ Python **>=3.12** (pyproject.toml; README says 3.9 but that is outdated).
 ### BrunelFokkerPlanck
 Classical Brunel (2000) model A: FP equation on a V-grid with absorbing threshold, reinjection of ν(t−τ_rp) at v_reset, refractory mass p_r. Coupling: `μ(t) = mu_0 + I_syn`, σ is the `sigma_ext` parameter. State: `[P, p_r, nu_buf]`. Internal CFL-based substepping in `derivatives()`; **use EulerIntegrator/HeunIntegrator** (the ν-delay buffer shift is exact for Euler). Stationary rate matches Brunel eq. (21) (~0.2% at grid_size=250 near-threshold; ~4% suprathreshold at grid 500).
 
+### FokkerPlanckPopulation (базовый)
+Абстрактная основа: `get_initial_state()` бросает `NotImplementedError` — подкласс обязан задать начальное распределение (валидный вариант: `self._gaussian_initial_state(center, sigma)` — нормированная гауссиана с обнулённым узлом порога).
+
+### Dtype-конвенция (float64)
+Все вычислительные методы (derivatives/compute_current/adjoint/forward) обязаны приводить веса к `neuraltide.config.get_dtype()` через `neuraltide.core.types.cast_if_needed` (не голый `tf.cast` по месту без нужды, но и не сырые `self.<param>` в арифметике с состоянием — иначе float64 падает на смешении dtype). Проверки NaN — через `neuraltide.config.maybe_check_numerics`.
+
 ### Input generators
 All generators return `[batch, T, n_units]` and accept `t` as `[batch, T, 1]`, `[batch, T]` or `[T]`. `PlaceFieldGenerator` additionally takes `extra_inputs` with (x, y) or (x, y, vx, vy) columns; rate = `peak·spatial·θ_in + bg·(1−spatial)·(1−tmf+tmf·θ_out)` where tmf = theta_modulation_factor. In `VonMisesGenerator` `R` may be trainable (kappa is recomputed in `call`). `BaseInputGenerator` sets `autocast = False`, so float64 works through Keras `__call__`.
 

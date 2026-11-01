@@ -53,9 +53,46 @@ class FokkerPlanckPopulation(PopulationModel):
         J_out = -D * dP_dV
         return J_out[:, tf.newaxis]
 
-    def get_initial_state(self, batch_size: int = 1) -> StateList:
+    def _gaussian_initial_state(
+        self,
+        center: TensorType,
+        sigma: TensorType,
+    ) -> TensorType:
+        """
+        Нормированное гауссово распределение на сетке V — валидное
+        начальное состояние P (норма ∫P dV = 1, узел порога обнулён).
+
+        Args:
+            center: центр распределения (мВ), скалярный тензор.
+            sigma: стандартное отклонение (мВ), скалярный тензор.
+
+        Returns:
+            tf.Tensor [1, grid_size].
+        """
         dtype = neuraltide.config.get_dtype()
-        return [tf.zeros([1, self.grid_size], dtype=dtype)]
+        v = tf.cast(self._v_grid_or_linspace(dtype), dtype)
+        center = tf.cast(center, dtype)
+        sigma = tf.cast(sigma, dtype)
+        var = tf.maximum(sigma * sigma, 1e-6)
+        P = tf.exp(-0.5 * (v - center) ** 2 / var)
+        P = tf.concat([P[:, :-1], tf.zeros_like(P[:, -1:])], axis=1)
+        return P / (tf.reduce_sum(P) * self.dV)
+
+    def _v_grid_or_linspace(self, dtype) -> TensorType:
+        """Сетка потенциалов [1, grid_size] (линейная от v_min до v_max)."""
+        v_grid = tf.linspace(
+            tf.constant(self.v_min, dtype=dtype),
+            tf.constant(self.v_max, dtype=dtype),
+            self.grid_size,
+        )
+        return tf.reshape(v_grid, [1, self.grid_size])
+
+    def get_initial_state(self, batch_size: int = 1) -> StateList:
+        raise NotImplementedError(
+            "FokkerPlanckPopulation: базовый класс не задаёт начальное "
+            "распределение. Используйте self._gaussian_initial_state(center, "
+            "sigma) в подклассе или переопределите get_initial_state()."
+        )
 
     def get_firing_rate(self, state: StateList) -> TensorType:
         P = state[0]

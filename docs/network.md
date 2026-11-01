@@ -256,7 +256,6 @@ NetworkRNN использует `tf.scan` для пошагового интег
 NetworkRNN(
     graph: NetworkGraph,
     integrator: BaseIntegrator,
-    return_hidden_states: bool = False,
     stability_penalty_weight: float = 0.0,
     **kwargs
 )
@@ -266,7 +265,6 @@ NetworkRNN(
 |----------|-----|---------|--------------|
 | `graph` | NetworkGraph | Граф сети | — |
 | `integrator` | BaseIntegrator | Интегратор | — |
-| `return_hidden_states` | bool | Возвращать скрытые состояния | False |
 | `stability_penalty_weight` | float | Вес штрафа за стабильность | 0.0 |
 
 ### Вызов сети
@@ -289,7 +287,6 @@ output = network(t_sequence, inputs=None, initial_state=None, training=False)
 @dataclass
 class NetworkOutput:
     firing_rates: Dict[str, TensorType]       # {pop_name: [batch, T, n_units]}
-    hidden_states: Optional[Dict[str, Dict[str, TensorType]]]  # или None
     stability_loss: TensorType  # скаляр
     final_state: Tuple[StateList, StateList]  # конечное состояние для продолжения симуляции
 ```
@@ -439,21 +436,6 @@ output = network(t_seq, inputs=inputs)
 
 # Штраф за стабильность
 print(output.stability_loss)  # скаляр
-```
-
-### Доступ к скрытым состояниям
-
-```python
-network = NetworkRNN(
-    graph,
-    integrator=RK4Integrator(),
-    return_hidden_states=True
-)
-
-output = network(t_seq, inputs=inputs)
-
-# hidden_states содержит состояния всех популяций и синапсов
-# Формат зависит от конкретной модели
 ```
 
 ---
