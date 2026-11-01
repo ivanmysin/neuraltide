@@ -50,6 +50,12 @@ class WilsonCowan(PopulationModel):
             tf.zeros([1, self.n_units], dtype=dtype),
         ]
 
+    @staticmethod
+    def _maybe_cast(val, dtype):
+        if isinstance(val, tf.Tensor) and val.dtype == dtype:
+            return val
+        return tf.cast(val, dtype)
+
     def derivatives(
         self,
         state: StateList,
@@ -59,18 +65,19 @@ class WilsonCowan(PopulationModel):
         I_syn = total_synaptic_input['I_syn']
 
         dtype = neuraltide.config.get_dtype()
-        tau_E = tf.cast(self.tau_E, dtype)
-        tau_I = tf.cast(self.tau_I, dtype)
-        a_E = tf.cast(self.a_E, dtype)
-        a_I = tf.cast(self.a_I, dtype)
-        theta_E = tf.cast(self.theta_E, dtype)
-        theta_I = tf.cast(self.theta_I, dtype)
-        w_EE = tf.cast(self.w_EE, dtype)
-        w_IE = tf.cast(self.w_IE, dtype)
-        w_EI = tf.cast(self.w_EI, dtype)
-        w_II = tf.cast(self.w_II, dtype)
-        I_ext_E = tf.cast(self.I_ext_E, dtype)
-        I_ext_I = tf.cast(self.I_ext_I, dtype)
+        _c = self._maybe_cast
+        tau_E = _c(self.tau_E, dtype)
+        tau_I = _c(self.tau_I, dtype)
+        a_E = _c(self.a_E, dtype)
+        a_I = _c(self.a_I, dtype)
+        theta_E = _c(self.theta_E, dtype)
+        theta_I = _c(self.theta_I, dtype)
+        w_EE = _c(self.w_EE, dtype)
+        w_IE = _c(self.w_IE, dtype)
+        w_EI = _c(self.w_EI, dtype)
+        w_II = _c(self.w_II, dtype)
+        I_ext_E = _c(self.I_ext_E, dtype)
+        I_ext_I = _c(self.I_ext_I, dtype)
 
         x_E = w_EE * E - w_IE * I_inh + I_ext_E + I_syn
         x_I = w_EI * E - w_II * I_inh + I_ext_I

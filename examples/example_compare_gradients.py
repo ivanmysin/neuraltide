@@ -64,7 +64,7 @@ syn = TsodyksMarkramSynapse(n_pre=1, n_post=2, dt=dt, params={
 })
 
 graph = NetworkGraph(dt=dt)
-graph.add_input_population('theta', gen)
+graph.declare_input('theta', n_units=gen.n_units)
 graph.add_population('exc', pop)
 graph.add_synapse('theta->exc', syn, src='theta', tgt='exc')
 
@@ -75,6 +75,7 @@ print(f"\nSequence length T={T}ms, {n_steps} steps, {len(network.trainable_varia
 # ── Targets ───────────────────────────────────────────────────────────────────
 t_values = np.arange(n_steps, dtype=np.float32) * dt
 t_seq    = tf.constant(t_values[None, :, None])
+inputs = graph.pack_inputs({'theta': gen(t_seq)})
 
 target_0 = 10.0 + 5.0 * np.sin(2 * np.pi * 8.0 * t_values / 1000.0)
 target_1 =  8.0 + 4.0 * np.sin(2 * np.pi * 8.0 * t_values / 1000.0 + 0.5)
@@ -119,7 +120,7 @@ print("=" * 60)
 
 def run_bptt():
     with tf.GradientTape() as tape:
-        out   = network(t_seq, training=False)
+        out   = network(t_seq, inputs=inputs, training=False)
         loss  = loss_fn(out, network)
     grads = tape.gradient(loss, network.trainable_variables)
     return grads, out, float(loss)
@@ -157,7 +158,7 @@ print("=" * 60)
 solver = AdjointSolver(network, network._integrator, use_analytical_adjoint=False)
 
 def run_adjoint():
-    grads, variables, out = solver.compute_gradients(t_seq, target, loss_fn)
+    grads, variables, out = solver.compute_gradients(t_seq, inputs, target, loss_fn)
     return grads, variables, out, float(loss_fn(out, network))
 
 # warm-up

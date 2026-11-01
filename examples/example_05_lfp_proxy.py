@@ -53,7 +53,7 @@ syn = TsodyksMarkramSynapse(n_pre=1, n_post=4, dt=dt, params={
 })
 
 graph = NetworkGraph(dt=dt)
-graph.add_input_population('stim', gen)
+graph.declare_input('stim', n_units=gen.n_units)
 graph.add_population('exc', pop)
 graph.add_synapse('stim->exc', syn, src='stim', tgt='exc')
 
@@ -61,6 +61,7 @@ network = NetworkRNN(graph, integrator=RK4Integrator())
 
 t_values = np.arange(T, dtype=np.float32) * dt
 t_seq = tf.constant(t_values[None, :, None])
+inputs = graph.pack_inputs({'stim': gen(t_seq)})
 
 target_0 = 10.0 + 5.0 * np.sin(2 * np.pi * 8.0 * t_values / 1000.0)
 target = {
@@ -73,8 +74,8 @@ loss_fn = CompositeLoss([
 
 trainer = Trainer(network, loss_fn,
                   optimizer=tf.keras.optimizers.Adam(1e-3))
-history = trainer.fit(t_seq, epochs=100, verbose=1)
+history = trainer.fit(t_seq, inputs=inputs, epochs=100, verbose=1)
 
-output = trainer.predict(t_seq)
+output = trainer.predict(t_seq, inputs=inputs)
 print(f"LFP output shape: {output.firing_rates['exc'].shape}")
 print("LFP Proxy example completed successfully!")

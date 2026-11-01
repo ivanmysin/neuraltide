@@ -51,28 +51,33 @@ def _make_simple_small_network(dt=0.05):
     })
 
     graph = NetworkGraph(dt=dt)
-    graph.add_input_population('theta', gen)
+    graph.declare_input('theta', n_units=gen.n_units)
     graph.add_population('exc', pop)
     graph.add_synapse('theta->exc', syn, src='theta', tgt='exc')
 
-    return graph
+    return graph, gen
 
 
-def _compute_bptt_gradients(network, t_seq, target):
+def _make_inputs(graph, gen, t_seq):
+    """Create input tensor from generator."""
+    return graph.pack_inputs({'theta': gen(t_seq)})
+
+
+def _compute_bptt_gradients(network, t_seq, inputs, target):
     """Compute gradients via BPTT (standard tf.GradientTape)."""
     loss_fn = CompositeLoss([
         (1.0, MSELoss(target)),
     ])
 
     with tf.GradientTape() as tape:
-        output = network(t_seq, training=False)
+        output = network(t_seq, inputs=inputs, training=False)
         loss = loss_fn(output, network)
 
     grads = tape.gradient(loss, network.trainable_variables)
     return grads, output
 
 
-def _compute_adjoint_gradients(network, t_seq, target, grad_method='adjoint'):
+def _compute_adjoint_gradients(network, t_seq, inputs, target):
     """Compute gradients via adjoint state method."""
     from neuraltide.training.adjoint import AdjointSolver
 
@@ -82,7 +87,7 @@ def _compute_adjoint_gradients(network, t_seq, target, grad_method='adjoint'):
         (1.0, MSELoss(target)),
     ])
 
-    grads, variables, output = solver.compute_gradients(t_seq, target, loss_fn)
+    grads, variables, output = solver.compute_gradients(t_seq, inputs, target, loss_fn)
     return grads, variables, output
 
 
@@ -100,7 +105,7 @@ class TestAdjointBasics:
         """AdjointSolver should be instantiable with network and integrator."""
         from neuraltide.training.adjoint import AdjointSolver
 
-        graph = _make_simple_small_network()
+        graph, gen = _make_simple_small_network()
         network = NetworkRNN(graph, integrator=RK4Integrator())
 
         solver = AdjointSolver(network, network._integrator)
@@ -110,13 +115,14 @@ class TestAdjointBasics:
         """forward_pass should return NetworkOutput with firing_rates and stability_loss."""
         from neuraltide.training.adjoint import AdjointSolver
 
-        graph = _make_simple_small_network()
+        graph, gen = _make_simple_small_network()
         network = NetworkRNN(graph, integrator=RK4Integrator())
 
         t_seq = tf.constant(np.arange(10, dtype=np.float32)[None, :, None] * 0.05)
+        inputs = _make_inputs(graph, gen, t_seq)
         solver = AdjointSolver(network, network._integrator)
 
-        output, states_final, state_info = solver.forward_pass(t_seq)
+        output, states_final, state_info = solver.forward_pass(t_seq, inputs)
         init_pop, init_syn, pop_stacked, syn_stacked = state_info
 
         assert output is not None, "forward_pass should return output"
@@ -137,11 +143,12 @@ class TestAdjointGradientCorrectness:
         dt = 0.05
         T = 10
         n_steps = T / dt
-        graph = _make_simple_small_network(dt=dt)
+        graph, gen = _make_simple_small_network(dt=dt)
         network = NetworkRNN(graph, integrator=RK4Integrator())
 
         t_values = np.arange(n_steps, dtype=np.float32) * dt
         t_seq = tf.constant(t_values[None, :, None])
+        inputs = _make_inputs(graph, gen, t_seq)
 
         target_0 = 10.0 + 5.0 * np.sin(2 * np.pi * 8.0 * t_values / 1000.0)
         target_1 = 8.0 + 4.0 * np.sin(2 * np.pi * 8.0 * t_values / 1000.0 + 0.5)
@@ -152,13 +159,13 @@ class TestAdjointGradientCorrectness:
             )
         }
 
-        bptt_grads, bptt_output = _compute_bptt_gradients(network, t_seq, target)
+        bptt_grads, bptt_output = _compute_bptt_gradients(network, t_seq, inputs, target)
 
         solver = AdjointSolver(network, network._integrator)
         loss_fn = CompositeLoss([
             (1.0, MSELoss(target)),
         ])
-        adj_grads, variables, adj_output = solver.compute_gradients(t_seq, target, loss_fn)
+        adj_grads, variables, adj_output = solver.compute_gradients(t_seq, inputs, target, loss_fn)
 
         assert len(bptt_grads) == len(adj_grads), "Should have same number of gradients"
 
@@ -178,11 +185,12 @@ class TestAdjointGradientCorrectness:
         dt = 0.05
         T = 10
         n_steps = int(T / dt)
-        graph = _make_simple_small_network(dt=dt)
+        graph, gen = _make_simple_small_network(dt=dt)
         network = NetworkRNN(graph, integrator=RK4Integrator(), stability_penalty_weight=1e-3)
 
         t_values = np.arange(n_steps, dtype=np.float32) * dt
         t_seq = tf.constant(t_values[None, :, None])
+        inputs = _make_inputs(graph, gen, t_seq)
 
         target_0 = 10.0 + 5.0 * np.sin(2 * np.pi * 8.0 * t_values / 1000.0)
         target_1 = 8.0 + 4.0 * np.sin(2 * np.pi * 8.0 * t_values / 1000.0 + 0.5)
@@ -193,13 +201,13 @@ class TestAdjointGradientCorrectness:
             )
         }
 
-        bptt_output = network(t_seq, training=False)
+        bptt_output = network(t_seq, inputs=inputs, training=False)
 
         solver = AdjointSolver(network, network._integrator)
         loss_fn = CompositeLoss([
             (1.0, MSELoss(target)),
         ])
-        adj_output, _, _ = solver.forward_pass(t_seq)
+        adj_output, _, _ = solver.forward_pass(t_seq, inputs)
 
         bptt_stability = float(bptt_output.stability_loss)
         adj_stability = float(adj_output.stability_loss)
@@ -237,10 +245,10 @@ class TestAdjointBackwardPass:
             'e_r':      {'value': 0.0,   'trainable': False},
         })
         graph = NetworkGraph(dt=dt)
-        graph.add_input_population('theta', gen)
+        graph.declare_input('theta', n_units=gen.n_units)
         graph.add_population('exc', pop)
         graph.add_synapse('theta->exc', syn, src='theta', tgt='exc')
-        return NetworkRNN(graph, integrator=RK4Integrator())
+        return NetworkRNN(graph, integrator=RK4Integrator()), gen
 
     def test_backward_pass_matches_bptt(self):
         """backward_pass gradients must match BPTT within rtol=1e-3."""
@@ -249,10 +257,11 @@ class TestAdjointBackwardPass:
         dt = 0.1
         T = 3.0
         n_steps = int(T / dt)
-        network = self._make_network(dt=dt)
+        network, gen = self._make_network(dt=dt)
 
         t_values = np.arange(n_steps, dtype=np.float32) * dt
         t_seq = tf.constant(t_values[None, :, None])
+        inputs = _make_inputs(network._graph, gen, t_seq)
 
         target_arr = (10.0 + 5.0 * np.sin(2 * np.pi * 8.0 * t_values / 1000.0))[None, :, None]
         target = {'exc': tf.constant(target_arr, dtype=tf.float32)}
@@ -260,14 +269,14 @@ class TestAdjointBackwardPass:
 
         # BPTT baseline
         with tf.GradientTape() as bptt_tape:
-            bptt_out = network(t_seq, training=False)
+            bptt_out = network(t_seq, inputs=inputs, training=False)
             bptt_loss = loss_fn(bptt_out, network)
         bptt_grads = bptt_tape.gradient(bptt_loss, network.trainable_variables)
 
         # Adjoint backward_pass
         solver = AdjointSolver(network, network._integrator)
-        _, _, state_info = solver.forward_pass(t_seq)
-        adj_grads = solver.backward_pass(t_seq, state_info, target, loss_fn)
+        _, _, state_info = solver.forward_pass(t_seq, inputs)
+        adj_grads = solver.backward_pass(t_seq, inputs, state_info, target, loss_fn)
 
         assert len(bptt_grads) == len(adj_grads), "Should have same number of gradients"
 
@@ -289,23 +298,24 @@ class TestAdjointBackwardPass:
         dt = 0.1
         T = 10.0
         n_steps = int(T / dt)
-        network = self._make_network(dt=dt)
+        network, gen = self._make_network(dt=dt)
 
         t_values = np.arange(n_steps, dtype=np.float32) * dt
         t_seq = tf.constant(t_values[None, :, None])
+        inputs = _make_inputs(network._graph, gen, t_seq)
 
         target_arr = (10.0 + 5.0 * np.sin(2 * np.pi * 8.0 * t_values / 1000.0))[None, :, None]
         target = {'exc': tf.constant(target_arr, dtype=tf.float32)}
         loss_fn = MSELoss(target)
 
         with tf.GradientTape() as bptt_tape:
-            bptt_out = network(t_seq, training=False)
+            bptt_out = network(t_seq, inputs=inputs, training=False)
             bptt_loss = loss_fn(bptt_out, network)
         bptt_grads = bptt_tape.gradient(bptt_loss, network.trainable_variables)
 
         solver = AdjointSolver(network, network._integrator)
-        _, _, state_info = solver.forward_pass(t_seq)
-        adj_grads = solver.backward_pass(t_seq, state_info, target, loss_fn)
+        _, _, state_info = solver.forward_pass(t_seq, inputs)
+        adj_grads = solver.backward_pass(t_seq, inputs, state_info, target, loss_fn)
 
         for v, bptt_g, adj_g in zip(
             network.trainable_variables, bptt_grads, adj_grads
@@ -324,23 +334,24 @@ class TestAdjointBackwardPass:
         dt = 0.1
         T = 5.0
         n_steps = int(T / dt)
-        network = self._make_network(dt=dt)
+        network, gen = self._make_network(dt=dt)
 
         t_values = np.arange(n_steps, dtype=np.float32) * dt
         t_seq = tf.constant(t_values[None, :, None])
+        inputs = _make_inputs(network._graph, gen, t_seq)
 
         target_arr = (5.0 * np.ones(n_steps))[None, :, None]
         target = {'exc': tf.constant(target_arr, dtype=tf.float32)}
         loss_fn = MSELoss(target)
 
         with tf.GradientTape() as bptt_tape:
-            bptt_out = network(t_seq, training=False)
+            bptt_out = network(t_seq, inputs=inputs, training=False)
             bptt_loss = loss_fn(bptt_out, network)
         bptt_grads = bptt_tape.gradient(bptt_loss, network.trainable_variables)
 
         solver = AdjointSolver(network, network._integrator)
-        _, _, state_info = solver.forward_pass(t_seq)
-        adj_grads = solver.backward_pass(t_seq, state_info, target, loss_fn)
+        _, _, state_info = solver.forward_pass(t_seq, inputs)
+        adj_grads = solver.backward_pass(t_seq, inputs, state_info, target, loss_fn)
 
         for v, bptt_g, adj_g in zip(
             network.trainable_variables, bptt_grads, adj_grads
@@ -365,11 +376,12 @@ class TestAdjointWithStabilityPenalty:
         dt = 0.05
         T = 10
         n_steps = int(T / dt)
-        graph = _make_simple_small_network(dt=dt)
+        graph, gen = _make_simple_small_network(dt=dt)
         network = NetworkRNN(graph, integrator=RK4Integrator(), stability_penalty_weight=1e-3)
 
         t_values = np.arange(n_steps, dtype=np.float32) * dt
         t_seq = tf.constant(t_values[None, :, None])
+        inputs = _make_inputs(graph, gen, t_seq)
 
         target_0 = 10.0 + 5.0 * np.sin(2 * np.pi * 8.0 * t_values / 1000.0)
         target_1 = 8.0 + 4.0 * np.sin(2 * np.pi * 8.0 * t_values / 1000.0 + 0.5)
@@ -386,7 +398,7 @@ class TestAdjointWithStabilityPenalty:
         ])
 
         solver = AdjointSolver(network, network._integrator)
-        adj_grads, variables, adj_output = solver.compute_gradients(t_seq, target, loss_fn)
+        adj_grads, variables, adj_output = solver.compute_gradients(t_seq, inputs, target, loss_fn)
 
         assert len(adj_grads) > 0, "Should compute some gradients"
 
@@ -401,11 +413,12 @@ class TestAdjointNumericalGradient:
         dt = 0.05
         T = 5
         n_steps = int(T / dt)
-        graph = _make_simple_small_network(dt=dt)
+        graph, gen = _make_simple_small_network(dt=dt)
         network = NetworkRNN(graph, integrator=RK4Integrator())
 
         t_values = np.arange(n_steps, dtype=np.float32) * dt
         t_seq = tf.constant(t_values[None, :, None])
+        inputs = _make_inputs(graph, gen, t_seq)
 
         target_0 = 10.0 + 5.0 * np.sin(2 * np.pi * 8.0 * t_values / 1000.0)
         target_1 = 8.0 + 4.0 * np.sin(2 * np.pi * 8.0 * t_values / 1000.0 + 0.5)
@@ -420,7 +433,7 @@ class TestAdjointNumericalGradient:
         loss_fn = CompositeLoss([
             (1.0, MSELoss(target)),
         ])
-        adj_grads, variables, _ = solver.compute_gradients(t_seq, target, loss_fn)
+        adj_grads, variables, _ = solver.compute_gradients(t_seq, inputs, target, loss_fn)
 
         has_nonzero_grad = False
         for g in adj_grads:
@@ -439,11 +452,12 @@ class TestAdjointTrainStep:
         dt = 0.05
         T = 5
         n_steps = int(T / dt)
-        graph = _make_simple_small_network(dt=dt)
+        graph, gen = _make_simple_small_network(dt=dt)
         network = NetworkRNN(graph, integrator=RK4Integrator())
 
         t_values = np.arange(n_steps, dtype=np.float32) * dt
         t_seq = tf.constant(t_values[None, :, None])
+        inputs = _make_inputs(graph, gen, t_seq)
 
         target_0 = 10.0 + 5.0 * np.sin(2 * np.pi * 8.0 * t_values / 1000.0)
         target_1 = 8.0 + 4.0 * np.sin(2 * np.pi * 8.0 * t_values / 1000.0 + 0.5)
@@ -458,7 +472,7 @@ class TestAdjointTrainStep:
             (1.0, MSELoss(target)),
         ])
 
-        initial_output = network(t_seq, training=False)
+        initial_output = network(t_seq, inputs=inputs, training=False)
         initial_loss = float(loss_fn(initial_output, network))
 
         optimizer = tf.keras.optimizers.Adam(1e-2)
@@ -466,7 +480,7 @@ class TestAdjointTrainStep:
 
         for epoch in range(10):
             solver = AdjointSolver(network, network._integrator)
-            grads, variables, _ = solver.compute_gradients(t_seq, target, loss_fn)
+            grads, variables, _ = solver.compute_gradients(t_seq, inputs, target, loss_fn)
 
             grads_and_vars = [(g, v) for g, v in zip(grads, variables) if g is not None]
             if grads_and_vars:
@@ -475,7 +489,7 @@ class TestAdjointTrainStep:
                 )
                 optimizer.apply_gradients(zip(clipped_grads, [v for g, v in grads_and_vars]))
 
-        final_output = network(t_seq, training=False)
+        final_output = network(t_seq, inputs=inputs, training=False)
         final_loss = float(loss_fn(final_output, network))
 
         assert final_loss < initial_loss, "Loss should decrease during training"

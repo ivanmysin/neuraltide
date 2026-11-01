@@ -5,7 +5,7 @@ NeuralTide предоставляет несколько типов популя
 - **IzhikevichMeanField** — модель Ижикевича (mean-field)
 - **WilsonCowan** — модель Вильсона-Коуэна
 - **FokkerPlanckPopulation** — базовый класс для модели Фоккера-Планка
-- **InputPopulation** — псевдо-популяция для входных генераторов
+- **InputPopulation** — псевдо-популяция для входных генераторов (deprecated)
 
 ---
 
@@ -305,9 +305,11 @@ class LeakyIF(FokkerPlanckPopulation):
 
 ---
 
-## InputPopulation
+## InputPopulation (deprecated)
 
 **Файл**: `neuraltide/populations/input_population.py`
+
+> **Внимание**: `InputPopulation` deprecated. Используйте `NetworkGraph.declare_input()` и предвычисленные входы вместо оборачивания генераторов в `InputPopulation`.
 
 Псевдо-популяция без динамики, оборачивающая BaseInputGenerator.
 
@@ -321,10 +323,25 @@ class LeakyIF(FokkerPlanckPopulation):
 - Не обновляется интегратором
 - Состояние: `[t_current, extra_inputs]` — тензоры формы `[1, 1]` (время в мс) и `[1, n_cols]` (дополнительные данные — координаты, параметры стимула и т.д.)
 - `get_firing_rate(state)` вызывает `generator(state[0], extra_inputs=state[1])`
-- Состояние обновляется напрямую в `NetworkRNN._step_fn`: `new_state = [t, extra_inputs]`, где `extra_inputs` — срез `extra_inputs_seq[:, i, :]` на шаге `i`
 - Не может быть целью синапса (только источником)
 
-### Конструктор
+### Новый подход
+
+Вместо `InputPopulation` используйте:
+
+```python
+# 1. Объявление входа
+graph = NetworkGraph(dt=0.5)
+graph.declare_input('theta', n_units=gen.n_units)
+
+# 2. Предвычисление входных частот
+inputs = graph.pack_inputs({'theta': gen(t_seq)})
+
+# 3. Передача в сеть
+output = network(t_seq, inputs=inputs)
+```
+
+### Конструктор (deprecated)
 
 ```python
 InputPopulation(
@@ -333,7 +350,7 @@ InputPopulation(
 )
 ```
 
-### Пример
+### Пример (deprecated)
 
 ```python
 from neuraltide.inputs import SinusoidalGenerator
@@ -346,20 +363,11 @@ gen = SinusoidalGenerator(dt=0.5, params={
     'offset': 5.0,
 })
 
+# Не рекомендуется:
 input_pop = InputPopulation(generator=gen)
-# input_pop.n_units = 1 (выводится из параметров генератора)
-# input_pop.dt = 0.5 (берётся из генератора)
-```
 
-### Создание через NetworkGraph
-
-```python
-graph = NetworkGraph(dt=0.5)
-graph.add_input_population('my_input', generator)
-```
-
-Это эквивалентно:
-```python
-input_pop = InputPopulation(generator=generator, name='my_input_input_pop')
-graph.add_population('my_input', input_pop)
+# Рекомендуется:
+graph.declare_input('my_input', n_units=gen.n_units)
+inputs = graph.pack_inputs({'my_input': gen(t_seq)})
+output = network(t_seq, inputs=inputs)
 ```

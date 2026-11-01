@@ -26,14 +26,13 @@ def _print_summary_ascii(network) -> None:
 
     print("\nINPUT POPULATIONS")
     print("-" * 80)
-    print(f"{'Name':<15} {'Generator':<25} {'n_units':<10}")
+    print(f"{'Name':<15} {'n_units':<10}")
     print("-" * 80)
 
     graph = network._graph
-    for name in graph.input_population_names:
-        pop = graph._populations[name]
-        gen_name = pop.generator.name
-        print(f"{name:<15} {gen_name:<25} {pop.n_units:<10}")
+    for name in graph.input_names:
+        n = graph._external_inputs[name]
+        print(f"{name:<15} {n:<10}")
 
     print("\nDYNAMIC POPULATIONS")
     print("-" * 80)
@@ -84,9 +83,9 @@ def _print_summary_rich(network) -> None:
     console.print(table)
 
     console.print("[bold]INPUT POPULATIONS[/bold]")
-    for name in graph.input_population_names:
-        pop = graph._populations[name]
-        console.print(f"  {name}: {pop.generator.name} (n_units={pop.n_units})")
+    for name in graph.input_names:
+        n = graph._external_inputs[name]
+        console.print(f"  {name}: n_units={n}")
 
     console.print("[bold]DYNAMIC POPULATIONS[/bold]")
     for name in graph.dynamic_population_names:

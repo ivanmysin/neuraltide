@@ -1,8 +1,8 @@
 """
-Пример 2: Прямое использование AdjointGradientComputer.
+Пример: Прямое использование AdjointSolver.
 
 Демонстрирует:
-- Прямое использование AdjointGradientComputer без Trainer
+- Прямое использование AdjointSolver без Trainer
 - Сравнение градиентов между autograd и adjoint
 - Вычисление градиентов для длинных последовательностей
 """
@@ -14,7 +14,8 @@ from neuraltide.populations import IzhikevichMeanField
 from neuraltide.synapses import TsodyksMarkramSynapse, StaticSynapse
 from neuraltide.inputs import VonMisesGenerator
 from neuraltide.integrators import RK4Integrator
-from neuraltide.training.adjoint import AdjointGradientComputer
+from neuraltide.training.adjoint import AdjointSolver
+from neuraltide.training import MSELoss, CompositeLoss
 from neuraltide.utils import seed_everything
 
 seed_everything(42)
@@ -53,120 +54,49 @@ gen = VonMisesGenerator(dt=dt, params={
 })
 
 graph = NetworkGraph(dt=dt)
-graph.add_input_population('theta', gen)
+graph.declare_input('theta', n_units=gen.n_units)
 graph.add_population('exc', pop)
 graph.add_synapse('theta->exc', syn, src='theta', tgt='exc')
 
 network = NetworkRNN(graph, RK4Integrator())
-integrator = RK4Integrator()
 
 T = 100
 t_values = np.arange(T, dtype=np.float32) * dt
 t_seq = tf.constant(t_values[None, :, None])
+inputs = graph.pack_inputs({'theta': gen(t_seq)})
 
-output = network(t_seq)
-loss = tf.reduce_mean(output.firing_rates['exc'])
+target = {
+    'exc': tf.constant(
+        (10.0 + 5.0 * np.sin(2 * np.pi * 8.0 * t_values / 1000.0))[None, :, None].repeat(2, axis=-1),
+        dtype=tf.float32
+    )
+}
 
+# Autograd
 with tf.GradientTape() as tape:
-    output = network(t_seq)
-    loss = tf.reduce_mean(output.firing_rates['exc'])
+    output = network(t_seq, inputs=inputs)
+    loss_fn = MSELoss(target)
+    loss = loss_fn(output, network)
 
 autograd_grads = tape.gradient(loss, network.trainable_variables)
 
 print("\nGradients via TensorFlow autograd:")
 for var, g in zip(network.trainable_variables, autograd_grads):
     if g is not None:
-        print(f"  {var.name}: {g.numpy()}")
+        print(f"  {var.name}: norm={np.linalg.norm(g.numpy()):.6f}")
 
-adj_comp = AdjointGradientComputer(network, integrator)
-adj_grads = adj_comp.compute_gradients(loss, t_seq)
+# Adjoint
+adj_comp = AdjointSolver(network, RK4Integrator())
+adj_grads_list, adj_vars, adj_out = adj_comp.compute_gradients(
+    t_seq, inputs, target, loss_fn)
 
 print("\nGradients via Adjoint method:")
-for var_name, g in adj_grads.items():
+for v, g in zip(adj_vars, adj_grads_list):
     if g is not None:
-        print(f"  {var_name}: {g.numpy()}")
+        print(f"  {v.name}: norm={np.linalg.norm(g.numpy()):.6f}")
 
 print("\n" + "=" * 60)
-print("Пример 2: Большая сеть (exc-inh) с NMDA")
-print("=" * 60)
-
-seed_everything(42)
-
-pop_exc = IzhikevichMeanField(dt=dt, params={
-    'tau_pop': {'value': [1.0, 1.0, 1.0, 1.0], 'trainable': False},
-    'alpha': {'value': [0.5, 0.5, 0.5, 0.5], 'trainable': False},
-    'a': {'value': [0.02, 0.02, 0.02, 0.02], 'trainable': False},
-    'b': {'value': [0.2, 0.2, 0.2, 0.2], 'trainable': False},
-    'w_jump': {'value': [0.1, 0.1, 0.1, 0.1], 'trainable': False},
-    'Delta_I': {'value': [0.5, 0.6, 0.5, 0.6], 'trainable': True, 'min': 0.01, 'max': 2.0},
-    'I_ext': {'value': [1.0, 1.2, 1.0, 1.2], 'trainable': True},
-})
-
-pop_inh = IzhikevichMeanField(dt=dt, params={
-    'tau_pop': {'value': [1.0, 1.0], 'trainable': False},
-    'alpha': {'value': [0.5, 0.5], 'trainable': False},
-    'a': {'value': [0.02, 0.02], 'trainable': False},
-    'b': {'value': [0.2, 0.2], 'trainable': False},
-    'w_jump': {'value': [0.1, 0.1], 'trainable': False},
-    'Delta_I': {'value': [0.5, 0.6], 'trainable': True, 'min': 0.01, 'max': 2.0},
-    'I_ext': {'value': [1.0, 1.2], 'trainable': True},
-})
-
-syn_ampa = StaticSynapse(n_pre=1, n_post=4, dt=dt, params={
-    'gsyn_max': {'value': [[0.05, 0.05, 0.05, 0.05]], 'trainable': True},
-    'pconn': {'value': [[1.0, 1.0, 1.0, 1.0]], 'trainable': False},
-    'e_r': {'value': 0.0, 'trainable': False},
-})
-
-syn_exc_inh = TsodyksMarkramSynapse(n_pre=4, n_post=2, dt=dt, params={
-    'gsyn_max': {'value': [[0.05], [0.05]], 'trainable': True},
-    'tau_f': {'value': 20.0, 'trainable': True},
-    'tau_d': {'value': 5.0, 'trainable': True},
-    'tau_r': {'value': 200.0, 'trainable': True},
-    'Uinc': {'value': 0.2, 'trainable': True},
-    'pconn': {'value': [[1.0], [1.0], [1.0], [1.0]], 'trainable': False},
-    'e_r': {'value': -0.07, 'trainable': False},
-})
-
-syn_inh_exc = StaticSynapse(n_pre=2, n_post=4, dt=dt, params={
-    'gsyn_max': {'value': [[0.02, 0.02], [0.02, 0.02], [0.02, 0.02], [0.02, 0.02]], 'trainable': True},
-    'pconn': {'value': [[1.0, 1.0], [1.0, 1.0], [1.0, 1.0], [1.0, 1.0]], 'trainable': False},
-    'e_r': {'value': -0.07, 'trainable': False},
-})
-
-gen = VonMisesGenerator(dt=dt, params={
-    'mean_rate': {'value': 20.0, 'trainable': False},
-    'R': {'value': 0.5, 'trainable': False},
-    'freq': {'value': 8.0, 'trainable': False},
-    'phase': {'value': 0.0, 'trainable': False},
-})
-
-graph2 = NetworkGraph(dt=dt)
-graph2.add_input_population('theta', gen)
-graph2.add_population('exc', pop_exc)
-graph2.add_population('inh', pop_inh)
-graph2.add_synapse('theta->exc', syn_ampa, src='theta', tgt='exc')
-graph2.add_synapse('exc->inh', syn_exc_inh, src='exc', tgt='inh')
-graph2.add_synapse('inh->exc', syn_inh_exc, src='inh', tgt='exc')
-
-network2 = NetworkRNN(graph2, RK4Integrator())
-
-print(f"\nЧисло trainable переменных: {len(network2.trainable_variables)}")
-
-output = network2(t_seq)
-loss = tf.reduce_mean(output.firing_rates['exc']) + tf.reduce_mean(output.firing_rates['inh'])
-
-adj_comp2 = AdjointGradientComputer(network2, RK4Integrator())
-adj_grads = adj_comp2.compute_gradients(loss, t_seq)
-
-print("Gradients via Adjont method:")
-for var_name, g in list(adj_grads.items())[:5]:
-    if g is not None:
-        print(f"  {var_name}: shape={g.shape}, mean={g.numpy().mean():.6f}")
-print("  ...")
-
-print("\n" + "=" * 60)
-print("Пример 3: Длинная последовательность (T=500)")
+print("Пример 2: Длинная последовательность (T=500)")
 print("=" * 60)
 
 seed_everything(42)
@@ -195,7 +125,7 @@ gen3 = VonMisesGenerator(dt=dt, params={
 })
 
 graph3 = NetworkGraph(dt=dt)
-graph3.add_input_population('theta', gen3)
+graph3.declare_input('theta', n_units=gen3.n_units)
 graph3.add_population('exc', pop3)
 graph3.add_synapse('theta->exc', syn3, src='theta', tgt='exc')
 
@@ -204,19 +134,22 @@ network3 = NetworkRNN(graph3, RK4Integrator())
 T_long = 500
 t_values = np.arange(T_long, dtype=np.float32) * dt
 t_seq_long = tf.constant(t_values[None, :, None])
+inputs3 = graph3.pack_inputs({'theta': gen3(t_seq_long)})
 
 print(f"T = {T_long} шагов ({T_long * dt} мс)")
 
-output = network3(t_seq_long)
-loss = tf.reduce_mean(output.firing_rates['exc'])
+output3 = network3(t_seq_long, inputs=inputs3)
+target3 = {'exc': output3.firing_rates['exc']}
+loss_fn3 = MSELoss(target3)
 
-adj_comp3 = AdjointGradientComputer(network3, RK4Integrator())
-adj_grads = adj_comp3.compute_gradients(loss, t_seq_long)
+adj_comp3 = AdjointSolver(network3, RK4Integrator())
+adj_grads_list3, adj_vars3, adj_out3 = adj_comp3.compute_gradients(
+    t_seq_long, inputs3, target3, loss_fn3)
 
-print(f"Вычислено градиентов для {len(adj_grads)} переменных")
-for var_name, g in adj_grads.items():
+print(f"Вычислено градиентов для {len(adj_grads_list3)} переменных")
+for v, g in zip(adj_vars3, adj_grads_list3):
     if g is not None:
-        print(f"  {var_name}: shape={g.shape}, norm={np.linalg.norm(g.numpy()):.6f}")
+        print(f"  {v.name}: shape={g.shape}, norm={np.linalg.norm(g.numpy()):.6f}")
 
 print("\n" + "=" * 60)
 print("Все примеры выполнены успешно!")

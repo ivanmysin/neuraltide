@@ -214,18 +214,19 @@ syn = StaticSynapse(n_pre=1, n_post=1, dt=0.5, params={
 })
 
 graph = NetworkGraph(dt=0.5)
-graph.add_input_population('input', gen)
+graph.declare_input('input', n_units=gen.n_units)
 graph.add_population('exc', pop)
 graph.add_synapse('input->exc', syn, src='input', tgt='exc')
 
 # Симуляция с разными интеграторами
 t_seq = tf.constant(np.arange(0, 1000, 0.5)[None, :, None])
+inputs = graph.pack_inputs({'input': gen(t_seq)})
 
 for name, Integrator in [('Euler', EulerIntegrator), 
                           ('Heun', HeunIntegrator), 
                           ('RK4', RK4Integrator)]:
     network = NetworkRNN(graph, integrator=Integrator())
-    output = network(t_seq)
+    output = network(t_seq, inputs=inputs)
     rates = output.firing_rates['exc'].numpy()
     print(f"{name}: final rate = {rates[0, -1, 0]:.2f} Hz")
 ```

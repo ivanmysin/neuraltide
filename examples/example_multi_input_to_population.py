@@ -71,7 +71,7 @@ syn = TsodyksMarkramSynapse(n_pre=2, n_post=2, dt=dt, params={
 print(f"TsodyksMarkramSynapse: n_pre={syn.n_pre}, n_post={syn.n_post}")
 
 graph = NetworkGraph(dt=dt)
-graph.add_input_population('inputs', gen)
+graph.declare_input('inputs', n_units=gen.n_units)
 graph.add_population('exc', pop)
 graph.add_synapse('inputs->exc', syn, src='inputs', tgt='exc')
 
@@ -79,8 +79,9 @@ network = NetworkRNN(graph, integrator=RK4Integrator())
 
 t_values = np.arange(0, T, dt, dtype=np.float32)
 t_seq = tf.constant(t_values[None, :, None])
+inputs = graph.pack_inputs({'inputs': gen(t_seq)})
 
-output = network(t_seq, training=False)
+output = network(t_seq, inputs=inputs, training=False)
 firing_rates = output.firing_rates['exc'].numpy()[0]
 
 gen_output = gen(t_seq).numpy()[0]

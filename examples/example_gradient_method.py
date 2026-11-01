@@ -49,7 +49,7 @@ gen = VonMisesGenerator(dt=dt, params={
 })
 
 graph = NetworkGraph(dt=dt)
-graph.add_input_population('theta', gen)
+graph.declare_input('theta', n_units=gen.n_units)
 graph.add_population('exc', pop)
 graph.add_synapse('theta->exc', syn, src='theta', tgt='exc')
 
@@ -60,6 +60,7 @@ print_summary(network)
 # --- Временная ось ---
 t_values = np.arange(T, dtype=np.float32) * dt
 t_seq = tf.constant(t_values[None, :, None])
+inputs = graph.pack_inputs({'theta': gen(t_seq)})
 
 # --- Целевой сигнал ---
 target_0 = 10.0 + 5.0 * np.sin(2 * np.pi * 8.0 * t_values / 1000.0)
@@ -81,15 +82,15 @@ from neuraltide.training.trainer import Trainer as TrainerBase
 class Trainer(TrainerBase):
     pass
 
-trainer_autograd = Trainer(network, loss_fn, optimizer, gradient_method="autograd", run_eagerly=True)
+trainer_autograd = Trainer(network, loss_fn, optimizer, grad_method="bptt", run_eagerly=True)
 
-initial_loss = trainer_autograd.train_step(t_seq)['loss']
+initial_loss = trainer_autograd.train_step(t_seq, inputs=inputs)['loss']
 print(f"Initial loss: {initial_loss:.4f}")
 
 for epoch in range(20):
-    trainer_autograd.train_step(t_seq)
+    trainer_autograd.train_step(t_seq, inputs=inputs)
 
-final_loss = trainer_autograd.train_step(t_seq)['loss']
+final_loss = trainer_autograd.train_step(t_seq, inputs=inputs)['loss']
 print(f"Final loss: {final_loss:.4f}")
 print(f"Loss decreased: {initial_loss > final_loss}")
 
@@ -120,21 +121,22 @@ syn2 = TsodyksMarkramSynapse(n_pre=1, n_post=2, dt=dt, params={
 })
 
 graph2 = NetworkGraph(dt=dt)
-graph2.add_input_population('theta', gen)
+graph2.declare_input('theta', n_units=gen.n_units)
 graph2.add_population('exc', pop2)
 graph2.add_synapse('theta->exc', syn2, src='theta', tgt='exc')
 
 network2 = NetworkRNN(graph2, RK4Integrator())
+inputs2 = graph2.pack_inputs({'theta': gen(t_seq)})
 
-trainer_adjoint = Trainer(network2, loss_fn, optimizer, gradient_method="adjoint", run_eagerly=True)
+trainer_adjoint = Trainer(network2, loss_fn, tf.keras.optimizers.Adam(1e-3), grad_method="adjoint", run_eagerly=True)
 
-initial_loss2 = trainer_adjoint.train_step(t_seq)['loss']
+initial_loss2 = trainer_adjoint.train_step(t_seq, inputs=inputs2)['loss']
 print(f"Initial loss: {initial_loss2:.4f}")
 
 for epoch in range(20):
-    trainer_adjoint.train_step(t_seq)
+    trainer_adjoint.train_step(t_seq, inputs=inputs2)
 
-final_loss2 = trainer_adjoint.train_step(t_seq)['loss']
+final_loss2 = trainer_adjoint.train_step(t_seq, inputs=inputs2)['loss']
 print(f"Final loss: {final_loss2:.4f}")
 print(f"Loss decreased: {initial_loss2 > final_loss2}")
 

@@ -21,7 +21,7 @@ loss_fn = CompositeLoss([
     (1e-3, StabilityPenalty()),
 ])
 trainer = Trainer(network, loss_fn, optimizer=tf.keras.optimizers.Adam(1e-3))
-history = trainer.fit(t_seq, epochs=epochs, verbose=1)
+history = trainer.fit(t_seq, inputs=inputs, epochs=epochs, verbose=1)
 ```
 
 ### Параметры Trainer
@@ -35,8 +35,9 @@ history = trainer.fit(t_seq, epochs=epochs, verbose=1)
 
 ### Методы Trainer
 
-- `fit(t_seq, epochs, verbose)` — обучение сети
-- `evaluate(t_seq)` — вычисление loss без обновления весов
+- `fit(t_seq, inputs=None, epochs, verbose)` — обучение сети
+- `predict(t_seq, inputs)` — предсказание без обучения
+- `evaluate(t_seq, inputs)` — вычисление loss без обновления весов
 - `export_results(path, format="json")` — экспорт результатов в JSON или CSV
 
 ### Экспорт результатов
@@ -45,7 +46,7 @@ history = trainer.fit(t_seq, epochs=epochs, verbose=1)
 
 ```python
 # После обучения
-history = trainer.fit(t_seq, epochs=100)
+history = trainer.fit(t_seq, inputs=inputs, epochs=100)
 
 # Экспорт в JSON (по умолчанию)
 trainer.export_results('results.json')
@@ -125,7 +126,7 @@ optimizer = tf.keras.optimizers.RMSprop(1e-3)
 from neuraltide.training import DivergenceDetector
 
 callbacks = [DivergenceDetector(threshold=1e6)]
-trainer.fit(t_seq, epochs=500, callbacks=callbacks)
+trainer.fit(t_seq, inputs=inputs, epochs=500, callbacks=callbacks)
 ```
 
 ### GradientMonitor
@@ -188,7 +189,7 @@ trainer = Trainer(
     grad_method='adjoint'
 )
 
-history = trainer.fit(t_seq, epochs=100)
+history = trainer.fit(t_seq, inputs=inputs, epochs=100)
 ```
 
 ### Сравнение градиентов
@@ -199,8 +200,8 @@ history = trainer.fit(t_seq, epochs=100)
 from neuraltide.training.adjoint import compute_gradients as adjoint_grads
 from neuraltide.training.trainer import compute_gradients as bptt_grads
 
-grads_adjoint = adjoint_grads(network, t_seq, loss_fn)
-grads_bptt = bptt_grads(network, t_seq, loss_fn)
+grads_adjoint = adjoint_grads(network, t_seq, inputs, loss_fn)
+grads_bptt = bptt_grads(network, t_seq, inputs, loss_fn)
 
 # Максимальная разница ~1e-7
 for (name_a, g_a), (name_b, g_b) in zip(grads_adjoint, grads_bptt):
@@ -252,7 +253,7 @@ syn = TsodyksMarkramSynapse(n_pre=1, n_post=2, dt=dt, params={
 })
 
 graph = NetworkGraph(dt=dt)
-graph.add_input_population('theta', gen)
+graph.declare_input('theta', n_units=gen.n_units)
 graph.add_population('exc', pop)
 graph.add_synapse('theta->exc', syn, src='theta', tgt='exc')
 
@@ -267,6 +268,7 @@ target = {
 }
 
 t_seq = tf.constant(t_values[None, :, None])
+inputs = graph.pack_inputs({'theta': gen(t_seq)})
 
 # Обучение с adjoint
 loss_fn = CompositeLoss([
@@ -274,7 +276,7 @@ loss_fn = CompositeLoss([
     (1e-3, StabilityPenalty()),
 ])
 trainer = Trainer(network, loss_fn, optimizer=tf.keras.optimizers.Adam(1e-3), grad_method='adjoint')
-history = trainer.fit(t_seq, epochs=epochs, verbose=50)
+history = trainer.fit(t_seq, inputs=inputs, epochs=epochs, verbose=50)
 
 print(f"Initial loss: {history.loss_history[0]:.4f}")
 print(f"Final loss: {history.loss_history[-1]:.4f}")

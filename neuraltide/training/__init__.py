@@ -17,6 +17,7 @@ from neuraltide.training.readouts import (
     HemodynamicReadout,
 )
 from neuraltide.training.trainer import Trainer, TrainingHistory
+from neuraltide.training.brain_model import BrainModel
 from neuraltide.training.callbacks import (
     DivergenceDetector,
     GradientMonitor,
@@ -41,6 +42,7 @@ __all__ = [
     "HemodynamicReadout",
     "Trainer",
     "TrainingHistory",
+    "BrainModel",
     "DivergenceDetector",
     "GradientMonitor",
     "ExperimentLogger",

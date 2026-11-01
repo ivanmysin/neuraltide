@@ -61,24 +61,27 @@ def create_network(i_ext_value, stability_weight, name):
     })
 
     graph = NetworkGraph(dt=dt)
-    graph.add_input_population('input', gen)
+    graph.declare_input('input', n_units=gen.n_units)
     graph.add_population('exc', pop)
     graph.add_synapse('input->exc', syn_in, src='input', tgt='exc')
 
     network = NetworkRNN(graph, integrator=RK4Integrator(),
                          stability_penalty_weight=stability_weight,
                          name=f'network_{name}')
-    return network
+    return network, gen
 
 
 i_ext_initial = 1.0  # Большой I_ext — система жесткая, высокая нестабильность
 stability_weight = 10
 
-network_with_penalty = create_network(i_ext_initial, stability_weight, 'with_penalty')
-network_without_penalty = create_network(i_ext_initial, 0.0, 'without_penalty')
+network_with_penalty, gen_with = create_network(i_ext_initial, stability_weight, 'with_penalty')
+network_without_penalty, gen_without = create_network(i_ext_initial, 0.0, 'without_penalty')
 
 t_values = np.arange(n_steps, dtype=np.float32) * dt
 t_seq = tf.constant(t_values[None, :, None])
+T_dim = t_seq.shape[1]
+inputs_with = network_with_penalty._graph.pack_inputs({'input': tf.broadcast_to(gen_with(t_seq)[:, tf.newaxis, :], [1, T_dim, gen_with.n_units])})
+inputs_without = network_without_penalty._graph.pack_inputs({'input': tf.broadcast_to(gen_without(t_seq)[:, tf.newaxis, :], [1, T_dim, gen_without.n_units])})
 
 target_rate = 0.3 * np.ones_like(t_values)
 target = {
@@ -86,9 +89,9 @@ target = {
 }
 
 print("=== Проверка stability_loss до обучения ===")
-output_before = network_with_penalty(t_seq, training=False)
+output_before = network_with_penalty(t_seq, inputs=inputs_with, training=False)
 print(f"stability_loss со штрафом (I_ext={i_ext_initial}): {output_before.stability_loss.numpy()}")
-output_before_no = network_without_penalty(t_seq, training=False)
+output_before_no = network_without_penalty(t_seq, inputs=inputs_without, training=False)
 print(f"stability_loss без штрафа: {output_before_no.stability_loss.numpy()}")
 
 print("\n=== Сеть со StabilityPenalty ===")
@@ -112,10 +115,10 @@ trainer_with = Trainer(network_with_penalty, loss_fn_with,
                        optimizer=tf.keras.optimizers.Adam(1e-3))
 
 for epoch in range(50):
-    result = trainer_with.train_step(t_seq)
+    result = trainer_with.train_step(t_seq, inputs=inputs_with)
     i_ext_history_with.append(network_with_penalty._graph._populations['exc'].I_ext.numpy()[0])
     loss_history_with.append(float(result['loss']))
-    output = network_with_penalty(t_seq, training=False)
+    output = network_with_penalty(t_seq, inputs=inputs_with, training=False)
     stability_history_with.append(float(output.stability_loss.numpy()))
     if epoch % 10 == 0:
         i_ext_val = network_with_penalty._graph._populations['exc'].I_ext.numpy()[0]
@@ -128,19 +131,19 @@ loss_history_without = []
 trainer_without = Trainer(network_without_penalty, loss_fn_without,
                           optimizer=tf.keras.optimizers.Adam(1e-3))
 for epoch in range(50):
-    result = trainer_without.train_step(t_seq)
+    result = trainer_without.train_step(t_seq, inputs=inputs_without)
     i_ext_history_without.append(network_without_penalty._graph._populations['exc'].I_ext.numpy()[0])
     loss_history_without.append(float(result['loss']))
-    output = network_without_penalty(t_seq, training=False)
+    output = network_without_penalty(t_seq, inputs=inputs_without, training=False)
     stability_history_without.append(float(output.stability_loss.numpy()))
     if epoch % 10 == 0:
         i_ext_val = network_without_penalty._graph._populations['exc'].I_ext.numpy()[0]
         print(f"Epoch {epoch}/50: I_ext={i_ext_val:.4f}, stability_loss={output.stability_loss.numpy():.6f}")
 
 print(f"\n=== Проверка stability_loss после обучения ===")
-output_after = network_with_penalty(t_seq, training=False)
+output_after = network_with_penalty(t_seq, inputs=inputs_with, training=False)
 print(f"stability_loss со штрафом: {output_after.stability_loss.numpy()}")
-output_after_no = network_without_penalty(t_seq, training=False)
+output_after_no = network_without_penalty(t_seq, inputs=inputs_without, training=False)
 print(f"stability_loss без штрафа: {output_after_no.stability_loss.numpy()}")
 
 i_ext_with_penalty = network_with_penalty._graph._populations['exc'].I_ext.numpy()[0]
@@ -178,8 +181,8 @@ axes[1, 0].set_ylabel("Stability Loss")
 axes[1, 0].set_title("Stability Loss (со StabilityPenalty)")
 axes[1, 0].grid(True, alpha=0.3)
 
-output_with = network_with_penalty(t_seq, training=False)
-output_without = network_without_penalty(t_seq, training=False)
+output_with = network_with_penalty(t_seq, inputs=inputs_with, training=False)
+output_without = network_without_penalty(t_seq, inputs=inputs_without, training=False)
 
 axes[1, 1].plot(t_values, target_rate, color='tab:green', linewidth=2, label='Target')
 axes[1, 1].plot(t_values, output_with.firing_rates['exc'].numpy()[0, :, 0], 

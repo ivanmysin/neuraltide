@@ -62,7 +62,7 @@ syn = TsodyksMarkramSynapse(n_pre=1, n_post=1, dt=dt, params={
 })
 
 graph = NetworkGraph(dt=dt)
-graph.add_input_population('input', gen)
+graph.declare_input('input', n_units=gen.n_units)
 graph.add_population('exc', pop)
 graph.add_synapse('input->exc', syn, src='input', tgt='exc')
 
@@ -70,17 +70,14 @@ network = NetworkRNN(graph, integrator=RK4Integrator())
 
 t_values = np.arange(0, T, dt, dtype=np.float32)
 t_seq = tf.constant(t_values[None, :, None])
+inputs = graph.pack_inputs({'input': gen(t_seq)})
 
-output = network(t_seq, training=False)
+output = network(t_seq, inputs=inputs, training=False)
 firing_rates = output.firing_rates['exc'].numpy()[0]
 
 gen_output = gen(t_seq).numpy()[0]
 
-input_pop = graph._populations['input']
-pop_model = graph._populations['exc']
-
 syn_state = syn.get_initial_state(batch_size=1)
-pop_state = pop_model.get_initial_state(batch_size=1)
 
 R_history = []
 U_history = []
@@ -90,7 +87,7 @@ I_syn_history = []
 for t in t_values:
     t_tensor = tf.constant([[t]], dtype=tf.float32)
     
-    pre_rate = input_pop.get_firing_rate([t_tensor])
+    pre_rate = gen(t_tensor)
     
     post_v = tf.zeros([1, 1], dtype=tf.float32)
     

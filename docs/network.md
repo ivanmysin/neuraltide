@@ -16,7 +16,8 @@ NeuralTide предоставляет два основных класса дл�
 ### Концепция
 
 NetworkGraph хранит:
-- Все популяции (динамические и входные)
+- Все динамические популяции
+- Все объявленные внешние входы (через `declare_input`)
 - Все синаптические проекции
 - Проверку корректности топологии
 
@@ -34,7 +35,7 @@ NetworkGraph(dt: float)
 
 #### `add_population(name, model)`
 
-Регистрирует популяцию (динамическую или InputPopulation).
+Регистрирует динамическую популяцию.
 
 ```python
 graph.add_population('exc', pop)
@@ -42,46 +43,65 @@ graph.add_population('exc', pop)
 
 **Raises**: `ValueError` если имя уже занято.
 
-#### `add_input_population(name, generator)`
+#### `declare_input(name, n_units)`
 
-Регистрирует входной генератор как псевдо-популяцию InputPopulation.
+Объявляет внешний входной источник. В отличие от старого `add_input_population`, это не создаёт объект PopulationModel — входные частоты передаются извне через `pack_inputs()` и `inputs=` в `call()`.
 
 ```python
-graph.add_input_population('theta_input', gen)
+graph.declare_input('input', n_units=gen.n_units)
 ```
 
-Это эквивалентно:
+| Параметр | Тип | Описание |
+|----------|-----|-----------|
+| `name` | str | Уникальное имя входа (используется как `src` в `add_synapse`) |
+| `n_units` | int | Число входных каналов (должно совпадать с `generator.n_units`) |
+
+**Raises**:
+- `ValueError` если имя уже занято
+- `ValueError` если имя конфликтует с именем популяции
+
+#### `pack_inputs(input_dict)`
+
+Складывает именованные входные тензоры в один тензор для передачи в `NetworkRNN.call()`.
+
 ```python
-input_pop = InputPopulation(generator=generator, name=name + '_input_pop')
-graph.add_population(name, input_pop)
+inputs = graph.pack_inputs({'input': gen(t_seq)})
 ```
+
+| Параметр | Тип | Описание |
+|----------|-----|-----------|
+| `input_dict` | Dict[str, Tensor] | Словарь `{name: tensor[batch, T, n_units_i]}` |
+
+**Возвращает**: `tf.Tensor` shape `[batch, T, total_input_units]`
+
+Тензоры упаковываются в порядке объявления входов через `declare_input()`.
 
 #### `add_synapse(name, model, src, tgt)`
 
 Регистрирует синаптическую проекцию.
 
 ```python
-graph.add_synapse('input_to_exc', syn, src='theta_input', tgt='exc')
+graph.add_synapse('input->exc', syn, src='input', tgt='exc')
 ```
 
 | Параметр | Тип | Описание |
 |----------|-----|-----------|
 | `name` | str | Уникальное имя синапса |
 | `model` | SynapseModel | Экземпляр синапса |
-| `src` | str | Имя исходной популяции |
+| `src` | str | Имя исходной популяции или объявленного входа |
 | `tgt` | str | Имя целевой популяции |
 
 **Raises**:
 - `ValueError` если имя уже занято
 - `ValueError` если src или tgt не зарегистрированы
-- `ValueError` если tgt — InputPopulation (входные популяции не могут быть целями)
+- `ValueError` если `n_pre` синапса не совпадает с `n_units` источника
 
 #### `validate()`
 
 Проверяет корректность топологии перед построением NetworkRNN.
 
 Проверки:
-1. `n_pre` каждого синапса == `n_units` исходной популяции
+1. `n_pre` каждого синапса == `n_units` исходной популяции/входа
 2. `n_post` каждого синапса == `n_units` целевой популяции
 3. Все динамические популяции имеют хотя бы один входящий синапс (警告)
 
@@ -93,10 +113,10 @@ graph.validate()  # Raises ValueError при ошибке
 
 #### `population_names`
 
-Список всех имён популяций.
+Список имён всех динамических популяций.
 
 ```python
-graph.population_names  # ['theta_input', 'exc', 'inh']
+graph.population_names  # ['exc', 'inh']
 ```
 
 #### `synapse_names`
@@ -109,18 +129,34 @@ graph.synapse_names  # ['input->exc', 'exc->inh', 'inh->exc']
 
 #### `dynamic_population_names`
 
-Список имён только динамических популяций (без InputPopulation).
+Список имён динамических популяций.
 
 ```python
 graph.dynamic_population_names  # ['exc', 'inh']
 ```
 
-#### `input_population_names`
+#### `input_names`
 
-Список имён только входных популяций.
+Список имён объявленных внешних входов (в порядке объявления).
 
 ```python
-graph.input_population_names  # ['theta_input']
+graph.input_names  # ['theta', 'place']
+```
+
+#### `input_offsets`
+
+Словарь `{name: offset}` — смещение каждого входа в стекированном тензоре.
+
+```python
+graph.input_offsets  # {'theta': 0, 'place': 1}
+```
+
+#### `total_input_units`
+
+Общее число входных каналов.
+
+```python
+graph.total_input_units  # 3
 ```
 
 ### Пример полного графа
@@ -185,13 +221,18 @@ syn_rec = TsodyksMarkramSynapse(n_pre=2, n_post=2, dt=dt, params={
 
 # Построение графа
 graph = NetworkGraph(dt=dt)
-graph.add_input_population('theta', gen)
+graph.declare_input('theta', n_units=gen.n_units)
 graph.add_population('exc', pop_exc)
 graph.add_synapse('theta->exc', syn_in,  src='theta', tgt='exc')
 graph.add_synapse('exc->exc',   syn_rec, src='exc',   tgt='exc')
 
 # Валидация
 graph.validate()
+
+# Подготовка входных данных
+t_values = np.arange(0, 1000, dt, dtype=np.float32)
+t_seq = tf.constant(t_values[None, :, None])
+inputs = graph.pack_inputs({'theta': gen(t_seq)})
 ```
 
 ---
@@ -231,12 +272,12 @@ NetworkRNN(
 ### Вызов сети
 
 ```python
-output = network(t_sequence, extra_inputs_seq=None, initial_state=None, training=False)
+output = network(t_sequence, inputs=None, initial_state=None, training=False)
 ```
 
 **Аргументы**:
 - `t_sequence`: tf.Tensor shape `[batch, T, 1]` или `[batch, T]` — временная последовательность в мс
-- `extra_inputs_seq`: Optional tf.Tensor shape `[batch, T, n_cols]` — дополнительные входные данные, передаваемые во все `InputPopulation`-генераторы (например, координаты `(x, y, vx, vy)` для PlaceFieldGenerator). Если `None` — генераторы получают нулевой `extra_inputs` формы `[batch, T, 0]` (PlaceFieldGenerator возвращает фоновую частоту). Если задан как `[batch, T]` — автоматически расширяется до `[batch, T, 1]`
+- `inputs`: Optional tf.Tensor shape `[batch, T, total_input_units]` — предвычисленные частоты разрядов внешних входов, упакованные через `graph.pack_inputs()` (входные последовательности генерируются снаружи сети — например, PlaceFieldGenerator с координатами `(x, y, vx, vy)`). Если граф не содержит объявленных входов — `None`
 - `initial_state`: Optional[Tuple[pop_states, syn_states]] — начальное состояние. Если None, используется нулевое.
 - `training`: bool — режим обучения
 
@@ -296,8 +337,11 @@ dt = 0.5
 t_values = np.arange(0, T, dt, dtype=np.float32)
 t_seq = tf.constant(t_values[None, :, None])  # [1, T/dt, 1]
 
+# Входные данные (если есть объявленные входы)
+inputs = graph.pack_inputs({'input': gen(t_seq)})
+
 # Запуск
-output = network(t_seq)
+output = network(t_seq, inputs=inputs)
 
 # Результат
 print(output.firing_rates['exc'].shape)  # [1, 2000, 2]
@@ -315,10 +359,12 @@ init_pop[0] = tf.constant([[0.5, 0.5]])  # r = 0.5
 init_pop[1] = tf.constant([[0.1, 0.1]])  # v = 0.1
 
 # Запуск с пользовательским состоянием
-output = network(t_seq, initial_state=(init_pop, init_syn))
+output = network(t_seq, inputs=inputs, initial_state=(init_pop, init_syn))
 ```
 
-### Симуляция с внешними входными данными (extra_inputs_seq)
+### Симуляция с позиционно-зависимым входом
+
+PlaceFieldGenerator использует координаты `(x, y)`, которые передаются как входные данные через `pack_inputs()`.
 
 ```python
 import numpy as np
@@ -347,7 +393,7 @@ syn = StaticSynapse(n_pre=2, n_post=2, dt=0.5, params={
 })
 
 graph = NetworkGraph(dt=0.5)
-graph.add_input_population('place', gen)
+graph.declare_input('place', n_units=gen.n_units)
 graph.add_population('readout', pop)
 graph.add_synapse('place->readout', syn, src='place', tgt='readout')
 
@@ -358,7 +404,7 @@ T = 5000
 t_values = np.arange(0, T, 0.5, dtype=np.float32)
 t_seq = tf.constant(t_values[None, :, None])  # [1, T/dt, 1]
 
-# Траектория: позиции (x, y) + скорость (vx, vy) в см/мс передаются через extra_inputs_seq
+# Траектория: позиции (x, y) + скорость (vx, vy) в см/мс передаются при генерации входов
 n_steps = len(t_values)
 r_traj = 70.0  # см
 theta = 2.0 * np.pi * np.arange(n_steps) / n_steps * 2  # 2 оборота
@@ -366,16 +412,17 @@ pos_x = r_traj * np.cos(theta)
 pos_y = r_traj * np.sin(theta)
 vx = np.gradient(pos_x, 0.5)   # см/мс
 vy = np.gradient(pos_y, 0.5)
-extra_inputs_seq = tf.constant(
+extra = tf.constant(
     np.stack([pos_x, pos_y, vx, vy], axis=-1).astype(np.float32)[None, :, :]
 )  # [1, T/dt, 4]
 
-# Запуск с extra_inputs_seq
-output = network(t_seq, extra_inputs_seq=extra_inputs_seq)
-print(output.firing_rates['readout'].shape)  # [1, T/0.5, 2]
+# Упаковка входов: PlaceFieldGenerator генерирует частоты с учётом координат
+rates = gen(t_seq, extra_inputs=extra)
+inputs = graph.pack_inputs({'place': rates})
 
-# Без extra_inputs_seq генератор использует встроенную траекторию по умолчанию
-output_default = network(t_seq, extra_inputs_seq=None)
+# Запуск
+output = network(t_seq, inputs=inputs)
+print(output.firing_rates['readout'].shape)  # [1, T/0.5, 2]
 ```
 
 ### Мониторинг стабильности
@@ -387,7 +434,7 @@ network = NetworkRNN(
     stability_penalty_weight=1e-3
 )
 
-output = network(t_seq)
+output = network(t_seq, inputs=inputs)
 
 # Штраф за стабильность
 print(output.stability_loss)  # скаляр
@@ -402,7 +449,7 @@ network = NetworkRNN(
     return_hidden_states=True
 )
 
-output = network(t_seq)
+output = network(t_seq, inputs=inputs)
 
 # hidden_states содержит состояния всех популяций и синапсов
 # Формат зависит от конкретной модели
@@ -415,16 +462,12 @@ output = network(t_seq)
 Функция `_step_fn` выполняет один шаг симуляции и декорирована `@tf.function` для компиляции в граф TensorFlow:
 
 ```python
-def _step_fn(states, t, graph, integrator):
+def _step_fn(states, t, input_step, graph, integrator):
     # 1. Распаковка состояний с использованием кэшированных оффсетов
     pop_states_dict = {...}
     syn_states_dict = {...}
 
-    # 2. Обновление времени для InputPopulation
-    for name in graph.input_population_names:
-        pop_states_dict[name] = [t]
-
-    # 3. Вычисление синаптических токов с использованием кэша _syn_info_cache
+    # 2. Вычисление синаптических токов с использованием кэша _syn_info_cache
     for syn_name, entry, _ in graph._syn_info_cache:
         pre_rate = src_pop.get_firing_rate(src_state)
         post_v = tgt_pop.observables(tgt_state)['v_mean']
@@ -434,17 +477,15 @@ def _step_fn(states, t, graph, integrator):
         syn_I[tgt] += current_dict['I_syn']
         syn_g[tgt] += current_dict['g_syn']
 
-    # 4. Интегрирование популяций с использованием кэша _pop_info_cache
+    # 3. Интегрирование популяций с использованием кэша _pop_info_cache
     for name, pop, _ in graph._pop_info_cache:
-        if isinstance(pop, InputPopulation):
-            continue
         total_syn = {'I_syn': syn_I[name], 'g_syn': syn_g[name]}
         new_pop_state, local_err = integrator.step(pop, pop_state, total_syn)
 
     return (new_pop_states, new_syn_states, stability_error)
 ```
 
-Эта функция вызывается внутри `tf.while_loop` в методах `_scan_forward` и `_scan_forward_states`, которые также декорированы `@tf.function`.
+Внешние входы (`input_step`) передаются на каждом шаге как срез упакованного тензора `inputs`.
 
 ### Кэширование структур
 
@@ -458,14 +499,6 @@ NetworkGraph использует кэши для ускорения итера�
 ---
 
 ## Ограничения
-
-### InputPopulation не может быть целью синапса
-
-```python
-# Ошибка!
-graph.add_synapse('exc->input', syn, src='exc', tgt='input')
-# ValueError: InputPopulation cannot be a synaptic target
-```
 
 ### Все динамические популяции должны иметь вход
 

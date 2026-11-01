@@ -147,7 +147,8 @@ NetworkGraph(dt: float)
 
 **Методы**:
 - `add_population(name: str, model: PopulationModel) -> None`
-- `add_input_population(name: str, generator: BaseInputGenerator) -> None`
+- `declare_input(name: str, n_units: int) -> None`
+- `pack_inputs(input_dict: Dict[str, TensorType]) -> TensorType`
 - `add_synapse(name: str, model: SynapseModel, src: str, tgt: str) -> None`
 - `validate() -> None`
 
@@ -155,7 +156,9 @@ NetworkGraph(dt: float)
 - `population_names -> List[str]`
 - `synapse_names -> List[str]`
 - `dynamic_population_names -> List[str]`
-- `input_population_names -> List[str]`
+- `input_names -> List[str]`
+- `input_offsets -> Dict[str, int]`
+- `total_input_units -> int`
 
 ### NetworkRNN
 
@@ -174,7 +177,7 @@ NetworkRNN(
 ```
 
 **Методы**:
-- `call(t_sequence, extra_inputs_seq=None, initial_state=None, training=False) -> NetworkOutput`
+- `call(t_sequence, inputs=None, initial_state=None, training=False) -> NetworkOutput`
 - `get_initial_state(batch_size=1) -> Tuple[StateList, StateList]`
 
 **Свойства**:
@@ -262,15 +265,15 @@ FokkerPlanckPopulation(
 **Методы**:
 - `get_boundary_flux(P, dV) -> TensorType`
 
-### InputPopulation
+### InputPopulation (deprecated)
 
 ```python
 class InputPopulation(PopulationModel):
 ```
 
-Псевдо-популяция, оборачивающая `BaseInputGenerator`. Не имеет собственной динамики.
+> **Внимание**: `InputPopulation` deprecated. Используйте `NetworkGraph.declare_input()` и предвычисленные входы вместо оборачивания генераторов в `InputPopulation`.
 
-**Состояние**: `[t_current, extra_inputs]` — тензоры формы `[1, 1]` (время в мс) и `[1, n_cols]` (данные из `extra_inputs_seq`).
+Псевдо-популяция, оборачивающая `BaseInputGenerator`. Не имеет собственной динамики.
 
 **Конструктор**:
 ```python
@@ -540,7 +543,130 @@ class NetworkConfig:
 ### build_network_from_config
 
 ```python
-def build_network_from_config(config: NetworkConfig) -> NetworkRNN:
+def build_network_from_config(config: NetworkConfig) -> Tuple[NetworkRNN, Dict[str, BaseInputGenerator]]:
+```
+
+Возвращает кортеж `(network, generators)`, где `generators` — словарь `{name: generator}` для предвычисления входных частот.
+
+---
+
+## neuraltide.data
+
+Модуль для работы с данными: сохранение, загрузка, визуализация в формате HDF5.
+
+### Dataset
+
+```python
+@dataclass
+class Dataset:
+    inputs: np.ndarray          # [T, total_input_units]
+    target: np.ndarray          # [T, total_target_units]
+    time_seq: np.ndarray        # [T]
+    dt: float
+    input_names: List[str]
+    input_n_units: Dict[str, int]
+    target_names: List[str]
+    target_n_units: Dict[str, int]
+    generator_params: Dict[str, Any]
+```
+
+**Свойства**:
+- `T -> int` — число временных шагов
+- `total_input_units -> int` — общее число входных каналов
+- `total_target_units -> int` — общее число целевых каналов
+
+**Методы**:
+- `input_slice(name) -> np.ndarray` — срез входа по имени: `[T, n_units_i]`
+- `target_slice(name) -> np.ndarray` — срез цели по имени: `[T, n_units_i]`
+
+### save_dataset
+
+```python
+def save_dataset(
+    path: str,
+    inputs: Dict[str, np.ndarray],
+    target: Dict[str, np.ndarray],
+    dt: float,
+    generator_params: Optional[Dict[str, Any]] = None,
+) -> None:
+```
+
+Сохраняет dataset в HDF5 (.h5).
+
+**Аргументы**:
+- `path`: путь к .h5 файлу
+- `inputs`: `{name: array[T, n_units_i]}` — firing rates входов
+- `target`: `{name: array[T, n_units_i]}` — целевые firing rates
+- `dt`: шаг интегрирования (мс)
+- `generator_params`: параметры генераторов (для reproducibility)
+
+### load_dataset
+
+```python
+def load_dataset(path: str) -> Dataset:
+```
+
+Загружает dataset из HDF5.
+
+### plot_dataset
+
+```python
+def plot_dataset(
+    data: Dataset,
+    max_t: Optional[float] = None,
+    figsize: tuple = (14, 8),
+) -> None:
+```
+
+Строит графики для визуальной проверки данных.
+
+---
+
+## neuraltide.model
+
+Keras-совместимая обёртка для NetworkRNN.
+
+### BrainModelKeras
+
+```python
+class BrainModelKeras(tf.keras.Model):
+```
+
+**Конструктор**:
+```python
+BrainModelKeras(
+    graph: NetworkGraph,
+    integrator: BaseIntegrator,
+    dt: float,
+    loss_fn: Optional[BaseLoss] = None,
+    stability_penalty_weight: float = 0.0,
+    **kwargs
+)
+```
+
+**Методы**:
+- `call(inputs, training=False, initial_state=None) -> NetworkOutput`
+- `train_step(data) -> Dict`
+- `test_step(data) -> Dict`
+
+**Свойства**:
+- `network -> NetworkRNN` — доступ к внутреннему NetworkRNN
+- `trainable_variables -> List[tf.Variable]` — обучаемые переменные сети
+
+**Пример**:
+```python
+from neuraltide.model import BrainModelKeras
+from neuraltide.training import MSELoss
+
+graph = NetworkGraph(dt=0.5)
+graph.declare_input('theta', n_units=1)
+graph.add_population('exc', pop)
+graph.add_synapse('theta->exc', syn, src='theta', tgt='exc')
+
+model = BrainModelKeras(graph, RK4Integrator(), dt=0.5,
+                        loss_fn=MSELoss(target))
+model.compile(optimizer=tf.keras.optimizers.Adam(1e-3))
+model.fit(inputs, targets, epochs=100)
 ```
 
 ---
@@ -578,12 +704,14 @@ Trainer(
     model: tf.keras.Model,
     loss_fn: callable,
     optimizer: tf.keras.optimizers.Optimizer,
-    callbacks: Optional[List] = None
+    callbacks: Optional[List] = None,
+    grad_method: str = "bptt"
 )
 ```
 
 **Методы**:
-- `fit(t_sequence, epochs, verbose=1) -> History`
+- `fit(t_sequence, inputs=None, epochs, verbose=1) -> History`
+- `predict(t_sequence, inputs) -> NetworkOutput`
 - `export_results(path, format="json")` — экспорт результатов в JSON/CSV
 
 ### CompositeLoss
@@ -613,6 +741,15 @@ MSELoss(target: Dict[str, TensorType])
 ```python
 class StabilityPenalty:
 ```
+
+### AdjointSolver
+
+```python
+class AdjointSolver:
+```
+
+**Методы**:
+- `compute_gradients(t_sequence, inputs, target, loss_fn) -> Tuple[List, List, NetworkOutput]`
 
 ---
 
@@ -658,7 +795,7 @@ def print_summary(network, rich_library: Optional[object] = None) -> None:
 - `IzhikevichMeanField`
 - `WilsonCowan`
 - `FokkerPlanckPopulation`
-- `InputPopulation`
+- `InputPopulation` (deprecated)
 
 ---
 

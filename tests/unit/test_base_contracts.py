@@ -134,11 +134,12 @@ class TestMinimalConcreteSynapse:
 class MinimalInput(BaseInputGenerator):
     """Минимальная конкретная реализация BaseInputGenerator для тестов."""
 
-    def __init__(self, n_outputs, **kwargs):
-        super().__init__(n_outputs=n_outputs, **kwargs)
+    def __init__(self, n_outputs=1, **kwargs):
+        super().__init__(params={'rate': 1.0}, dt=0.5, **kwargs)
+        self.n_units = n_outputs
 
-    def call(self, t):
-        return tf.ones([1, self.n_outputs])
+    def call(self, t, extra_inputs=None):
+        return tf.ones([1, self.n_units])
 
 
 class TestMinimalConcreteInput:
