@@ -807,6 +807,217 @@ class AdjointSolver:
 
 ---
 
+## neuraltide.optimization
+
+Слой калибровки поверх сети (этап P0): дифференцируемые преобразования
+координат параметров (θ ↔ φ), единое пространство параметров, нормированные
+невязки, постановка задачи калибровки и диагностика градиентов.
+
+### Transform
+
+```python
+class Transform:
+```
+
+Базовый класс преобразования координат θ = forward(φ).
+
+**Методы**:
+- `forward(phi) -> tf.Tensor` — φ → θ (дифференцируемо)
+- `inverse(theta) -> tf.Tensor` — θ → φ с клиппингом θ в допустимую область
+- `jacobian(phi) -> tf.Tensor` — dθ/dφ поэлементно, форма как у phi
+
+### Реализации Transform
+
+- `IdentityTransform()` — θ = φ
+- `AffineTransform(a=1.0, b=0.0)` — θ = a·φ + b
+- `LogTransform(floor=None)` — θ = exp(φ), положительные параметры
+- `LogitTransform(min, max)` — θ = lo + (hi−lo)·sigmoid(φ)
+- `ScaledSigmoidTransform(min, max, s=1.0)` — θ = lo + (hi−lo)·sigmoid(φ/s)
+- `SoftplusTransform(floor=None)` — θ = softplus(φ) + floor
+- `BoundedLogTransform(min, max)` — лог-координата внутри диапазона
+
+> **Примечание**: sigmoid-образные преобразования (logit, scaled_sigmoid,
+> bounded_log) насыщаются у границ интервала — производная dθ/dφ стремится
+> к нулю. Для параметров с естественной границей у нуля предпочтительнее
+> `softplus` или `log`.
+
+### Фабрика и реестр
+
+```python
+def make_transform(kind: str, **kwargs) -> Transform
+def register_transform(kind: str, cls: Type[Transform]) -> None
+TRANSFORM_REGISTRY: Dict[str, Type[Transform]]
+```
+
+### ParameterEntry
+
+```python
+@dataclass
+class ParameterEntry:
+    full_name: str                 # стабильное имя вида 'exc/Delta_I'
+    shape: tf.TensorShape
+    transform: Transform = IdentityTransform()
+    min: Optional[float] = None    # физические границы
+    max: Optional[float] = None
+    group: str = "population"      # 'population' | 'synapse' | пользовательская
+    trainable: bool = True
+    variable: Optional[tf.Variable] = None  # None для ручных записей
+```
+
+### ParameterSpace
+
+```python
+class ParameterSpace:
+```
+
+Плоский вектор φ оптимизатора над trainable-параметрами сети.
+
+**Построение**:
+- `ParameterSpace.from_network(network, transforms=None) -> ParameterSpace` —
+  сборка из NetworkRNN; `transforms: {full_name: Transform}` (иначе identity)
+- `add_entry(entry: ParameterEntry) -> None` — ручная регистрация
+  (например, nuisance-параметров без переменной модели)
+
+**Методы**:
+- `pack(values=None) -> tf.Tensor` — физические θ → плоский φ = inverse(θ)
+- `unpack(phi) -> Dict[str, tf.Tensor]` — φ → θ = forward(φ); дифференцируемо по phi
+- `apply_to_model(theta_dict) -> None` — запись θ в переменные модели
+- `project(phi) -> tf.Tensor` — проекция φ в допустимую область (клиппинг θ в [min, max])
+
+**Свойства**:
+- `entries`, `names`, `size`, `shape(name)`, `group(name)`
+
+### ObservationSpec
+
+```python
+@dataclass
+class ObservationSpec:
+    name: str                       # уникальное имя наблюдения
+    population: str                 # имя популяции в NetworkGraph
+    target: TensorType              # [batch, T, n_units]
+    sigma: float = 1.0              # масштаб шума; вклад делится на sigma**2
+    mask: Optional[TensorType] = None
+    weight: float = 1.0
+    kind: str = "l2"                # l2 | relative | msle | huber | pseudo_huber
+    readout: Optional[BaseReadout] = None
+    eps: float = 1e-8
+    delta: float = 1.0
+```
+
+### ResidualLoss
+
+```python
+class ResidualLoss(BaseLoss):
+```
+
+Сумма нормированных невязок по набору ObservationSpec. Скалярный интерфейс
+совместим с Trainer; residual-интерфейс честный:
+`0.5 * ||residual(predictions)||^2 == __call__(predictions, model)`.
+
+**Конструктор**:
+```python
+ResidualLoss(observations: Sequence[ObservationSpec])
+```
+
+**Методы**:
+- `__call__(predictions, model) -> TensorType` — полная loss
+- `components(predictions, model) -> Dict[str, TensorType]` — взвешенные вклады по именам наблюдений
+- `per_step_loss(firing_rates, target, mask=None) -> TensorType` — аддитивный вклад временного шага
+- `residual(predictions) -> TensorType` — плоский вектор невязок r
+
+**Свойства**:
+- `target`, `mask` — dict {spec.name: ...} в формате Trainer
+
+### CalibrationProblem
+
+```python
+class CalibrationProblem:
+```
+
+Задача калибровки: сеть + ParameterSpace + протокол + objective; единые
+операции для всех оптимизаторов (Keras, SciPy, безградиентные методы).
+
+**Конструктор**:
+```python
+CalibrationProblem(
+    network: NetworkRNN,
+    parameter_space: ParameterSpace,
+    t_sequence: TensorType,
+    inputs: Optional[TensorType] = None,
+    objective: Optional[Callable] = None,   # (predictions, network) -> scalar
+    initial_state: Optional[tuple] = None,  # (pop, syn)
+    grad_mode: str = "assign",              # "assign" | "chain"
+)
+```
+
+**Методы**:
+- `simulate(phi=None) -> NetworkOutput` — прямой прогон сети
+- `evaluate(phi=None) -> Evaluation` — потеря, компоненты и невязки
+- `value_and_gradient(phi=None) -> Tuple[Evaluation, tf.Tensor]` — потеря и градиент по φ
+- `residual(phi=None) -> np.ndarray` — вектор невязок для GN/LM/TRF
+- `bounds_phi() -> Tuple[np.ndarray, np.ndarray]` — физические границы в координатах φ
+- `pack(phi=None) -> tf.Tensor`
+
+Контракт мутации: `phi=None` — модель не изменяется; `phi != None` — модель
+явно переводится в θ = unpack(phi) и остаётся в нём после вызова.
+
+### Evaluation
+
+```python
+@dataclass
+class Evaluation:
+    loss: float
+    components: Dict[str, float] = {}
+    residuals: np.ndarray          # нулевой длины, если residual-интерфейса нет
+    grad: Optional[np.ndarray] = None
+    status: str = "ok"             # 'ok' | 'no_residual_interface'
+    n_forward: int = 0
+    n_gradient: int = 0
+    wall_time: float = 0.0
+    dtype: str = "float32"
+    dt: float = 0.0
+```
+
+Результат одного вычисления CalibrationProblem. `to_dict()` — JSON-сериализуемый словарь.
+
+### OptimizationResult
+
+```python
+@dataclass
+class OptimizationResult:
+    phi_best: np.ndarray
+    theta_best: Mapping[str, np.ndarray]
+    loss_best: float
+    history: List[Dict[str, Any]] = []
+    seed: Optional[int] = None
+    config: Dict[str, Any] = {}
+    versions: Dict[str, str] = {}  # по умолчанию заполняются автоматически
+    dtype: str = "float32"
+```
+
+Единый формат результата оптимизации. `to_dict()` / `from_dict()`,
+`save(path)` / `load(path)` — JSON-сериализация (numpy → list).
+
+### Диагностика градиентов
+
+```python
+def finite_difference_scan(func, phi0, h_values=None) -> Dict[str, object]
+def taylor_test(value_and_grad, phi0, v=None, h_values=None) -> Dict[str, object]
+def dot_product_test(jvp_fn, vjp_fn, x, y, tol=1e-5) -> Dict[str, object]
+def dt_convergence(build_and_run, dts) -> List[Dict[str, object]]
+def dtype_consistency_check(build_and_run, dtypes=(tf.float32, tf.float64)) -> List[Dict[str, object]]
+def compare_bptt_adjoint(network, loss_fn, t_seq, inputs=None, target=None, initial_state=None) -> Dict[str, object]
+```
+
+- `finite_difference_scan` — центральные конечные разности градиента со сканированием h
+- `taylor_test` — направленный тест порядков 1/2 (медианные наклоны ≈ 1 и ≈ 2)
+- `dot_product_test` — сопряжённость пар операторов: `<Jx, y>` против `<x, Jᵀy>`
+- `dt_convergence` — сходимость потери/градиентов по уточняющейся сетке dt (не для BrunelFokkerPlanck)
+- `dtype_consistency_check` — согласованность float32/float64 через config.set_dtype
+- `compare_bptt_adjoint` — равенство потери и градиентов BPTT и adjoint на одной сети
+
+---
+
 ## neuraltide.utils
 
 ### seed_everything

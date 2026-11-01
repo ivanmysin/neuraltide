@@ -13,6 +13,10 @@ Two modes:
   - Discrete adjoint (default): uses tf.GradientTape per step (autodiff through integrator)
   - Analytical adjoint (use_analytical_adjoint=True): uses explicit
     adjoint_derivatives() + parameter_jacobian() — no GradientTape in the loop
+
+Loss convention: per_step_loss возвращает аддитивный вклад временного шага,
+полная loss ≡ sum_t per_step_loss (нормировка 1/T внутри per_step_loss
+потерь, а не в adjoint-циклах).
 """
 
 import tensorflow as tf
@@ -48,6 +52,29 @@ def _get_named_vars(layer: tf.keras.layers.Layer) -> Dict[str, tf.Variable]:
             raw = raw.rsplit(":", 1)[0]
         result[raw] = v
     return result
+
+
+def _extract_masks(loss_fn: BaseLoss) -> Optional[Dict[str, TensorType]]:
+    """Собирает маски термов потери в один dict {pop_name: mask_tensor}."""
+    terms = loss_fn.terms if isinstance(loss_fn, CompositeLoss) else [(1.0, loss_fn)]
+    masks: Dict[str, TensorType] = {}
+    for _, sub in terms:
+        m = getattr(sub, "mask", None)
+        if m:
+            masks.update(m)
+    return masks or None
+
+
+def _slice_mask_step(
+    mask_dict: Optional[Dict[str, TensorType]], t: TensorType
+) -> Optional[Dict[str, TensorType]]:
+    """Срез масок на шаг t; маски без временной оси передаются как есть."""
+    if mask_dict is None:
+        return None
+    out = {}
+    for name, m in mask_dict.items():
+        out[name] = m[:, t, :] if m.shape.rank == 3 else m
+    return out
 
 
 class AdjointSolver(tf.Module):
@@ -240,8 +267,8 @@ class AdjointSolver(tf.Module):
         t_val: TensorType,
         input_rates_step: Dict[str, TensorType],
         target_dict: Dict[str, TensorType],
+        mask_dict: Optional[Dict[str, TensorType]],
         loss_fn_obj: BaseLoss,
-        T_val: TensorType,
         dtype: tf.DType,
     ) -> Tuple[
         Tuple[TensorType, ...],
@@ -262,9 +289,10 @@ class AdjointSolver(tf.Module):
         npd, _ = unpack_state(self._graph, npl, nsl)
         y_dict = get_firing_rates(self._graph, npd)
 
-        l_t1 = loss_fn_obj.per_step_loss(y_dict, target_dict)
-        T_f = tf.cast(T_val, dtype)
-        l_t1 = tf.cond(T_val > 1, lambda: l_t1 / T_f, lambda: l_t1)
+        # per_step_loss возвращает аддитивный вклад шага (полная loss ==
+        # сумма вкладов); делить на T здесь не нужно — нормировка внутри
+        # per_step_loss потерь.
+        l_t1 = loss_fn_obj.per_step_loss(y_dict, target_dict, mask=mask_dict)
 
         return new_pop, new_syn, y_dict, l_t1
 
@@ -342,8 +370,8 @@ class AdjointSolver(tf.Module):
         t_sequence: TensorType,
         inputs_T: TensorType,
         target: Dict[str, TensorType],
+        mask_dict: Optional[Dict[str, TensorType]],
         loss_fn_obj: BaseLoss,
-        T_val: TensorType,
         dtype: tf.DType,
     ) -> List[TensorType]:
         """
@@ -383,6 +411,7 @@ class AdjointSolver(tf.Module):
                 input_step[name] = inputs_T[t, :, offset : offset + size]
 
             target_t = {name: t_tensor[:, t, :] for name, t_tensor in target.items()}
+            mask_t = _slice_mask_step(mask_dict, t)
 
             syn_I, syn_g, pre_rates, post_vs = self._compute_synaptic_context(
                 pop_t, syn_t, input_step, dtype
@@ -394,8 +423,8 @@ class AdjointSolver(tf.Module):
                 t_val,
                 input_step,
                 target_t,
+                mask_t,
                 loss_fn_obj,
-                T_val,
                 dtype,
             )
 
@@ -514,10 +543,7 @@ class AdjointSolver(tf.Module):
                                 if name in y_dict
                             },
                             target_t,
-                        )
-                        T_f = tf.cast(T_val, dtype)
-                        l_check = tf.cond(
-                            T_val > 1, lambda: l_check / T_f, lambda: l_check
+                            mask=mask_t,
                         )
                     dl_dy = lt.gradient(l_check, y_list, unconnected_gradients="zero")
 
@@ -596,9 +622,10 @@ class AdjointSolver(tf.Module):
                             pop_t,
                             syn_t,
                             t_val,
+                            input_step,
                             target_t,
+                            mask_t,
                             loss_fn_obj,
-                            T_val,
                             dtype,
                         )
                         proxy2 = sum(
@@ -637,8 +664,8 @@ class AdjointSolver(tf.Module):
         t_sequence: TensorType,
         inputs_T: TensorType,
         target: Dict[str, TensorType],
+        mask_dict: Optional[Dict[str, TensorType]],
         loss_fn_obj: BaseLoss,
-        T_val: TensorType,
         dtype: tf.DType,
     ) -> List[TensorType]:
         n_pop = len(pop_full)
@@ -668,6 +695,7 @@ class AdjointSolver(tf.Module):
                 input_step[name] = inputs_T[t, :, offset : offset + size]
 
             target_t = {name: t_tensor[:, t, :] for name, t_tensor in target.items()}
+            mask_t = _slice_mask_step(mask_dict, t)
 
             pop_list = list(pop_t)
             syn_list = list(syn_t)
@@ -683,8 +711,8 @@ class AdjointSolver(tf.Module):
                     t_val,
                     input_step,
                     target_t,
+                    mask_t,
                     loss_fn_obj,
-                    T_val,
                     dtype,
                 )
 
@@ -731,7 +759,6 @@ class AdjointSolver(tf.Module):
             t_sequence = t_sequence[:, :, tf.newaxis]
 
         init_pop, init_syn, pop_stacked, syn_stacked = state_info
-        T = int(t_sequence.shape[1])
         dtype = neuraltide.config.get_dtype()
         variables = self._network.trainable_variables
 
@@ -742,6 +769,10 @@ class AdjointSolver(tf.Module):
         # Pre-transpose inputs: [batch, T, total] -> [T, batch, total]
         inputs_T = tf.transpose(inputs, [1, 0, 2])
 
+        # Маски термов потери (если заданы) — adjoint использует точные
+        # срезы на шаг t, чтобы оптимизировать ту же функцию, что и BPTT.
+        mask_dict = _extract_masks(loss_fn)
+
         if self._use_analytical_adjoint:
             dtheta_step_list = self._analytical_backward_loop(
                 pop_full,
@@ -749,8 +780,8 @@ class AdjointSolver(tf.Module):
                 t_sequence,
                 inputs_T,
                 target,
+                mask_dict,
                 loss_fn,
-                tf.constant(T, dtype=tf.int32),
                 dtype,
             )
         else:
@@ -760,8 +791,8 @@ class AdjointSolver(tf.Module):
                 t_sequence,
                 inputs_T,
                 target,
+                mask_dict,
                 loss_fn,
-                tf.constant(T, dtype=tf.int32),
                 dtype,
             )
 
@@ -805,8 +836,33 @@ class AdjointSolver(tf.Module):
         inputs: TensorType,
         target: Dict[str, TensorType],
         loss_fn: BaseLoss,
+        initial_state: Optional[Tuple[StateList, StateList]] = None,
     ) -> Tuple[List[TensorType], List[tf.Variable], NetworkOutput]:
-        output, _, state_info = self.forward_pass(t_sequence, inputs)
+        """
+        Вычисляет градиенты потери через adjoint-метод.
+
+        Args:
+            t_sequence: временная последовательность [batch, T, 1].
+            inputs: упакованные внешние входы [batch, T, total_input_units].
+            target: целевые траектории {name: [batch, T, n]}.
+            loss_fn: потеря с per_step_loss (аддитивная конвенция:
+                полная loss == sum_t per_step_loss).
+            initial_state: опциональное начальное состояние
+                (pop_states, syn_states). Передаётся в forward_pass.
+
+        Returns:
+            (grads, variables, output): градиенты по trainable_variables
+            сети (до клиппинга), сами переменные и прямой прогон.
+
+        Note:
+            Градиенты StabilityPenalty вычисляются отдельным коротким
+            прогоном и всегда стартуют из состояния по умолчанию сети
+            (self._network.get_initial_state) — initial_state на них не
+            влияет.
+        """
+        output, _, state_info = self.forward_pass(
+            t_sequence, inputs, initial_state=initial_state
+        )
 
         variables = self._network.trainable_variables
 

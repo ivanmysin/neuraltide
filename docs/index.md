@@ -69,9 +69,9 @@ output = network(t_seq, inputs=inputs)
 | [Сеть](network.md) | NetworkGraph и NetworkRNN |
 | [Конфигурация](config.md) | Система конфигурации и реестры |
 | [Обучение](training.md) | Обучение сети: Trainer, loss functions, adjoint method |
+| [Оптимизация и калибровка](optimization.md) | Слой калибровки: transforms, ParameterSpace, ResidualLoss, CalibrationProblem, диагностика градиентов (P0) |
 | [Данные](data.md) | Модуль neuraltide.data: сохранение и загрузка HDF5 |
 | [Модель](model.md) | Модуль neuraltide.model: BrainModelKeras |
-| [Playbook по оптимизации](optimization_playbook.md) | Приёмы подгонки параметров: масштабирование, loss, градиенты, жёсткость, идентифицируемость, UQ |
 | [Ограничения](constraints.md) | Ограничения на параметры |
 | [Примеры](examples.md) | Полные примеры использования |
 | [API Reference](api_reference.md) | Полный справочник API |

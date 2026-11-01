@@ -440,6 +440,10 @@ class NetworkRNN(tf.keras.layers.Layer):
         **kwargs,
     ):
         super().__init__(**kwargs)
+        # Не даём Keras autocast приводить входы к float32: симуляция идёт
+        # в глобальном neuraltide.config.get_dtype() (аналогично
+        # BaseInputGenerator), чтобы float64-путь работал без потери точности.
+        self.autocast = False
         graph.validate()
         self._graph = graph
         self._integrator = integrator

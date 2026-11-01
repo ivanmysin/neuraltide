@@ -728,3 +728,15 @@ pos_x, pos_y, vx, vy (см, см/мс)  ──→  extra_inputs [batch, T, 4]
 - `inputs` опционален (по умолчанию `None`). При `None` и нулевом `total_input_units` генераторы не используются.
 - `inputs` передаётся в `NetworkRNN.call()` как единый тензор, упакованный через `graph.pack_inputs()`.
 - Генераторы `SinusoidalGenerator`, `ConstantRateGenerator`, `VonMisesGenerator` игнорируют `extra_inputs`.
+
+---
+
+## Пример 11: Калибровка параметров (этап P0)
+
+Полный пример: [`examples/example_07_calibration.py`](../examples/example_07_calibration.py)
+
+Демонстрирует слой калибровки `neuraltide.optimization`: сборку ParameterSpace
+из сети с преобразованиями координат (log — для положительных параметров),
+постановку задачи через ObservationSpec/ResidualLoss и CalibrationProblem,
+верификацию градиента taylor_test'ом и ручные шаги Adam по вектору φ с
+сохранением результата в OptimizationResult (без файлов).

@@ -131,12 +131,17 @@ trainer.fit(t_seq, inputs=inputs, epochs=500, callbacks=callbacks)
 
 ### GradientMonitor
 
-Логирует градиенты:
+Логирует нормы градиентов по переменным. Trainer пробрасывает градиенты в
+колбэки через `logs["grads"]` на каждой эпохе (до клиппинга); монитор
+сохраняет историю норм в `monitor.history` — список dict с ключами
+`epoch`, `global_norm`, `norms`:
 
 ```python
 from neuraltide.training import GradientMonitor
 
-callbacks = [GradientMonitor(every_n_steps=50)]
+monitor = GradientMonitor(log_every=50)
+callbacks = [monitor]
+# После обучения: monitor.history — история норм градиентов по эпохам
 ```
 
 ### ExperimentLogger
@@ -197,16 +202,13 @@ history = trainer.fit(t_seq, inputs=inputs, epochs=100)
 Для верификации можно сравнить градиенты adjoint и BPTT:
 
 ```python
-from neuraltide.training.adjoint import compute_gradients as adjoint_grads
-from neuraltide.training.trainer import compute_gradients as bptt_grads
+from neuraltide.optimization import compare_bptt_adjoint
 
-grads_adjoint = adjoint_grads(network, t_seq, inputs, loss_fn)
-grads_bptt = bptt_grads(network, t_seq, inputs, loss_fn)
+report = compare_bptt_adjoint(network, loss_fn, t_seq, inputs=inputs)
 
-# Максимальная разница ~1e-7
-for (name_a, g_a), (name_b, g_b) in zip(grads_adjoint, grads_bptt):
-    diff = tf.abs(g_a - g_b).numpy().max()
-    print(f"{name}: {diff:.2e}")
+print(report['loss_abs_diff'])      # разница потерь BPTT vs adjoint (~1e-7)
+print(report['max_grad_abs_diff'])  # максимальная разница градиентов
+print(report['cosine_similarity'])  # косинусная близость векторов градиентов
 ```
 
 ---
