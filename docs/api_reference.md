@@ -809,9 +809,13 @@ class AdjointSolver:
 
 ## neuraltide.optimization
 
-Слой калибровки поверх сети (этап P0): дифференцируемые преобразования
+Слой калибровки поверх сети (этапы P0/P1): дифференцируемые преобразования
 координат параметров (θ ↔ φ), единое пространство параметров, нормированные
-невязки, постановка задачи калибровки и диагностика градиентов.
+невязки, постановка задачи калибровки, диагностика градиентов (P0); SciPy
+L-BFGS-B / least_squares, мультистарт и continuation, forward sensitivities и
+checkpointed/truncated BPTT, multiple shooting, расписания и анализ
+идентифицируемости (P1). Публичные имена P1 доступны лениво (PEP-562)
+через `neuraltide.optimization`.
 
 ### Transform
 
@@ -997,6 +1001,305 @@ class OptimizationResult:
 
 Единый формат результата оптимизации. `to_dict()` / `from_dict()`,
 `save(path)` / `load(path)` — JSON-сериализация (numpy → list).
+
+### DTO результатов (P1)
+
+```python
+@dataclass
+class LocalOptimizerResult:   # результат local-адаптера
+    base: OptimizationResult
+    method: str = "L-BFGS-B"       # 'L-BFGS-B' | 'TRF' | 'LM'
+    success: bool = False
+    status: int = 0
+    message: str = ""
+    nit: int = 0
+    nfev: int = 0
+    njev: int = 0
+    grad_norm: float = 0.0
+    bounds_active: List[str] = []  # имена координат на границе
+    n_forward: int = 0             # дельта счётчиков задачи за запуск
+    n_gradient: int = 0
+    wall_time: float = 0.0
+    validation: Dict[str, float] = {}   # held-out протоколы
+
+@dataclass
+class StartResult:            # один старт мультистарта
+    index: int = 0
+    x0_origin: str = "manual"  # 'sobol' | 'lhs' | 'random' | ...
+    phi0: np.ndarray = ...
+    phi: np.ndarray = ...
+    loss: float = 0.0
+    status: str = "pending"    # 'ok' | 'screen_rejected' | 'failed'
+    message: str = ""
+    screened_loss: Optional[float] = None
+    refined: bool = False
+    local: Optional[LocalOptimizerResult] = None
+    wall_time: float = 0.0
+
+@dataclass
+class MultistartResult:       # итог мультистарта
+    base: OptimizationResult
+    solutions: List[StartResult] = []
+    best_index: int = -1
+    n_starts: int = 0
+    n_refined: int = 0
+    n_failed: int = 0
+    seed: Optional[int] = None
+    clustering: Dict[str, Any] = {}    # n_clusters / labels / representatives
+    wall_time: float = 0.0
+
+@dataclass
+class RunCheckpoint:          # чекпоинт прерванного запуска
+    seed: Optional[int] = None
+    config: Dict[str, Any] = {}
+    completed: List[Any] = []
+    pending: List[Any] = []
+    best_index: int = -1
+
+@dataclass
+class JacobianResult:         # якобиан невязок (forward sensitivities)
+    J: np.ndarray = ...        # [n_residuals, size]
+    r: np.ndarray = ...
+    loss: float = 0.0          # 0.5 * ||r||^2
+    phi: np.ndarray = ...
+    n_forward: int = 0
+    wall_time: float = 0.0
+    method: str = "forward"
+```
+
+Все DTO: `to_dict()` / `from_dict()` / `save(path)` / `load(path)`.
+
+### Experiment / MultiExperimentProblem / FrozenProblem
+
+```python
+@dataclass
+class Experiment:             # протокол одного эксперимента
+    name: str
+    t_sequence: TensorType
+    inputs: Optional[TensorType] = None
+    objective: Optional[Callable] = None   # None -> objective задачи (validate)
+    initial_state: Optional[tuple] = None  # (pop, syn)
+
+class MultiExperimentProblem:
+    # одна сеть + один ParameterSpace; сумма потерь в одной GradientTape,
+    # residual — конкатенация, компоненты с префиксом '{name}/'
+    def __init__(self, network, parameter_space, experiments,
+                 grad_mode="assign", held_out=None): ...
+    # duck parity с CalibrationProblem: size/pack/unpack/bounds_phi/
+    # evaluate/value_and_gradient/residual/simulate/validate/counters
+
+class FrozenProblem:
+    # подпространство φ: free_names свободны, fixed заморожены на явных θ,
+    # прочие — на текущих значениях модели на момент конструирования
+    def __init__(self, problem, free_names=None, fixed=None): ...
+    # evaluate/value_and_gradient (reduced-градиент)/residual/validate/
+    # simulate/bounds_phi/pack/unpack; счётчики общие с базовой задачей
+```
+
+### Локальные оптимизаторы (P1)
+
+```python
+def minimize_lbfgsb(problem, phi0=None, *, maxiter=200, gtol=1e-6,
+                    ftol=2.2e-9, validate=True, options=None
+                    ) -> LocalOptimizerResult
+def least_squares(problem, phi0=None, *, method="trf", jacobian=None,
+                  x_scale="jac", max_nfev=None, validate=True, **kwargs
+                  ) -> LocalOptimizerResult
+```
+
+`least_squares`: `method` — `'trf'` (bounds) | `'lm'` (только без bounds);
+`jacobian` — `None | '2-point' | '3-point' | callable(x) -> [m, n]`
+(callable лениво связывается с `sensitivities.residual_jacobian`). Нефинитный
+старт/невязки отклоняются `ValueError` до запуска решателя.
+
+### Чувствительности (P1)
+
+```python
+def residual_jvp(problem, phi, v) -> Tuple[np.ndarray, np.ndarray]
+    # (r, J·v) — numpy float64, [n_residuals]
+def residual_jacobian(problem, phi, *, force=False, max_params=200
+                      ) -> JacobianResult
+def value_and_gradient_checkpointed(problem, phi, segment_length
+                                    ) -> CheckpointedGradient
+def truncated_bptt(problem, phi0, optimizer, *, horizon, epochs,
+                   warm_steps=0) -> TruncatedResult
+
+@dataclass
+class CheckpointedGradient:
+    loss: float
+    grad: np.ndarray
+    segments: int
+    wall_time: float
+    peak_memory: Optional[float] = None   # tracemalloc, нижняя оценка
+
+@dataclass
+class TruncatedResult:
+    history: List[Dict[str, float]]
+    final_loss: float      # последнее обучающее окно (приближённо)
+    free_run_loss: float   # полный свободный прогон после обучения
+    notes: str             # документация приближённости режима
+```
+
+### Multiple shooting (P1)
+
+```python
+@dataclass
+class ShootingConfig:
+    nodes: Union[int, Sequence[int]]   # сегменты или явные границы [0..T]
+    def resolve(self, T: int) -> List[int]: ...
+
+@dataclass
+class SingleShootingCheck:
+    loss_ms: float
+    loss_single: float
+    gaps: Dict[str, Any]       # max/mean/l2/finite/joints
+    consistent: bool           # разрывы <= gap_tol, потери конечны
+
+class MultipleShootingProblem:
+    def __init__(self, problem, config, *, continuity_weight=1.0,
+                 include_syn_states=False): ...
+    # duck parity с CalibrationProblem + специфичные:
+    def simulate_segment(self, phi, k) -> NetworkOutput: ...
+    def continuity_gaps(self, phi=None) -> Dict[str, Any]: ...
+    def initialize_from_single_shooting(self, phi_base=None) -> tf.Tensor: ...
+    def to_single_shooting_problem(self, phi) -> CalibrationProblem: ...
+    def finalize(self, phi, gap_tol=1e-6) -> SingleShootingCheck: ...
+```
+
+Residual-раскладка `r = [r_data; √w·gap_k]`, `0.5·‖r‖² == loss_ms` точно.
+`BrunelFokkerPlanck` не поддерживается (`NotImplementedError`).
+
+### Стратегии и расписания (P1)
+
+```python
+def sample_phi0s(space, n, *, method="sobol", seed=None,
+                 log_uniform=None, clip_to_bounds=True) -> np.ndarray
+def multistart(problem, *, n_starts=20, method="sobol", screen_evals=1,
+               refine_top_k=5, local="lbfgsb", seed=None,
+               checkpoint_path=None, resume=False, dedup_rtol=1e-4
+               ) -> MultistartResult
+def dt_continuation(build_problem, dts, *, optimizer="lbfgsb", **kwargs
+                    ) -> ContinuationResult
+def subset_continuation(problem, stages_free_names, *, local="lbfgsb",
+                        **kwargs) -> ContinuationResult
+
+@dataclass
+class ContinuationResult:     # общий DTO continuation-цепочек
+    stage_results: List[Any] = []
+    final_result: Any = None
+    final_dt: float = 0.0
+    wall_time: float = 0.0
+    history: List[Dict[str, Any]] = []
+
+@dataclass
+class Stage:
+    name: str
+    problem: Any               # обычно view базовой CalibrationProblem
+    optimizer: Union[str, Callable] = "lbfgsb"
+    maxiter: int = 200
+    meta: Dict[str, Any] = {}  # 'alpha' зарезервирован для teacher forcing
+
+class ContinuationScheduler:
+    def __init__(self, stages: Sequence[Stage]): ...
+    def run(self, problem) -> ScheduleResult:
+        # перенос phi между стадиями + обязательный free_run_check
+        ...
+
+@dataclass
+class ScheduleResult:
+    stage_results: List[Any] = []
+    final_result: Any = None
+    alpha_history: List[float] = []
+    free_run_check: Optional[Evaluation] = None
+    history: List[Dict[str, Any]] = []
+    wall_time: float = 0.0
+
+def horizon_growth(base_problem, horizons, *, build_inputs=None) -> List[Stage]
+def teacher_forcing_schedule(base_problem, target_rates, alphas) -> List[Stage]
+def objective_schedule(base_problem, objectives) -> List[Stage]
+def smooth_objective(objective, window: int) -> ResidualLoss
+```
+
+### Идентифицируемость (P1)
+
+```python
+def compute_fim(jac: JacobianResult, *, energy=0.99, param_names=None,
+                collinearity_threshold=0.95, max_dirs=10) -> FIMResult
+def likelihood_profile(problem, name, *, values=None, n_points=11, grid=None,
+                       optimizer="lbfgsb", warm_start=True) -> ProfileResult
+def select_subset(problem, jac, keep, *, refit=True) -> SubsetResult
+
+@dataclass
+class FIMDirection:
+    index: int
+    singular_value: float
+    eigenvalue: float
+    energy_fraction: float
+    cumulative_energy: float
+    top_params: List[Tuple[str, float]]   # до 5 крупнейших компонент
+
+@dataclass
+class CollinearityPair:
+    first: str
+    second: str
+    cosine: float
+
+@dataclass
+class FIMResult:              # F = JᵀJ по готовому якобиану
+    fim: np.ndarray
+    eigenvalues: np.ndarray
+    eigenvectors: np.ndarray
+    singular_values: np.ndarray
+    condition_number: float       # kappa(J) по ненулевым s
+    condition_number_fim: float   # kappa(F)
+    effective_rank: int           # по накопленной энергии lambda
+    energy: float = 0.99
+    stiff_dirs: List[FIMDirection] = []
+    soft_dirs: List[FIMDirection] = []
+    collinearity: List[CollinearityPair] = []
+    param_sensitivity: List[Tuple[str, float]] = []
+    param_names: List[str] = []
+    phi: np.ndarray = ...
+    loss: float = 0.0
+    J_shape: Tuple[int, int] = (0, 0)
+
+@dataclass
+class ProfileResult:         # одномерный профиль правдоподобия
+    name: str
+    theta_values: List[float]
+    losses: List[float]           # NaN для неуспешных узлов
+    rel_loss: List[float]
+    successes: List[bool]
+    phi_path: List[Optional[np.ndarray]]
+    nfev: List[int]
+    messages: List[str]
+    intervals: Dict[str, Optional[Tuple[float, float]]]  # '0.95' по chi2
+    chi2_threshold: float         # 3.8414588 (2*dNLL ~ chi2(1))
+    rel_loss_threshold: float     # 1.9207294
+    warnings: List[str] = []
+    optimizer: str = "lbfgsb"
+    warm_start: bool = True
+    n_forward: int = 0
+    n_gradient: int = 0
+    wall_time: float = 0.0
+    notes: str = ""
+
+@dataclass
+class SubsetResult:          # доводка подмножества с оценкой смещения
+    kept_names: List[str]
+    fixed_names: List[str]
+    refit_result: Optional[LocalOptimizerResult]
+    loss_before: float
+    loss_after: Optional[float]
+    theta_delta_kept: Optional[Dict[str, np.ndarray]]
+    theta_delta_fixed: Optional[Dict[str, np.ndarray]]  # структурно 0
+    prediction_delta: Optional[Dict[str, float]]   # ||dr||/||r|| по популяциям
+    validation_delta: Optional[Dict[str, float]]   # dloss на held-out
+    notes: str = ""
+    n_forward: int = 0
+    n_gradient: int = 0
+    wall_time: float = 0.0
+```
 
 ### Диагностика градиентов
 

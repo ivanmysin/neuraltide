@@ -10,25 +10,32 @@ ParameterSpace: единый реестр оптимизируемых пара�
 Стабильные полные имена имеют вид ``<owner>/<param>`` (например
 ``exc/Delta_I`` или ``inh->exc/tau_f``): owner — имя популяции/синапса
 в NetworkGraph, param — имя переменной без служебного суффикса ``:0``.
+Компоненты начального состояния регистрируются отдельно именами вида
+``x0/<population>/<slot>`` (метод add_initial_state_entries) и адресуются
+StateLocator(population, slot) в плоском списке начальных состояний сети
+(см. NetworkRNN.pop_state_offsets).
 
 Физические min/max извлекаются из MinMaxConstraint переменной
 (т.е. из ``min``/``max`` пользовательского params-словаря). Без явно
 заданного transform используется identity — старый params-формат
 продолжает работать без изменений.
 
-Ограничения P0:
+Ограничения P0/P1:
   * автоматически охватываются только trainable-параметры популяций
     и синапсов графа. Параметры генераторов входов и readout-слои в
     ``network.trainable_variables`` обычно не входят — они не
     автоматизируются и не обещаются; для nuisance-параметров
     (сдвиги, масштабы, параметры шума) используйте ручную регистрацию
     ``add_entry``;
-  * неизвестные trainable variables сети пропускаются с warnings.warn.
+  * неизвестные trainable variables сети пропускаются с warnings.warn;
+  * записи начального состояния (kind 'initial_state'/'shooting_state')
+    не привязаны к переменным модели: pack(None) требует явных values
+    для них, apply_to_model их пропускает.
 """
 
 import warnings
 from dataclasses import dataclass, field
-from typing import Dict, List, Mapping, Optional
+from typing import Dict, List, Mapping, Optional, Tuple
 
 import tensorflow as tf
 
@@ -36,7 +43,10 @@ import neuraltide.config
 from neuraltide.core.types import cast_if_needed
 from neuraltide.optimization.transforms import IdentityTransform, Transform
 
-__all__ = ["ParameterEntry", "ParameterSpace"]
+__all__ = ["ParameterEntry", "ParameterSpace", "StateLocator"]
+
+_ENTRY_KINDS = ("model_var", "initial_state", "shooting_state")
+_TENSOR_KINDS = ("initial_state", "shooting_state")
 
 
 def _short_name(var: tf.Variable) -> str:
@@ -76,18 +86,47 @@ def _bounds_from_variable(var: tf.Variable):
 
 
 @dataclass
+class StateLocator:
+    """
+    Адрес компоненты состояния в плоском списке начальных состояний сети.
+
+    Атрибуты:
+        population: имя популяции в NetworkGraph;
+        slot: индекс тензора внутри состояния популяции
+            (0 <= slot < len(pop.state_size)).
+
+    Плоский индекс в списке pop-начальных состояний вычисляется как
+    ``start + slot``, где ``(start, count) = network.pop_state_offsets[
+    population]``.
+    """
+
+    population: str
+    slot: int
+
+
+@dataclass
 class ParameterEntry:
     """
     Одна оптимизируемая величина ParameterSpace.
 
     Атрибуты:
-        full_name: стабильное полное имя вида 'exc/Delta_I';
+        full_name: стабильное полное имя вида 'exc/Delta_I' или
+            'x0/exc/0' для компонент начального состояния;
         shape: исходная форма тензора параметра;
         transform: преобразование координат θ = forward(φ);
         min/max: физические границы (None — не ограничен);
-        group: 'population' | 'synapse' | пользовательская группа;
+        group: 'population' | 'synapse' | 'initial_state' |
+            пользовательская группа;
         trainable: признак оптимизируемости;
-        variable: связанная tf.Variable (None для ручных записей).
+        kind: 'model_var' — параметр модели (переменная или ручная
+            запись), 'initial_state'/'shooting_state' — тензорная
+            компонента начального состояния, не привязанная к
+            переменной модели;
+        locator: адрес состояния для kind 'initial_state'/'shooting_state',
+            иначе None;
+        variable: связанная tf.Variable (None для ручных записей и
+            тензорных записей состояния — kind != 'model_var' требует
+            variable=None).
     """
 
     full_name: str
@@ -98,9 +137,26 @@ class ParameterEntry:
     group: str = "population"
     trainable: bool = True
     variable: Optional[tf.Variable] = None
+    kind: str = "model_var"
+    locator: Optional[StateLocator] = None
 
     def __post_init__(self) -> None:
         self.shape = tf.TensorShape(self.shape)
+        if self.kind not in _ENTRY_KINDS:
+            raise ValueError(
+                f"ParameterEntry: unknown kind '{self.kind}'; "
+                f"expected one of {list(_ENTRY_KINDS)}."
+            )
+        if self.kind != "model_var" and self.variable is not None:
+            raise ValueError(
+                f"ParameterEntry: kind '{self.kind}' requires variable=None "
+                f"('{self.full_name}')."
+            )
+        if self.kind in _TENSOR_KINDS and self.locator is None:
+            raise ValueError(
+                f"ParameterEntry: kind '{self.kind}' requires a StateLocator "
+                f"('{self.full_name}')."
+            )
 
     @property
     def numel(self) -> int:
@@ -214,6 +270,117 @@ class ParameterSpace:
             )
         self._entries[entry.full_name] = entry
 
+    def add_initial_state_entries(
+        self,
+        network,
+        include: Optional[object] = None,
+        transforms: Optional[Mapping[str, Transform]] = None,
+        bounds: Optional[Mapping[str, Tuple[Optional[float], Optional[float]]]] = None,
+    ) -> List[str]:
+        """
+        Регистрирует оптимизируемые компоненты начального состояния сети.
+
+        Для каждой динамической популяции графа и каждого слота её
+        state_size создаётся запись 'x0/<population>/<slot>' формы
+        [1, n_units] с group='initial_state', kind='initial_state' и
+        locator=StateLocator(population, slot). Адресация слотов —
+        через network.pop_state_offsets. Слоты с нулевым числом
+        элементов пропускаются.
+
+        Args:
+            network: NetworkRNN — источник популяций и offsets.
+            include: опциональный фильтр — перечисление полных имён
+                ('x0/exc/0') и/или кортежей (population, slot). Без него
+                регистрируются все слоты всех динамических популяций.
+            transforms: необязательный словарь {full_name: Transform};
+                записи без явного transform получают identity.
+            bounds: необязательный словарь {full_name: (min, max)} —
+                физические границы компонент состояния.
+
+        Returns:
+            Список зарегистрированных имён (в порядке создания).
+
+        Raises:
+            TypeError: при transform не-Transform.
+            ValueError: при дублировании имени или неизвестном include.
+        """
+        remaining_transforms: Dict[str, Transform] = dict(transforms or {})
+        remaining_bounds: Dict[str, Tuple[Optional[float], Optional[float]]] = dict(
+            bounds or {}
+        )
+        include_set = self._normalize_include(include)
+        registered: List[str] = []
+
+        for pop_name in network._graph.dynamic_population_names:
+            pop = network._graph._populations[pop_name]
+            for slot, shape in enumerate(pop.state_size):
+                full = f"x0/{pop_name}/{slot}"
+                if include_set is not None and full not in include_set:
+                    continue
+                shape = tf.TensorShape(shape)
+                if shape.num_elements() == 0:
+                    continue
+                if full in self._entries:
+                    raise ValueError(
+                        f"ParameterSpace: duplicate parameter name '{full}'."
+                    )
+                transform = remaining_transforms.pop(full, None)
+                if transform is None:
+                    transform = IdentityTransform()
+                elif not isinstance(transform, Transform):
+                    raise TypeError(
+                        f"ParameterSpace: transform for '{full}' must be a "
+                        f"Transform instance, got {type(transform).__name__}."
+                    )
+                min_val, max_val = remaining_bounds.pop(full, (None, None))
+                self._entries[full] = ParameterEntry(
+                    full_name=full,
+                    shape=shape,
+                    transform=transform,
+                    min=min_val,
+                    max=max_val,
+                    group="initial_state",
+                    trainable=True,
+                    variable=None,
+                    kind="initial_state",
+                    locator=StateLocator(population=pop_name, slot=slot),
+                )
+                registered.append(full)
+
+        if remaining_transforms:
+            warnings.warn(
+                "ParameterSpace: transforms provided for unknown "
+                f"initial-state entries: {sorted(remaining_transforms)}.",
+                UserWarning,
+                stacklevel=2,
+            )
+        if remaining_bounds:
+            warnings.warn(
+                "ParameterSpace: bounds provided for unknown "
+                f"initial-state entries: {sorted(remaining_bounds)}.",
+                UserWarning,
+                stacklevel=2,
+            )
+        return registered
+
+    @staticmethod
+    def _normalize_include(include: Optional[object]) -> Optional[set]:
+        """Приводит include к множеству полных имён; None — без фильтра."""
+        if include is None:
+            return None
+        names = set()
+        for item in include:
+            if isinstance(item, str):
+                names.add(item)
+            elif isinstance(item, tuple) and len(item) == 2:
+                names.add(f"x0/{item[0]}/{item[1]}")
+            else:
+                raise ValueError(
+                    "ParameterSpace: 'include' items must be full names "
+                    f"('x0/exc/0') or (population, slot) tuples, got {item!r}."
+                )
+        return names
+
     # ------------------------------------------------------------------
     # Интроспекция
     # ------------------------------------------------------------------
@@ -225,6 +392,16 @@ class ParameterSpace:
     @property
     def names(self) -> List[str]:
         return list(self._entries.keys())
+
+    @property
+    def model_entry_names(self) -> List[str]:
+        """Имена записей параметров модели (kind == 'model_var')."""
+        return [n for n, e in self._entries.items() if e.kind == "model_var"]
+
+    @property
+    def tensor_entry_names(self) -> List[str]:
+        """Имена тензорных записей состояния ('initial_state'/'shooting_state')."""
+        return [n for n, e in self._entries.items() if e.kind in _TENSOR_KINDS]
 
     @property
     def size(self) -> int:
@@ -249,9 +426,16 @@ class ParameterSpace:
 
     @staticmethod
     def _value_to_tensor(value, entry: ParameterEntry) -> tf.Tensor:
-        tensor = cast_if_needed(
-            tf.convert_to_tensor(value), neuraltide.config.get_dtype()
-        )
+        # python scalar/list/ndarray конвертируем СРАЗУ в целевом dtype:
+        # convert_to_tensor без dtype квантует float64 в float32 (теряется
+        # точность fixed-значений FrozenProblem / values в pack). Уже
+        # существующие tf.Tensor/tf.Variable приводим через cast (у них
+        # dtype зафиксирован и convert с dtype= поднял бы ValueError).
+        dtype = neuraltide.config.get_dtype()
+        if tf.is_tensor(value):
+            tensor = cast_if_needed(value, dtype)
+        else:
+            tensor = tf.convert_to_tensor(value, dtype=dtype)
         numel = tensor.shape.num_elements()
         if numel is not None and numel != entry.numel:
             if numel == 1 and entry.numel > 1:

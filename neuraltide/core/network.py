@@ -712,6 +712,22 @@ class NetworkRNN(tf.keras.layers.Layer):
         )
 
     @property
+    def pop_state_offsets(self) -> Dict[str, Tuple[int, int]]:
+        """
+        Отображение имя популяции -> (start, count) в плоском списке
+        начальных состояний популяций (первый элемент кортежа
+        начального состояния, см. get_initial_state()).
+
+        start — индекс первого тензора популяции, count — число тензоров
+        (len(pop.state_size)). Возвращается копия; используется слоем
+        калибровки для адресации обучаемых компонент начального состояния.
+        """
+        return {
+            name: (start, len(self._graph._populations[name].state_size))
+            for name, start in self._pop_state_offsets.items()
+        }
+
+    @property
     def trainable_variables(self) -> List[tf.Variable]:
         return self._cached_trainable_vars
 

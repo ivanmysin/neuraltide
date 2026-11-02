@@ -740,3 +740,55 @@ pos_x, pos_y, vx, vy (см, см/мс)  ──→  extra_inputs [batch, T, 4]
 постановку задачи через ObservationSpec/ResidualLoss и CalibrationProblem,
 верификацию градиента taylor_test'ом и ручные шаги Adam по вектору φ с
 сохранением результата в OptimizationResult (без файлов).
+
+
+---
+
+## Пример 12: Сквозной рабочий процесс калибровки P1
+
+Полный пример: [`examples/example_08_p1_workflow.py`](../examples/example_08_p1_workflow.py)
+
+Демонстрирует практический набор этапа P1 на малой синтетической сети
+(WilsonCowan + StaticSynapse от SinusoidalGenerator) с известным theta*:
+
+1. **multistart** — детерминированный Sobol-дизайн стартов, screening и
+   локальная доводка top-k через `least_squares` (TRF);
+2. **residual_jacobian** — якобиан невязок в точке решения (forward
+   sensitivities, по столбцам через unit-JVP);
+3. **compute_fim** — FIM = JᵀJ: спектр, effective rank, число
+   обусловленности, жёсткие направления и коллинеарные пары параметров;
+4. **likelihood_profile** — одномерный профиль правдоподобия по `exc/tau` с
+   χ²-интервалом 95% (warm start от соседнего узла);
+5. **validate / free-run** — отложенный протокол (другая частота входа) и
+   честный свободный прогон без teacher forcing.
+
+```python
+import numpy as np
+import tensorflow as tf
+import neuraltide.config
+from neuraltide.optimization import (
+    CalibrationProblem, LogTransform, ObservationSpec, ParameterSpace,
+    ResidualLoss, compute_fim, least_squares, likelihood_profile,
+    multistart, residual_jacobian,
+)
+# ... сборка сети, target = прогон при theta*, space с LogTransform,
+#     problem = CalibrationProblem(network, space, t_seq, inputs, objective)
+
+ms = multistart(problem, n_starts=8, method="sobol", refine_top_k=3,
+                local="least_squares", seed=7)
+phi_best = np.asarray(ms.base.phi_best)
+
+jac = residual_jacobian(problem, phi_best)
+fim = compute_fim(jac, param_names=space.names)
+
+profile = likelihood_profile(problem, "exc/tau",
+                             grid=np.linspace(4.0, 14.0, 6))
+print(profile.intervals["0.95"])   # 95% интервал по chi2(1)
+
+validation = problem.validate(phi_best)   # held-out протокол
+ev_free = problem.evaluate(phi_best)      # честный free-run
+```
+
+Ограничения P1 (eager-режим, batch=1, shooting — penalty method, FIM по
+готовому якобиану, профили для гауссова шума с известной sigma) см. в
+[`docs/optimization.md`](optimization.md). Бенчмарки L0–L2 — в `benchmarks/`.

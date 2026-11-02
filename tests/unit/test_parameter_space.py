@@ -24,6 +24,7 @@ from neuraltide.optimization import (
     ParameterEntry,
     ParameterSpace,
     ScaledSigmoidTransform,
+    StateLocator,
 )
 from neuraltide.populations import WilsonCowan
 from neuraltide.synapses import StaticSynapse, TsodyksMarkramSynapse
@@ -379,3 +380,148 @@ class TestFloat64:
             np.testing.assert_allclose(
                 theta[name].numpy(), var.numpy(), rtol=1e-12, atol=1e-14
             )
+
+
+class TestInitialStateEntries:
+    """P1: записи начального состояния 'x0/<pop>/<slot>'."""
+
+    def test_creates_entries_for_all_population_slots(self, network):
+        space = ParameterSpace.from_network(network)
+        registered = space.add_initial_state_entries(network)
+        assert registered == ["x0/exc/0", "x0/inh/0"]
+        assert space.names == EXPECTED_NAMES + ["x0/exc/0", "x0/inh/0"]
+        entry = space.entries["x0/exc/0"]
+        assert entry.kind == "initial_state"
+        assert entry.variable is None
+        assert entry.group == "initial_state"
+        assert entry.trainable is True
+        assert entry.shape == tf.TensorShape([1, 2])
+        assert entry.numel == 2
+        assert entry.locator == StateLocator(population="exc", slot=0)
+        assert space.entries["x0/inh/0"].shape == tf.TensorShape([1, 1])
+
+    def test_include_filters_by_name_and_slot_tuple(self, network):
+        space = ParameterSpace.from_network(network)
+        space.add_initial_state_entries(network, include={"x0/inh/0"})
+        assert space.tensor_entry_names == ["x0/inh/0"]
+        space2 = ParameterSpace.from_network(network)
+        space2.add_initial_state_entries(network, include={("exc", 0)})
+        assert space2.tensor_entry_names == ["x0/exc/0"]
+
+    def test_include_unknown_item_raises(self, network):
+        space = ParameterSpace.from_network(network)
+        with pytest.raises(ValueError, match="include"):
+            space.add_initial_state_entries(network, include={42})
+
+    def test_pack_unpack_roundtrip_with_x0(self, network):
+        space = ParameterSpace.from_network(network)
+        space.add_initial_state_entries(network)
+        values = {
+            name: (
+                entry.variable.numpy()
+                if entry.variable is not None
+                else np.full(entry.shape, 0.3)
+            )
+            for name, entry in space.entries.items()
+        }
+        phi = space.pack(values)
+        assert phi.shape == (space.size,)
+        theta = space.unpack(phi)
+        for name, entry in space.entries.items():
+            ref = (
+                entry.variable.numpy()
+                if entry.variable is not None
+                else np.full(entry.shape, 0.3)
+            )
+            np.testing.assert_allclose(theta[name].numpy(), ref, rtol=1e-6, atol=1e-8)
+
+    def test_pack_none_with_x0_requires_values(self, network):
+        space = ParameterSpace.from_network(network)
+        space.add_initial_state_entries(network)
+        with pytest.raises(ValueError, match=r"pack\(None\)"):
+            space.pack(None)
+
+    def test_apply_to_model_skips_x0_entries(self, network):
+        space = ParameterSpace.from_network(network)
+        space.add_initial_state_entries(network)
+        values = {
+            name: (
+                entry.variable.numpy()
+                if entry.variable is not None
+                else np.full(entry.shape, 0.1)
+            )
+            for name, entry in space.entries.items()
+        }
+        values["exc/w"] = np.array([3.0, 4.0])
+        theta = space.unpack(space.pack(values))
+        space.apply_to_model(theta)  # x0-записи пропускаются без ошибок
+        np.testing.assert_allclose(
+            space.entries["exc/w"].variable.numpy(), [3.0, 4.0], rtol=1e-6
+        )
+
+    def test_transforms_and_bounds_applied(self, network):
+        space = ParameterSpace.from_network(network)
+        space.add_initial_state_entries(
+            network,
+            transforms={"x0/exc/0": LogTransform()},
+            bounds={"x0/exc/0": (0.01, 10.0)},
+        )
+        entry = space.entries["x0/exc/0"]
+        assert isinstance(entry.transform, LogTransform)
+        assert entry.min == pytest.approx(0.01)
+        assert entry.max == pytest.approx(10.0)
+        values = {
+            name: (
+                entry.variable.numpy()
+                if entry.variable is not None
+                else np.full(entry.shape, 1.0)
+            )
+            for name, entry in space.entries.items()
+        }
+        theta = space.unpack(space.pack(values))
+        # log-transform: phi = log(1.0) = 0 → forward(0) = 1.0
+        np.testing.assert_allclose(theta["x0/exc/0"].numpy(), [[1.0, 1.0]], rtol=1e-6)
+
+    def test_unknown_transforms_and_bounds_warn(self, network):
+        space = ParameterSpace.from_network(network)
+        with pytest.warns(UserWarning, match="unknown"):
+            space.add_initial_state_entries(
+                network, transforms={"x0/nope/0": LogTransform()}
+            )
+        space2 = ParameterSpace.from_network(network)
+        with pytest.warns(UserWarning, match="unknown"):
+            space2.add_initial_state_entries(network, bounds={"x0/nope/0": (0.0, 1.0)})
+
+    def test_duplicate_registration_raises(self, network):
+        space = ParameterSpace.from_network(network)
+        space.add_initial_state_entries(network)
+        with pytest.raises(ValueError, match="duplicate"):
+            space.add_initial_state_entries(network)
+
+    def test_name_helpers_partition_entries(self, network):
+        space = ParameterSpace.from_network(network)
+        space.add_initial_state_entries(network)
+        assert space.model_entry_names == EXPECTED_NAMES
+        assert space.tensor_entry_names == ["x0/exc/0", "x0/inh/0"]
+
+    def test_p0_entries_default_to_model_var(self, network):
+        space = ParameterSpace.from_network(network)
+        for entry in space.entries.values():
+            assert entry.kind == "model_var"
+            assert entry.locator is None
+        assert space.tensor_entry_names == []
+
+    def test_entry_kind_validation(self):
+        with pytest.raises(ValueError, match="unknown kind"):
+            ParameterEntry(full_name="x", shape=(1,), kind="nope")
+        var = tf.Variable([1.0])
+        with pytest.raises(ValueError, match="variable=None"):
+            ParameterEntry(
+                full_name="x",
+                shape=(1,),
+                kind="initial_state",
+                variable=var,
+                locator=StateLocator("exc", 0),
+            )
+        with pytest.raises(ValueError, match="StateLocator"):
+            ParameterEntry(full_name="x", shape=(1,), kind="shooting_state")

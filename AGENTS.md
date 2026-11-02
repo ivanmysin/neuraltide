@@ -20,6 +20,7 @@ Python **>=3.12** (pyproject.toml; README says 3.9 but that is outdated).
 - **`neuraltide.integrators`** — Euler, Heun, RK4.
 - **`neuraltide.core.network`** — `NetworkGraph` (topology), `NetworkRNN` (simulation via `tf.while_loop` + TensorArray).
 - **`neuraltide.training`** — Losses, readouts, Trainer, callbacks, adjoint solver.
+- **`neuraltide.optimization`** — слой калибровки (P0/P1 дорожной карты `docs/optimization_roadmap.md`): `CalibrationProblem`/`ParameterSpace`/`transforms`/`objectives`/`results`/`diagnostics` (P0) и `local` (SciPy L-BFGS-B, least_squares TRF/LM), `sensitivities` (forward JVP/якобиан, checkpointed/truncated BPTT), `shooting` (multiple shooting, penalty method), `strategies` (sample_phi0s, multistart, dt/subset continuation), `schedules` (Stage, ContinuationScheduler, teacher forcing с обязательным alpha=0), `identifiability` (FIM, likelihood_profile, select_subset). Пакетный `__init__.py` ленивый (PEP-562 `_LAZY_MAP`); всё API — eager-режим, batch=1.
 - **`neuraltide.config`** — Global dtype (float32 default), debug_numerics flag, class registries.
 - **`neuraltide.constraints`** — MinMaxConstraint, NonNegConstraint, UnitIntervalConstraint.
 
