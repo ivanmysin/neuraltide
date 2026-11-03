@@ -792,3 +792,61 @@ ev_free = problem.evaluate(phi_best)      # честный free-run
 Ограничения P1 (eager-режим, batch=1, shooting — penalty method, FIM по
 готовому якобиану, профили для гауссова шума с известной sigma) см. в
 [`docs/optimization.md`](optimization.md). Бенчмарки L0–L2 — в `benchmarks/`.
+
+---
+
+## Пример 13: Сквозной рабочий процесс калибровки P2
+
+Полный пример: [`examples/example_09_p2_workflow.py`](../examples/example_09_p2_workflow.py)
+
+Демонстрирует набор этапа P2 на малой синтетической E–I сети
+(WilsonCowan x 2 + StaticSynapse от SinusoidalGenerator) с известным
+theta* и зашумлёнными целями (шум с тем же sigma, что в ObservationSpec —
+иначе exact-fit вырождает residual-нормировку и UQ):
+
+1. **global_search** — DE малого бюджета (max_evals) с доводкой
+   refine_top_k через L-BFGS-B;
+2. **minimize_lbfgsb** — явная доводка от лучшей точки глобальной фазы,
+   восстановление theta*;
+3. **balanced_train** — балансировка компонент потерь (GradNormWeights) с
+   PCGrad-проекцией конфликтующих градиентов и обязательным сравнением с
+   baseline FixedWeights;
+4. **laplace_approximation** — GN-ковариация постериора через якобиан
+   невязок, маргинальные 95%-интервалы параметров (на свежем экземпляре
+   задачи: TF forward-AD несовместим с предшествующими gradient-прогонами
+   в пределах одного NetworkRNN);
+5. **predictive_intervals** — прогнозные интервалы firing_rates по
+   ансамблю phi из posterior, покрытие зашумлённой цели;
+6. Отдельно: **residual_diagnostics** (остатки в MAP-точке) и
+   **evaluate_candidates** с SerialPool (эквивалентность потерь ручному
+   циклу problem.evaluate).
+
+```python
+from neuraltide.optimization import (
+    CalibrationProblem, GradNormWeights, ObservationSpec, ParameterSpace,
+    ResidualLoss, evaluate_candidates, global_search, laplace_approximation,
+    minimize_lbfgsb, balanced_train, pcgrad_project, predictive_intervals,
+    residual_diagnostics,
+)
+# ... сборка сети, зашумлённая цель, problem = CalibrationProblem(...)
+
+gs = global_search(problem, method="de", max_evals=200, refine_top_k=1,
+                   local="lbfgsb", seed=11)
+phi_map = minimize_lbfgsb(problem, gs.base.phi_best, maxiter=100).base.phi_best
+
+bt = balanced_train(problem, gs.base.phi_best, GradNormWeights(),
+                    optimizer="adam", max_steps=6, projector=pcgrad_project)
+# UQ — на свежем экземпляре задачи (ограничение TF forward-AD, см. ниже)
+problem_uq = build_problem()
+lap = laplace_approximation(problem_uq, phi_map, method="gn")
+samples = rng.multivariate_normal(lap.phi_map, lap.covariance, size=48)
+pred = predictive_intervals(problem_uq, samples, level=0.95)
+diag = residual_diagnostics(problem_uq, phi_map)
+```
+
+Ограничения P2 (eager/batch=1, optional extras `global`/`pareto` для
+cma/pymoo, экономика process parallelism в `benchmarks/l3_parallel_scaling.py`,
+tensor candidate-batch вне P2, несовместимость TF forward-AD с
+GradientTape в пределах одного NetworkRNN, exact-fit вырожден для UQ,
+балансировка — BPTT-only) см. в
+[`docs/optimization.md`](optimization.md). Бенчмарки L0–L3 — в `benchmarks/`.

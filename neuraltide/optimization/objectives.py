@@ -12,6 +12,10 @@ ObservationSpec описывает одно наблюдение: какая п�
 какой целевой траекторией, с какой моделью шума (sigma), весом, маской и
 видом функции потерь. ResidualLoss агрегирует набор спецификаций.
 
+Этап P2 добавляет робастные виды штрафа для тяжёлых выбросов
+(kind 'cauchy' и 'tukey', масштаб scale c) и допускает тензорный вес
+observation (0-d Tensor/Variable — например, обучаемый или адаптивный).
+
 Семантика нормировки — masked mean (как у MSELoss/MSLELoss): вклад
 наблюдения равен
 
@@ -36,7 +40,7 @@ Residual-вектор согласован с этой нормировкой п
 """
 
 from dataclasses import dataclass
-from typing import Dict, List, Optional, Sequence
+from typing import Any, Dict, List, Optional, Sequence
 
 import tensorflow as tf
 
@@ -47,7 +51,7 @@ from neuraltide.training.readouts import BaseReadout, IdentityReadout
 
 __all__ = ["ObservationSpec", "ResidualLoss"]
 
-_KINDS = ("l2", "relative", "msle", "huber", "pseudo_huber")
+_KINDS = ("l2", "relative", "msle", "huber", "pseudo_huber", "cauchy", "tukey")
 
 # Общий stateless-инстанс на все спецификации без readout.
 _IDENTITY_READOUT = IdentityReadout()
@@ -65,12 +69,15 @@ class ObservationSpec:
         sigma: масштаб шума измерений (> 0); вклад делится на sigma**2;
         mask: опциональная маска, broadcastable к target; семантика
             masked mean — масштаб маски значение не меняет;
-        weight: неотрицательный вес наблюдения в суммарной loss;
+        weight: неотрицательный вес наблюдения в суммарной loss; допускает
+            float либо 0-d Tensor/Variable (тогда приводится к глобальному
+            dtype и используется как есть — напр. обучаемый/адаптивный вес);
         kind: вид штрафа — 'l2' | 'relative' | 'msle' | 'huber' |
-            'pseudo_huber';
+            'pseudo_huber' | 'cauchy' | 'tukey';
         readout: опциональный BaseReadout, применяется к pred и target;
         eps: защита от деления на ноль / домен log1p (kind-зависимый);
-        delta: порог Хьюбера (> 0) для 'huber' и 'pseudo_huber'.
+        delta: порог Хьюбера (> 0) для 'huber' и 'pseudo_huber';
+        scale: масштаб c (> 0) для 'cauchy' и 'tukey'.
 
     Преобразование ошибки e и штраф psi(e) по видам:
         l2:           e = pred - target,           psi = 0.5 e^2
@@ -82,9 +89,18 @@ class ObservationSpec:
             psi = 0.5 e^2 при |e| <= delta, иначе delta (|e| - 0.5 delta)
         pseudo_huber: e = pred - target,
             psi = delta^2 (sqrt(1 + (e/delta)^2) - 1)
+        cauchy:       e = pred - target,
+            psi = c^2/2 * log(1 + (e/c)^2)
+        tukey:        e = pred - target,
+            psi = c^2/6 * (1 - (1 - (e/c)^2)^3) при |e| <= c, иначе c^2/6
 
     Для 'msle' предсказания должны быть неотрицательными (частоты разрядов
-    таковы по построению); eps защищает домен log1p около нуля.
+    таковы по построению); eps защищает домен log1p около нуля. Cauchy и
+    Tukey (biweight) ограничивают вклад выбросов: у cauchy хвост
+    логарифмический, у tukey вне |e| > c штраф константен (нулевой вклад
+    в градиент). Общая формула residual сохраняется:
+    sign(e) * sqrt(2 psi) — для cauchy/tukey она не тождественна e, но
+    0.5 * ||r||^2 == loss воспроизводится по-прежнему точно.
     """
 
     name: str
@@ -97,6 +113,7 @@ class ObservationSpec:
     readout: Optional[BaseReadout] = None
     eps: float = 1e-8
     delta: float = 1.0
+    scale: float = 1.0
 
     def __post_init__(self) -> None:
         if not isinstance(self.name, str) or not self.name:
@@ -112,16 +129,51 @@ class ObservationSpec:
             )
         if self.sigma <= 0.0:
             raise ValueError("ObservationSpec: 'sigma' must be positive.")
-        if self.weight < 0.0:
-            raise ValueError("ObservationSpec: 'weight' must be non-negative.")
         if self.delta <= 0.0:
             raise ValueError("ObservationSpec: 'delta' must be positive.")
+        if self.scale <= 0.0:
+            raise ValueError("ObservationSpec: 'scale' must be positive.")
         if self.eps < 0.0:
             raise ValueError("ObservationSpec: 'eps' must be non-negative.")
         dtype = neuraltide.config.get_dtype()
+        self.weight = self._normalize_weight(self.weight, dtype)
         self.target = cast_if_needed(tf.convert_to_tensor(self.target), dtype)
         if self.mask is not None:
             self.mask = cast_if_needed(tf.convert_to_tensor(self.mask), dtype)
+
+    @staticmethod
+    def _normalize_weight(weight, dtype) -> Any:
+        """
+        Валидация веса: float как раньше, либо 0-d Tensor/Variable.
+
+        Объект сохраняется как есть: Variable остаётся «живой» (чтение
+        текущего значения — в точках использования через _weight_tensor),
+        0-d Tensor — константой. Неотрицательность проверяется на месте.
+        """
+        del dtype  # приведение dtype — в _weight_tensor (на месте использования)
+        if isinstance(weight, (tf.Tensor, tf.Variable)):
+            w = tf.convert_to_tensor(weight)
+            if w.shape.rank != 0:
+                raise ValueError(
+                    "ObservationSpec: tensor 'weight' must be 0-d "
+                    f"(scalar), got shape {w.shape}."
+                )
+            if bool(tf.reduce_any(w < 0.0)):
+                raise ValueError("ObservationSpec: 'weight' must be non-negative.")
+            return weight
+        w = float(weight)
+        if w < 0.0:
+            raise ValueError("ObservationSpec: 'weight' must be non-negative.")
+        return w
+
+    @staticmethod
+    def _weight_tensor(spec: "ObservationSpec", dtype) -> TensorType:
+        """Вес наблюдения как тензор вычислительного dtype (live Variable)."""
+        if isinstance(spec.weight, (int, float)):
+            # tf.convert_to_tensor(float) дал бы float32 с округлением —
+            # константу строим сразу в целевом dtype.
+            return tf.constant(spec.weight, dtype=dtype)
+        return cast_if_needed(tf.convert_to_tensor(spec.weight), dtype)
 
 
 class ResidualLoss(BaseLoss):
@@ -183,7 +235,7 @@ class ResidualLoss(BaseLoss):
         """Преобразованная ошибка e (после readout)."""
         pred_r = self._readout(spec)(pred)
         tgt_r = self._readout(spec)(tgt)
-        if spec.kind in ("l2", "huber", "pseudo_huber"):
+        if spec.kind in ("l2", "huber", "pseudo_huber", "cauchy", "tukey"):
             return pred_r - tgt_r
         if spec.kind == "relative":
             return (pred_r - tgt_r) / (tf.abs(tgt_r) + spec.eps)
@@ -200,9 +252,18 @@ class ResidualLoss(BaseLoss):
             quadratic = 0.5 * e**2
             linear = spec.delta * (a - 0.5 * spec.delta)
             return tf.where(a <= spec.delta, quadratic, linear)
-        # pseudo_huber
-        ratio = e / spec.delta
-        return spec.delta**2 * (tf.sqrt(1.0 + ratio**2) - 1.0)
+        if spec.kind == "pseudo_huber":
+            ratio = e / spec.delta
+            return spec.delta**2 * (tf.sqrt(1.0 + ratio**2) - 1.0)
+        if spec.kind == "cauchy":
+            ratio = e / spec.scale
+            return 0.5 * spec.scale**2 * tf.math.log1p(ratio**2)
+        # tukey (biweight): квадратичная около нуля, константна при |e| > c
+        a = tf.abs(e)
+        ratio = e / spec.scale
+        quadratic = spec.scale**2 / 6.0 * (1.0 - (1.0 - ratio**2) ** 3)
+        constant = tf.constant(spec.scale**2 / 6.0, dtype=e.dtype)
+        return tf.where(a <= spec.scale, quadratic, constant)
 
     @staticmethod
     def _norm(spec: ObservationSpec, psi: TensorType) -> TensorType:
@@ -234,7 +295,8 @@ class ResidualLoss(BaseLoss):
         spec: ObservationSpec, psi: TensorType, m: TensorType, n: TensorType
     ) -> TensorType:
         """Вклад наблюдения: weight * sum(mask * psi) / (N * sigma^2)."""
-        return spec.weight * tf.reduce_sum(m * psi) / (n * spec.sigma**2)
+        w = ObservationSpec._weight_tensor(spec, psi.dtype)
+        return w * tf.reduce_sum(m * psi) / (n * spec.sigma**2)
 
     # ------------------------------------------------------------------
     # Скалярный интерфейс BaseLoss
@@ -332,7 +394,8 @@ class ResidualLoss(BaseLoss):
             else:
                 m = cast_if_needed(spec.mask, psi.dtype)
             n = self._norm(spec, psi)
-            scale = tf.sqrt(spec.weight / (n * spec.sigma**2))
+            w = ObservationSpec._weight_tensor(spec, psi.dtype)
+            scale = tf.sqrt(w / (n * spec.sigma**2))
             r = (
                 scale
                 * tf.sqrt(m)

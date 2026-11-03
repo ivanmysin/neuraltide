@@ -259,7 +259,7 @@ class TestValidation:
     def test_unknown_kind(self):
         with pytest.raises(ValueError, match="unknown kind"):
             ObservationSpec(
-                name="o", population="pop", target=np.zeros((1, T, N)), kind="cauchy"
+                name="o", population="pop", target=np.zeros((1, T, N)), kind="nonsense"
             )
 
     def test_duplicate_names(self):

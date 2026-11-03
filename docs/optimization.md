@@ -1,11 +1,13 @@
 # Оптимизация и калибровка
 
 Модуль `neuraltide.optimization` — слой калибровки поверх моделей сети. Он
-реализует этапы **P0/P1** дорожной карты (`docs/optimization_roadmap.md`):
-корректную постановку задачи и проверяемые градиенты (P0), затем практический
+реализует этапы **P0/P1/P2** дорожной карты (`docs/optimization_roadmap.md`):
+корректную постановку задачи и проверяемые градиенты (P0), практический
 набор методов калибровки (P1): сильные локальные оптимизаторы SciPy,
 мультистарт, режимы производных для длинных горизонтов, multiple shooting,
-continuation-расписания и анализ идентифицируемости. `Trainer` остаётся
+continuation-расписания и анализ идентифицируемости; затем глобальный
+поиск, робастные/балансируемые цели, ограничения на прогнозы, оценку
+неопределённости и пакетную оценку кандидатов (P2). `Trainer` остаётся
 простым совместимым API градиентного обучения; все новые методы работают
 поверх общего `CalibrationProblem`.
 
@@ -57,7 +59,13 @@ readout-слои автоматически не охватываются; nuisa
 - `l2` — 0.5·e², e = pred − target;
 - `relative` — 0.5·(e / (|target| + eps))²;
 - `msle` — 0.5·(log1p(pred + eps) − log1p(target + eps))²;
-- `huber` и `pseudo_huber` — порог `delta`, устойчивость к выбросам.
+- `huber` и `pseudo_huber` — порог `delta`, устойчивость к выбросам;
+- `cauchy` и `tukey` (P2) — масштаб `scale` c: cauchy с логарифмическим
+  хвостом, tukey обнуляет вклад выбросов при |e| > c (нулевой градиент).
+
+Вес `weight` — неотрицательный float либо 0-d Tensor/Variable (тогда
+приводится к глобальному dtype и используется как есть — обучаемый или
+адаптивный вес, P2).
 
 Нормировка — masked mean: `weight · sum(mask · psi) / (N · sigma²)`,
 где N = max(sum(mask), eps) либо число элементов траектории. Маска масштаб
@@ -281,6 +289,173 @@ print(subset.loss_before, subset.loss_after, subset.prediction_delta)
   prediction_delta по firing_rates обучающего протокола и validation_delta
   по held-out (None с пояснением в notes при отсутствии).
 
+## Глобальный поиск (`global_search`, P2)
+
+Единая точка входа для безградиентных методов поверх `CalibrationProblem`:
+
+```python
+from neuraltide.optimization import global_search
+
+res = global_search(problem, method="de", max_evals=1500, seed=11,
+                    refine_top_k=3, local="least_squares",
+                    options={"popsize": 12, "polish": False})
+print(res.base.loss_best, res.n_evals, res.message)
+```
+
+- методы: `'de'` (scipy Differential Evolution), `'cma'` (CMA-ES,
+  optional extra `'global'`: `pip install 'neuraltide[global]'`),
+  `'spsa'` (без границ — авто-масштаб по bounds_phi/phi0), `'basinhopping'`
+  (scipy), `'nsga2'` (NSGA-II, optional extra `'pareto'` с `pymoo`;
+  результат — `ParetoResult`, не `GlobalOptimizerResult`);
+- `'de'`/`'cma'`/`'nsga2'` требуют конечных границ по всем координатам
+  (явные `min`/`max` в params), иначе честный `ValueError` с советом;
+- единый бюджет `max_evals`; `refine_top_k` — локальная доводка лучших
+  кандидатов (`'lbfgsb'` | `'least_squares'` | callable);
+- checkpoint/resume — только `'cma'`/`'spsa'` (scipy DE и basinhopping из
+  seed не восстанавливаются); `resume=True` досчитывает бюджет;
+- NaN/±inf потеря считается отказом кандидата (loss=+inf со счётчиком),
+  без безмолвного завершения;
+- `evaluator` — внешний пакетный callable для параллелизма (несовместим
+  с `'nsga2'`); см. также `parallel.make_evaluator` ниже;
+- отсутствие optional-зависимости поднимает `OptionalDependencyError` с
+  сообщением об установке.
+
+## Балансировка компонент и робастные градиенты (`robust`, P2)
+
+```python
+from neuraltide.optimization import (GradNormWeights, balanced_train,
+                                     pcgrad_project)
+
+bt = balanced_train(problem, phi0, GradNormWeights(alpha=1.0),
+                    optimizer="adam", max_steps=50,
+                    projector=pcgrad_project)
+print(bt.base.loss_best, bt.weight_history[-1], bt.baseline["best_loss"])
+```
+
+- `WeightStrategy` — протокол весов компонент; реализации `FixedWeights`,
+  `UncertaintyWeighting` (w ∝ 1/sqrt(loss)), `SelfAdaptiveWeights`
+  (w ∝ loss^(-exponent)), `GradNormWeights` (выравнивание норм градиентов).
+  Это детерминированные суррогаты: веса пересчитываются аналитически из
+  наблюдённых losses/градиентов шага, а не обучаются совместно с моделью;
+- `balanced_gradient(problem, phi, weights, projector=None)` — один прогон
+  с per-component GradientTape: (losses, взвешенный градиент);
+- `balanced_train(...)` — шаги Keras-оптимизатора с обновлением стратегии
+  и логированием весов (`'w:<имя>'` в history); обязательный baseline
+  `FixedWeights(1.0)` из той же phi0 с тем же числом шагов — адаптивные
+  веса не гарантируют улучшения, сравнивайте `best_loss`;
+- `pcgrad_project` / `cagrad_project(grads, c=0.5)` — проекции
+  конфликтующих градиентов (Yu et al. 2020 / Liu et al. 2021) по карте
+  {имя: grad} или списку градиентов;
+- `adaptive_window_sampler(problem, window_size, focus, boost)` — выбор
+  временного окна с большим остатком и focused view задачи
+  (`with_objective`, маска усилена в окне; исходные spec не мутируются);
+- только BPTT-режим: adjoint/`Trainer` — `NotImplementedError`.
+
+## Ограничения на прогнозы (`constraints`, P2)
+
+Ограничения вида c(x)=0 / g(x)≤0 на прогнозы сети (не на параметры —
+bounds параметров это transforms + локальные решатели):
+
+```python
+from neuraltide.optimization import (ConstraintSpec, ConstrainedProblem,
+                                     augmented_lagrangian, epsilon_constraint)
+
+con = ConstraintSpec("inh_cap", "ineq",
+                     lambda preds, net: preds.firing_rates["inh"] - 60.0)
+result = augmented_lagrangian(problem, [con], max_outer=8, local="lbfgsb")
+print(result.base.loss_best, result.violation_history, result.state.lambdas)
+```
+
+- `ConstraintSpec(name, kind, fn(predictions, network) -> Tensor,
+  jacobian=None)`; для CalibrationProblem градиенты ограничений получаются
+  автоматически в общей ленте (data loss + AL-член одним прогоном);
+  generic-путь — `jacobian='fd'`|callable (см. `fd_jacobian`);
+- `ConstrainedProblem(problem, constraints, state, augmented_residual=False)`
+  — duck-обёртка с тем же контрактом; `loss = data + AL-штраф`, components
+  дополнены `'al/penalty'` и `'constraint/<name>'`; `augmented_residual=True`
+  дополняет residual блоками ограничений для least-squares постановки
+  (осторожно: FD-якобиан штрафа на таких блоках шумный);
+- `augmented_lagrangian(...)` — внешние итерации (обновление λ, рост μ при
+  недостаточном сокращении нарушения), checkpoint/resume;
+- `epsilon_constraint(problem, objectives, index, eps, ...)` — компонент
+  `objectives[index]` становится ограничением `<= eps`, цель — сумма
+  остальных (или явный `objective`).
+
+## Неопределённость (`uq`, P2)
+
+```python
+from neuraltide.optimization import (laplace_approximation,
+                                     predictive_intervals,
+                                     residual_diagnostics)
+
+lap = laplace_approximation(problem, phi_map, method="gn")   # JᵀJ + prior
+print(lap.intervals["exc/tau"], lap.pd, lap.jitter_used)
+rng = np.random.default_rng(0)
+samples = rng.multivariate_normal(lap.phi_map, lap.covariance + 1e-12*eye, 48)
+pred = predictive_intervals(problem, samples, level=0.95)    # per-(pop, t, unit)
+```
+
+- `residual_diagnostics(problem, phi, max_lag, n_bins, windows)` — вектор
+  невязок по ObservationSpec: mean/std/max|r|, временной ряд, автокорреляция,
+  гетероскедастичность (Levene/Brown–Forsythe по временным бинам), сводки по
+  окнам; fallback на плоский псевдо-spec без метаданных observations;
+- `laplace_approximation(problem, phi_map, jac=None, prior_cov=None,
+  method='gn'|'fd-hessian')` — гауссово приближение постериора: covariance =
+  (JᵀJ + P)⁻¹ по нормированным невязкам (`'gn'`; J — готовый `JacobianResult`
+  или внутренний `residual_jacobian` с капом `max_params`); `'fd-hessian'` —
+  только sanity-check (2n+1 прогонов, кап `max_fd_params=50`). PD-проверка
+  через Cholesky с нарастающим jitter (`pd`, `jitter_used`); маргинальные
+  интервалы в физических θ (`intervals`) и в φ (`phi_intervals`) — границы
+  min/max записей в них **не вшиты**;
+- `bootstrap_experiments(problem, n_draws, evaluator=None)` — бутстреп по
+  экспериментам/записям; `residual_bootstrap(problem, n_draws)` — по
+  остаткам (с оговорками в notes);
+- `parameter_ensemble(results)` — ансамбль φ/θ из готовых результатов
+  (`.base` любых результатов оптимизации), выборочная ковариация;
+- `predictive_intervals(problem, phi_samples, level)` — прогнозные квантили
+  firing_rates по ансамблю φ; batch обязан быть 1; нефинитные строки
+  пропускаются (`n_skipped_nonfinite`);
+- `noise_sensitivity(laplace_result, sigma_factors)` — чувствительность
+  posterior к масштабу шума.
+
+Интервалы осмысленны при ненулевых MAP-невязках: exact-fit (потеря ровно 0)
+— вырожденный случай, residual-нормировка `sign(e)·sqrt(2ψ)` в нуле
+недифференцируема, forward-чувствительности дают NaN. На практике это
+значит: цели калибровки должны содержать шум/невязку, иначе UQ-блок
+запускайте из возмущённой точки. Тесты P2 (`tests/integration/
+test_p2_workflow.py`, `tests/unit/test_uq.py`) фиксируют эти границы.
+
+## Пакетная оценка кандидатов (`parallel`, P2)
+
+```python
+from neuraltide.optimization import evaluate_candidates, make_evaluator
+
+records = evaluate_candidates(build_problem, candidates, n_workers=4, seed=0)
+evaluator = make_evaluator(build_problem, n_workers=4, seed=0)  # для global_search
+try:
+    res = global_search(problem, method="de", evaluator=evaluator, ...)
+finally:
+    evaluator.close()
+```
+
+- `build_problem` — picklable фабрика уровня модуля (lambda/замыкания не
+  сериализуются — честный `ValueError` до запуска процессов);
+- `CandidateTask(index, phi, seed=None)` / `EvalRecord(index, loss,
+  components, wall_time, n_forward, error)` — пары задача/результат;
+  исключение кандидата → `loss=+inf`, `error='<Тип>: <сообщение>'`, остальные
+  кандидаты вычисляются;
+- `SerialPool` — лениво строит задачу в родителе, ordered игнорируется;
+  `ProcessPool` — spawn-процессы, каждый со своей копией задачи (TF-граф
+  строится в worker'е один раз), родительская модель не мутирует;
+  `ordered=False` — выдача по мере завершения (индексы сохраняются);
+- один seed → одинаковые per-candidate сиды → потери воспроизводимы между
+  SerialPool и ProcessPool (см. `benchmarks/l3_parallel_scaling.py`);
+- экономика: spawn + импорт TF в каждом worker'е стоят секунд — выигрыш
+  есть при дорогих оценках (длинный горизонт, жёсткие интеграторы) и
+  живом пуле между батчами; на мелких задачах serial быстрее;
+- tensor candidate-batch (batch>1 через NetworkRNN в одном прогоне) в P2
+  не реализован — параллелится только «один кандидат = один прогон».
+
 ## Ограничения этапа P1
 
 - **Eager-режим**: все методы P1 работают в eager TensorFlow; `tf.function`
@@ -301,8 +476,47 @@ print(subset.loss_before, subset.loss_after, subset.prediction_delta)
   исходных входах; truncated BPTT — приближённый режим (сравнивать
   `free_run_loss`, не `final_loss`);
 - **Мультистарт последователен**: старты прогоняются по очереди (shared
-  counters); параллельность — этап P2.
+  counters); параллельность кандидатов — P2 (`parallel`).
+
+## Ограничения этапа P2
+
+- **Eager/batch**: как и P0/P1 — eager TensorFlow, batch=1; predictive
+  intervals и все прогоны NetworkRNN — по одному кандидату за раз;
+- **TF forward-AD против GradientTape в пределах одного NetworkRNN**:
+  `_scan_forward_states` — `@tf.function`; после gradient-прогона
+  (value_and_gradient/локальные решатели/балансировка) forward-режим
+  чувствительностей (`residual_jvp`/`residual_jacobian` внутри Laplace)
+  в этом экземпляре падает (`variant/int64` в while_loop). Порядок
+  «Laplace/якобиан ДО градиентных методов» или свежий экземпляр задачи
+  через фабрику (как в `examples/example_09_p2_workflow.py`) — рабочие
+  обходные пути; это ограничение TF+кэша tf.function, не P2-модулей;
+- **Exact-fit вырожден для UQ**: при нулевых MAP-невязках residual
+  sqrt-нормировка недифференцируема (NaN в J); калибруйте по зашумлённым/
+  несводимым данным или оценивайте неопределённость из возмущённой точки;
+- **Optional deps**: `'cma'` — extra `global` (`pip install
+  'neuraltide[global]'`), `'pymoo'` — extra `pareto`; отсутствие поднимает
+  `OptionalDependencyError` с сообщением об установке;
+- **Процессный параллелизм**: spawn-процессы заново импортируют TF — на
+  мелких задачах serial быстрее; выигрыш при дорогих оценках и живом пуле
+  (`make_evaluator`), потолок — число ядер с учётом конкуренции за
+  intra-op потоки; tensor candidate-batch — вне P2;
+- **Балансировка — BPTT-only**: PCGrad/CAGrad/GradNorm/self-adaptive веса
+  не работают с adjoint-режимом (`NotImplementedError`); аналитический
+  adjoint Trainer для этих целей не поддержан;
+- **Адаптивные веса — суррогаты**: пересчёт по наблюдённым losses/градиентам,
+  не совместное обучение log-sigma; baseline FixedWeights обязателен для
+  честного сравнения;
+- **Laplace — гауссово приближение**: в плоских/скошенных направлениях
+  posterior интервалы приближённы (границы min/max не вшиты); `'fd-hessian'`
+  — sanity-check с капом 50 параметров; bootstrap-выводы опираются на
+  число независимых экспериментов/остатков;
+- **Жёсткие интеграторы P2** (`docs/integrators.md`): substepping внутри
+  `derivatives()`, синапсы остаются явными, while_loop-adjoint для них не
+  поддержан — совместимость с чувствительностями/BPTT проверяйте
+  отдельно (`stiffness_report`, `tests/unit/test_integrators_p2.py`).
 
 Сквозные примеры: `examples/example_07_calibration.py` (P0),
 `examples/example_08_p1_workflow.py` (P1: мультистарт -> якобиан -> FIM ->
-профиль -> валидация). Бенчмарки L0-L2: `benchmarks/`.
+профиль -> валидация), `examples/example_09_p2_workflow.py` (P2: DE ->
+L-BFGS-B -> балансировка -> Laplace -> прогнозные интервалы + SerialPool).
+Бенчмарки L0–L3: `benchmarks/`.

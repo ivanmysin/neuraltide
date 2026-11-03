@@ -268,6 +268,51 @@ class PopulationModel(tf.keras.layers.Layer):
         """
         raise NotImplementedError
 
+    def derivatives_split(
+        self,
+        state: StateList,
+        total_synaptic_input: Dict[str, TensorType],
+    ) -> Tuple[StateList, StateList]:
+        """
+        Разделяет правую часть на нежёсткую и жёсткую компоненты (P2).
+
+        Возвращает (f_nonstiff, f_stiff) той же структуры, что derivatives().
+        Контракт: f_nonstiff + f_stiff == derivatives(state, ...) покомпонентно.
+
+        По умолчанию вся динамика считается нежёсткой:
+        (derivatives, zeros). Популяции с явным разделением
+        (для IMEX-интеграторов) переопределяют этот метод вместе с
+        linear_operator().
+
+        Args:
+            state: текущее состояние — список тензоров.
+            total_synaptic_input: {'I_syn': [...], 'g_syn': [...]}.
+
+        Returns:
+            Кортеж (f_nonstiff, f_stiff) списков тензоров.
+        """
+        f = self.derivatives(state, total_synaptic_input)
+        f_stiff = [tf.zeros_like(t) for t in f]
+        return f, f_stiff
+
+    def linear_operator(
+        self,
+        state: StateList,
+        total_synaptic_input: Dict[str, TensorType],
+    ) -> Optional[Tuple[TensorType, TensorType]]:
+        """
+        Линейная часть жёсткой компоненты: f_stiff(y) ≈ A·y_flat + b (P2).
+
+        Используется IMEX-интегратором для неявного шага. y_flat —
+        состояние, уплощённое по переменным: [n_units, d], d = len(state).
+        Без переопределения возвращает None — жёсткая часть либо нулевая,
+        либо обрабатывается явно (честный fallback, см. IMEXEulerIntegrator).
+
+        Returns:
+            (A, b), где A: [n_units, d, d], b: [n_units, d], либо None.
+        """
+        return None
+
     @abstractmethod
     def get_firing_rate(self, state: StateList) -> TensorType:
         """

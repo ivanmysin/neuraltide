@@ -1301,6 +1301,284 @@ class SubsetResult:          # доводка подмножества с оце
     wall_time: float = 0.0
 ```
 
+### Глобальный поиск (P2)
+
+```python
+def global_search(problem, *, method="de", max_evals=None, bounds=None,
+                  phi0=None, seed=None, refine_top_k=0, local="lbfgsb",
+                  checkpoint_path=None, resume=False, evaluator=None,
+                  options=None, objective_names=None, validate=True
+                  ) -> GlobalOptimizerResult | ParetoResult
+```
+
+`method`: `'de'` | `'cma'` (extra `global`) | `'spsa'` | `'basinhopping'`
+| `'nsga2'` (extra `pareto`, возвращает `ParetoResult` по компонентам целей).
+`'de'`/`'cma'`/`'nsga2'` требуют конечных границ. checkpoint/resume —
+только `'cma'`/`'spsa'`. `evaluator` — внешний пакетный callable
+(`parallel.make_evaluator`), несовместим с `'nsga2'`.
+
+```python
+class OptionalDependencyError(ImportError): ...   # cma / pymoo не установлены
+
+@dataclass
+class GlobalOptimizerResult:
+    base: OptimizationResult      # phi_best/theta_best/loss_best/история
+    method: str                   # 'de' | 'cma' | 'spsa' | 'basinhopping'
+    success: bool
+    message: str
+    n_evals: int                  # оценок глобальной фазы (<= max_evals)
+    n_forward: int
+    n_gradient: int
+    wall_time: float
+    history: List[Dict[str, Any]]   # {"n_evals", "loss", "failed"}
+    candidates: List[StartResult]   # доводка refine_top_k
+    validation: Dict[str, float]
+
+@dataclass
+class ParetoResult:               # method='nsga2'
+    base: OptimizationResult      # knee-точка фронта (loss_best — сумма целей)
+    frontier: Dict[str, np.ndarray]  # {objective_name: значения на фронте}
+    objective_names: List[str]    # порядок столбцов frontier
+    method: str = "nsga2"
+    success: bool = False         # непустой фронт
+    message: str = ""
+    n_evals: int = 0
+    n_forward: int = 0
+    wall_time: float = 0.0
+    history: List[Dict[str, Any]] = []
+    seed: Optional[int] = None
+    config: Dict[str, Any] = {}
+```
+
+### Балансировка компонент и робастные градиенты (P2)
+
+```python
+class WeightStrategy:                 # протокол: initial_weights/update
+    def initial_weights(self, names) -> np.ndarray: ...
+    def update(self, losses, grads, step) -> np.ndarray: ...
+
+class FixedWeights(WeightStrategy):
+    def __init__(self, weights): ...  # float | {имя: вес} | вектор
+class UncertaintyWeighting(WeightStrategy):
+    def __init__(self, eps=1e-8, min_weight=1e-3, max_weight=1e3): ...
+class SelfAdaptiveWeights(WeightStrategy):
+    def __init__(self, exponent=1.0, eps=1e-8, min_weight=1e-3,
+                 max_weight=1e3): ...
+class GradNormWeights(WeightStrategy):
+    def __init__(self, alpha=1.0, step_size=1.0, eps=1e-8,
+                 min_weight=1e-3, max_weight=1e3): ...
+
+def pcgrad_project(grads) -> np.ndarray        # Mapping|Sequence -> mean proj
+def cagrad_project(grads, c: float = 0.5) -> np.ndarray
+def balanced_gradient(problem, phi, weights, projector=None
+                      ) -> Tuple[Dict[str, float], np.ndarray]
+def adaptive_window_sampler(problem, window_size, focus="large_residual",
+                            boost=3.0) -> AdaptiveWindowFocus
+
+@dataclass
+class BalancedResult:
+    base: OptimizationResult
+    weight_history: List[Dict[str, Any]]  # 'step'/'loss'/'grad_norm'/'w:<имя>'/'l:<имя>'
+    notes: str = ""
+    baseline: Dict[str, Any] = {}         # {'method','best_loss','final_loss',...}
+
+def balanced_train(problem, phi0, strategy, *, optimizer=None, max_steps,
+                   projector=None, seed=None, history_path=None
+                   ) -> BalancedResult
+```
+
+Все стратегии — детерминированные суррогаты (пересчёт по наблюдённым
+losses/grads, не совместное обучение); только BPTT-режим. `balanced_train`
+всегда прогоняет baseline FixedWeights(1.0) из той же phi0.
+
+### Ограничения на прогнозы (P2)
+
+```python
+@dataclass
+class ConstraintSpec:                 # kind: 'eq' (c(x)=0) | 'ineq' (g(x)<=0)
+    name: str
+    kind: str
+    fn: Callable                      # (predictions, network) -> Tensor
+    jacobian: Optional[Any] = None    # None | 'fd' | callable(phi) -> [m, n]
+
+@dataclass
+class AugmentedLagrangianState:
+    lambdas: Dict[str, np.ndarray]
+    mu: float = 10.0
+    mu_factor: float = 10.0
+    def to_dict(self) -> Dict[str, Any]: ...
+    @classmethod
+    def from_dict(cls, data) -> "AugmentedLagrangianState": ...
+
+class ConstrainedProblem:             # duck parity с CalibrationProblem
+    def __init__(self, problem, constraints, state=None, *,
+                 augmented_residual=False): ...
+
+def fd_jacobian(value_fn, phi, *, h=None, h_values=None,
+                base_value=None) -> np.ndarray
+def epsilon_constraint(problem, objectives, index, eps, *, objective=None,
+                       weights=None) -> ConstrainedProblem
+def augmented_lagrangian(problem, constraints, *, local="lbfgsb",
+                         max_outer=10, mu0=10.0, eta=0.25, seed=None,
+                         checkpoint_path=None, resume=False) -> ALResult
+
+@dataclass
+class ALResult:
+    base: OptimizationResult      # data loss исходной задачи в phi_best
+    state: AugmentedLagrangianState
+    violation_history: List[Dict[str, Any]]
+    n_outer: int
+    validation: Dict[str, float]
+    success: bool
+    wall_time: float
+```
+
+### Неопределённость (P2)
+
+```python
+def residual_diagnostics(problem, phi, *, max_lag=10, n_bins=10,
+                         windows=None) -> ResidualDiagnostics
+def laplace_approximation(problem, phi_map, *, jac=None, prior_cov=None,
+                          method="gn", level=0.95, max_params=200,
+                          fd_h=1e-5, max_fd_params=50) -> LaplaceResult
+def bootstrap_experiments(problem, *, n_draws=100, seed=None,
+                          evaluator=None) -> BootstrapResult
+def residual_bootstrap(problem, *, n_draws=100, seed=None) -> BootstrapResult
+def parameter_ensemble(results) -> EnsembleResult
+def predictive_intervals(problem, phi_samples, *, level=0.95) -> PredictiveResult
+def noise_sensitivity(laplace_result, sigma_factors) -> SensitivityResult
+
+@dataclass
+class ResidualDiagnostics:
+    specs: List[SpecResidualDiagnostics]   # per ObservationSpec
+    windows: List[WindowDiagnostics]
+    max_abs: float
+    phi: np.ndarray
+    loss: float                    # 0.5*||r||^2 в точке
+    n_residuals: int
+    max_lag: int
+    n_bins: int
+    has_observation_metadata: bool
+    n_forward: int
+    wall_time: float
+    notes: str = ""
+
+@dataclass
+class SpecResidualDiagnostics: ...
+@dataclass
+class WindowDiagnostics: ...
+
+@dataclass
+class LaplaceResult:               # гауссово приближение постериора
+    phi_map: np.ndarray
+    covariance: np.ndarray         # [n, n] в phi-координатах
+    precision_gn: np.ndarray
+    prior_precision: Optional[np.ndarray]
+    eigvals: np.ndarray
+    eigvecs: np.ndarray
+    std: np.ndarray
+    param_names: List[str]
+    intervals: Dict[str, Tuple[float, float]]        # в физических theta
+    phi_intervals: Dict[str, Tuple[float, float]]    # phi_map +- z*std
+    level: float
+    z: float
+    method: str                    # 'gn' | 'fd-hessian'
+    pd: bool                       # precision обратилась через Cholesky
+    jitter_used: Optional[float]
+    loss: float
+    n_forward: int
+    wall_time: float
+    max_params: int
+    notes: str = ""
+
+@dataclass
+class BootstrapResult: ...
+@dataclass
+class EnsembleResult:              # ансамбль phi/theta из готовых решений
+    phi_samples: np.ndarray        # [n_samples, n]
+    theta_samples: Optional[Dict[str, np.ndarray]]  # {full_name: [n, *shape]}
+    mean: np.ndarray
+    std: np.ndarray
+    cov: Optional[np.ndarray]      # выборочная ковариация phi (ddof=1)
+    losses: List[Optional[float]]
+    n_samples: int
+    size: int
+    notes: str = ""
+
+@dataclass
+class PredictiveResult:            # квантили по ансамблю phi
+    level: float
+    populations: List[str]
+    lower: Dict[str, np.ndarray]   # {pop: [T, n_units]}
+    upper: Dict[str, np.ndarray]
+    central: Dict[str, np.ndarray] # поканальная медиана
+    mean: Dict[str, np.ndarray]
+    n_samples: int
+    n_skipped_nonfinite: int
+    n_forward: int
+    wall_time: float
+    notes: str = ""
+
+@dataclass
+class NoiseFactorResult:           # posterior при масштабе шума f*sigma
+    sigma_factor: float
+    covariance: np.ndarray
+    std: np.ndarray
+    phi_intervals: Dict[str, Tuple[float, float]]
+    pd: bool
+    jitter_used: Optional[float]
+
+@dataclass
+class SensitivityResult:           # noise_sensitivity: per-factor записи
+    entries: List[NoiseFactorResult]
+    phi_map: np.ndarray
+    param_names: List[str]
+    level: float
+    z: float
+    notes: str = ""
+```
+
+### Пакетная оценка кандидатов (P2)
+
+```python
+@dataclass
+class CandidateTask:
+    index: int
+    phi: np.ndarray
+    seed: Optional[int] = None
+
+@dataclass
+class EvalRecord:
+    index: int
+    loss: float                    # inf при исключении в worker'е
+    components: Dict[str, float]
+    wall_time: float
+    n_forward: int
+    error: Optional[str]           # None | '<ТипИсключения>: <сообщение>'
+
+class SerialPool:
+    def __init__(self, build_problem, fn="evaluate"): ...
+    def map(self, tasks, *, ordered=True) -> List[EvalRecord]: ...
+    def close(self) -> None: ...
+
+class ProcessPool:                 # spawn-процессы, TF-граф в worker'е
+    def __init__(self, build_problem, fn="evaluate", n_workers=2): ...
+    def map(self, tasks, *, ordered=True) -> List[EvalRecord]: ...
+    def close(self) -> None: ...
+    def terminate(self) -> None: ...
+
+def evaluate_candidates(build_problem, candidates, *, fn="evaluate",
+                        n_workers=1, seed=None, ordered=True
+                        ) -> List[EvalRecord]
+def make_evaluator(build_problem, n_workers=1, seed=None, *,
+                   fn="evaluate") -> Callable[..., Sequence[float]]
+    # у callable есть .close(); инъекция в global_search(evaluator=...)
+```
+
+`build_problem` — picklable фабрика уровня модуля; исключение кандидата
+даёт `loss=+inf` и `error`, остальные вычисляются; один seed → одинаковые
+потери в SerialPool и ProcessPool.
+
 ### Диагностика градиентов
 
 ```python
@@ -1339,11 +1617,19 @@ def print_summary(network, rich_library: Optional[object] = None) -> None:
 
 ## neuraltide.integrators.__init__
 
-Экспорты:
-- `EulerIntegrator`
-- `HeunIntegrator`  
-- `RK4Integrator`
+Экспорты (P0/P1):
 - `BaseIntegrator`
+- `EulerIntegrator`
+- `HeunIntegrator`
+- `RK4Integrator`
+
+Экспорты P2 (жёсткие системы, см. `docs/integrators.md`):
+- `AdaptiveRKIntegrator`
+- `IMEXEulerIntegrator`
+- `RosenbrockIntegrator`
+- `ExponentialEulerIntegrator`
+- `stiffness_report`
+- `classify_failure`
 
 ---
 

@@ -35,13 +35,32 @@ neuraltide.optimization — слой калибровки поверх моде�
   обязательный free_run_check;
 - identifiability: compute_fim (FIM = JᵀJ по готовому якобиану),
   likelihood_profile (профиль правдоподобия, χ²-интервалы), select_subset
-  (доводка подмножества с оценкой смещения).
+  (доводка подмножества с оценкой смещения);
+- global_search (P2): единый глобальный безградиентный поиск
+  (global_search с method='de'|'cma'|'spsa'|'basinhopping'|'nsga2',
+  бюджет max_evals, refine_top_k, checkpoint/resume для cma/spsa;
+  extras 'global'/'pareto' для cma/pymoo);
+- robust (P2): балансировка компонент потерь — WeightStrategy
+  (FixedWeights/UncertaintyWeighting/SelfAdaptiveWeights/GradNormWeights),
+  PCGrad/CAGrad-проекции, balanced_gradient/balanced_train с обязательным
+  baseline, adaptive_window_sampler (focused view по остатку);
+- constraints (P2): ограничения на прогнозы — ConstraintSpec,
+  ConstrainedProblem (AL-член одной лентой), augmented_lagrangian
+  (внешние итерации, checkpoint/resume), epsilon_constraint;
+- uq (P2): неопределённость — residual_diagnostics, laplace_approximation
+  (GN/FD-Гессиан, маргинальные интервалы), bootstrap_experiments /
+  residual_bootstrap, parameter_ensemble, predictive_intervals,
+  noise_sensitivity;
+- parallel (P2): пакетная оценка кандидатов — CandidateTask/EvalRecord,
+  SerialPool, ProcessPool (spawn-процессы), evaluate_candidates,
+  make_evaluator (инъекция в global_search).
 
 Имена P0 (transforms/parameters/objectives/problem/results/diagnostics)
-импортированы eager-импортом; имена P1 (local/sensitivities/shooting/
-strategies/schedules/identifiability) доступны лениво через PEP-562
-__getattr__ по _LAZY_MAP. Все модули — eager-режим, batch=1 (контракт
-NetworkRNN); публичный API — через __all__ ниже.
+импортированы eager-импортом; имена P1/P2 (local/sensitivities/shooting/
+strategies/schedules/identifiability/global_search/robust/constraints/uq/
+parallel) доступны лениво через PEP-562 __getattr__ по _LAZY_MAP. Все
+модули — eager-режим, batch=1 (контракт NetworkRNN); публичный API —
+через __all__ ниже.
 """
 
 import importlib
@@ -153,6 +172,56 @@ _LAZY_MAP: Dict[str, str] = {
     "CollinearityPair": "neuraltide.optimization.identifiability",
     "ProfileResult": "neuraltide.optimization.identifiability",
     "SubsetResult": "neuraltide.optimization.identifiability",
+    # global_search (P2)
+    "global_search": "neuraltide.optimization.global_search",
+    "GlobalOptimizerResult": "neuraltide.optimization.global_search",
+    "ParetoResult": "neuraltide.optimization.global_search",
+    "OptionalDependencyError": "neuraltide.optimization.global_search",
+    # robust (P2)
+    "WeightStrategy": "neuraltide.optimization.robust",
+    "FixedWeights": "neuraltide.optimization.robust",
+    "UncertaintyWeighting": "neuraltide.optimization.robust",
+    "SelfAdaptiveWeights": "neuraltide.optimization.robust",
+    "GradNormWeights": "neuraltide.optimization.robust",
+    "pcgrad_project": "neuraltide.optimization.robust",
+    "cagrad_project": "neuraltide.optimization.robust",
+    "balanced_gradient": "neuraltide.optimization.robust",
+    "AdaptiveWindowFocus": "neuraltide.optimization.robust",
+    "adaptive_window_sampler": "neuraltide.optimization.robust",
+    "balanced_train": "neuraltide.optimization.robust",
+    "BalancedResult": "neuraltide.optimization.robust",
+    # constraints (P2)
+    "ConstraintSpec": "neuraltide.optimization.constraints",
+    "AugmentedLagrangianState": "neuraltide.optimization.constraints",
+    "ConstrainedProblem": "neuraltide.optimization.constraints",
+    "fd_jacobian": "neuraltide.optimization.constraints",
+    "epsilon_constraint": "neuraltide.optimization.constraints",
+    "augmented_lagrangian": "neuraltide.optimization.constraints",
+    "ALResult": "neuraltide.optimization.constraints",
+    # uq (P2)
+    "residual_diagnostics": "neuraltide.optimization.uq",
+    "SpecResidualDiagnostics": "neuraltide.optimization.uq",
+    "WindowDiagnostics": "neuraltide.optimization.uq",
+    "ResidualDiagnostics": "neuraltide.optimization.uq",
+    "laplace_approximation": "neuraltide.optimization.uq",
+    "LaplaceResult": "neuraltide.optimization.uq",
+    "bootstrap_experiments": "neuraltide.optimization.uq",
+    "residual_bootstrap": "neuraltide.optimization.uq",
+    "BootstrapResult": "neuraltide.optimization.uq",
+    "parameter_ensemble": "neuraltide.optimization.uq",
+    "EnsembleResult": "neuraltide.optimization.uq",
+    "predictive_intervals": "neuraltide.optimization.uq",
+    "PredictiveResult": "neuraltide.optimization.uq",
+    "noise_sensitivity": "neuraltide.optimization.uq",
+    "NoiseFactorResult": "neuraltide.optimization.uq",
+    "SensitivityResult": "neuraltide.optimization.uq",
+    # parallel (P2)
+    "CandidateTask": "neuraltide.optimization.parallel",
+    "EvalRecord": "neuraltide.optimization.parallel",
+    "SerialPool": "neuraltide.optimization.parallel",
+    "ProcessPool": "neuraltide.optimization.parallel",
+    "evaluate_candidates": "neuraltide.optimization.parallel",
+    "make_evaluator": "neuraltide.optimization.parallel",
 }
 
 __all__ = [
@@ -231,6 +300,56 @@ __all__ = [
     "CollinearityPair",
     "ProfileResult",
     "SubsetResult",
+    # global_search (P2)
+    "global_search",
+    "GlobalOptimizerResult",
+    "ParetoResult",
+    "OptionalDependencyError",
+    # robust (P2)
+    "WeightStrategy",
+    "FixedWeights",
+    "UncertaintyWeighting",
+    "SelfAdaptiveWeights",
+    "GradNormWeights",
+    "pcgrad_project",
+    "cagrad_project",
+    "balanced_gradient",
+    "AdaptiveWindowFocus",
+    "adaptive_window_sampler",
+    "balanced_train",
+    "BalancedResult",
+    # constraints (P2)
+    "ConstraintSpec",
+    "AugmentedLagrangianState",
+    "ConstrainedProblem",
+    "fd_jacobian",
+    "epsilon_constraint",
+    "augmented_lagrangian",
+    "ALResult",
+    # uq (P2)
+    "residual_diagnostics",
+    "SpecResidualDiagnostics",
+    "WindowDiagnostics",
+    "ResidualDiagnostics",
+    "laplace_approximation",
+    "LaplaceResult",
+    "bootstrap_experiments",
+    "residual_bootstrap",
+    "BootstrapResult",
+    "parameter_ensemble",
+    "EnsembleResult",
+    "predictive_intervals",
+    "PredictiveResult",
+    "noise_sensitivity",
+    "NoiseFactorResult",
+    "SensitivityResult",
+    # parallel (P2)
+    "CandidateTask",
+    "EvalRecord",
+    "SerialPool",
+    "ProcessPool",
+    "evaluate_candidates",
+    "make_evaluator",
 ]
 
 
@@ -239,13 +358,22 @@ def __getattr__(name: str) -> Any:
     Ленивый доступ к именам из _LAZY_MAP (PEP-562).
 
     Поднимает AttributeError (не ImportError) для неизвестных имён.
+
+    Импорт подмодуля ставит его как атрибут пакета (import-машинерия
+    parent.<child> = module), что теневит одноимённую функцию
+    (модуль global_search.py теневит global_search()): обращение к
+    GlobalOptimizerResult импортировало бы модуль, и последующий
+    from neuraltide.optimization import global_search дал бы модуль.
+    Поэтому после импорта кэшируем ВСЕ публичные имена этого модуля.
     """
     module_name = _LAZY_MAP.get(name)
     if module_name is None:
         raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
     module = importlib.import_module(module_name)
     value = getattr(module, name)
-    globals()[name] = value
+    for public_name, mapped_module in _LAZY_MAP.items():
+        if mapped_module == module_name:
+            globals()[public_name] = getattr(module, public_name)
     return value
 
 
