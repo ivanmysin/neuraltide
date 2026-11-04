@@ -70,6 +70,7 @@ output = network(t_seq, inputs=inputs)
 | [Конфигурация](config.md) | Система конфигурации и реестры |
 | [Обучение](training.md) | Обучение сети: Trainer, loss functions, adjoint method |
 | [Оптимизация и калибровка](optimization.md) | Слой калибровки: transforms, ParameterSpace, ResidualLoss, CalibrationProblem, диагностика градиентов (P0) |
+| [Следующие шаги](next_steps.md) | Приоритетный план доработок после P0–P2 и внешнего аудита |
 | [Данные](data.md) | Модуль neuraltide.data: сохранение и загрузка HDF5 |
 | [Модель](model.md) | Модуль neuraltide.model: BrainModelKeras |
 | [Ограничения](constraints.md) | Ограничения на параметры |
