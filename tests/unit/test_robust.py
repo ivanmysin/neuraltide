@@ -328,30 +328,75 @@ class TestPCGrad:
             pcgrad_project([])
 
 
+def _cagrad_dual_reference(gs, c):
+    """
+    Эталон CAGrad по двойственной задаче статьи (Liu et al., 2021, ур. 4–5):
+    w* = argmin_{w ∈ симплекс} <g_w, g0> + sqrt(φ)·||g_w||, φ = c²||g0||²,
+    d = g0 + sqrt(φ)·g_w*/||g_w*||. Другой алгоритм, чем в коде (там —
+    прямая задача max t при <g_i, d> >= t).
+    """
+    from scipy import optimize
+
+    G = np.stack(gs, axis=0)
+    g0 = G.mean(axis=0)
+    root_phi = c * np.linalg.norm(g0)
+
+    def f(w):
+        gw = w @ G
+        return float(gw @ g0 + root_phi * np.linalg.norm(gw))
+
+    n = G.shape[0]
+    res = optimize.minimize(
+        f,
+        np.full(n, 1.0 / n),
+        method="SLSQP",
+        bounds=[(0.0, 1.0)] * n,
+        constraints=[{"type": "eq", "fun": lambda w: np.sum(w) - 1.0}],
+        options={"ftol": 1e-14, "maxiter": 1000},
+    )
+    gw = res.x @ G
+    return g0 + root_phi * gw / np.linalg.norm(gw)
+
+
 class TestCAGrad:
     def test_exact_solution_two_gradients(self):
-        # g1=(1,0.5), g2=(-1,0.5): g0=(0,0.5); оптимум d*=(0, 0.5(1-c))
+        # g1=(1,0.5), g2=(-1,0.5): g0=(0,0.5). По Liu et al. (max_d min_i)
+        # d* = (0, 0.5(1+c)): худшая задача убывает быстрее, чем при g0.
+        # Прежний эталон (0, 0.5(1-c)) был решением min-max и закреплял
+        # инвертированную постановку (В5 ревью).
         g1 = np.array([1.0, 0.5])
         g2 = np.array([-1.0, 0.5])
         for c in (0.0, 0.3, 0.6):
             d = cagrad_project({"a": g1, "b": g2}, c=c)
-            assert np.allclose(d, [0.0, 0.5 * (1.0 - c)], atol=1e-6)
+            assert np.allclose(d, [0.0, 0.5 * (1.0 + c)], atol=1e-6)
 
     def test_c_controls_minimal_progress(self):
-        g1 = np.array([1.0, 0.5])
-        g2 = np.array([-1.0, 0.5])
-        g0 = 0.5 * (g1 + g2)
+        rng = np.random.default_rng(11)
         for c in (0.1, 0.5, 0.9):
-            d = cagrad_project([g1, g2], c=c)
-            g0_norm_sq = float(g0 @ g0)
-            # гарантия прогресса: <d, g0> >= (1-c) ||g0||^2
-            assert float(d @ g0) >= (1.0 - c) * g0_norm_sq - 1e-9
-            # допустимость: шар вокруг g0
-            assert np.linalg.norm(d - g0) <= c * np.linalg.norm(g0) + 1e-6
-            # конфликт не хуже, чем в g0: max_i <g_i, d> <= max_i <g_i, g0>
-            lhs = max(float(g1 @ d), float(g2 @ d))
-            rhs = max(float(g1 @ g0), float(g2 @ g0))
-            assert lhs <= rhs + 1e-6
+            for _ in range(20):
+                gs = [rng.standard_normal(4) for _ in range(3)]
+                g0 = np.mean(gs, axis=0)
+                d = cagrad_project(gs, c=c)
+                # допустимость: шар вокруг g0
+                assert np.linalg.norm(d - g0) <= c * np.linalg.norm(g0) + 1e-6
+                # главное свойство CAGrad: худшая задача убывает не медленнее,
+                # чем при простом усреднении
+                worst_d = min(float(g @ d) for g in gs)
+                worst_g0 = min(float(g @ g0) for g in gs)
+                assert worst_d >= worst_g0 - 1e-7
+
+    def test_matches_dual_formulation(self):
+        rng = np.random.default_rng(12)
+        for c in (0.2, 0.5, 0.8):
+            for _ in range(10):
+                gs = [rng.standard_normal(5) for _ in range(3)]
+                d = cagrad_project(gs, c=c)
+                ref = _cagrad_dual_reference(gs, c)
+                worst = min(float(g @ d) for g in gs)
+                worst_ref = min(float(g @ ref) for g in gs)
+                # одинаковое значение задачи; при единственном решении — и d
+                assert worst == pytest.approx(worst_ref, rel=1e-5, abs=1e-7)
+                np.testing.assert_allclose(d, ref, rtol=1e-4, atol=1e-5)
 
     def test_zero_mean_returns_zero(self):
         out = cagrad_project([np.array([1.0, 0.0]), np.array([-1.0, 0.0])], c=0.5)

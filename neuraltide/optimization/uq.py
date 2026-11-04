@@ -10,6 +10,9 @@ Uncertainty quantification этапа P2 (дорожная карта, разд�
   исключаются из пулов; без метаданных observations — fallback на один
   псевдо-spec по плоскому вектору;
 - laplace_approximation — гауссово приближение постериора в точке MAP.
+  Всё считается в единицах полного NLL (ResidualLoss по умолчанию делит
+  вклад на N, это учитывается через JacobianResult.likelihood_scale и
+  objectives.likelihood_normalization).
   method='gn': covariance = (JᵀJ + P)⁻¹, J — готовый jac или результат
   sensitivities.residual_jacobian (max_params=200, ленивый импорт);
   method='fd-hessian' — только как явно документированный sanity-check:
@@ -56,6 +59,7 @@ from scipy.linalg import cho_solve
 
 import neuraltide.config
 from neuraltide.core.types import cast_if_needed
+from neuraltide.optimization.objectives import likelihood_normalization
 from neuraltide.optimization.results import JacobianResult, _JsonDTO
 
 __all__ = [
@@ -968,8 +972,9 @@ def laplace_approximation(
     Гауссово приближение постериора p(φ | data) ≈ N(φ_map, covariance).
 
     Метод 'gn' (по умолчанию): covariance = (JᵀJ + P)⁻¹, где J — якобиан
-    НОРМИРОВАННЫХ невязок по φ (нормировка на sigma уже в residual, поэтому
-    множитель 1/σ² вносить не нужно), P = inv(prior_cov) или 0 при
+    невязок по φ в единицах полного NLL (нормировка на sigma уже в residual;
+    деление на N у ResidualLoss снимается множителями
+    JacobianResult.likelihood_scale), P = inv(prior_cov) или 0 при
     prior_cov=None. J берётся из переданного jac (JacobianResult) либо
     вычисляется через sensitivities.residual_jacobian(problem, phi_map,
     max_params=max_params=200) с ленивым импортом sensitivities; n
@@ -1058,7 +1063,8 @@ def laplace_approximation(
             jac = sensitivities.residual_jacobian(
                 problem, phi, max_params=int(max_params)
             )
-        j_mat = np.asarray(jac.J, dtype=np.float64)
+        to_nll = getattr(jac, "likelihood_jacobian", None)
+        j_mat = np.asarray(to_nll() if to_nll is not None else jac.J, dtype=np.float64)
         if j_mat.ndim != 2 or j_mat.shape[1] != n:
             raise ValueError(
                 f"laplace_approximation: jac.J имеет форму {j_mat.shape}, "
@@ -1068,8 +1074,9 @@ def laplace_approximation(
         loss = float(jac.loss)
         max_params_used = int(max_params)
         notes = (
-            "GN-ковариация (JᵀJ + P)⁻¹ по нормированным невязкам "
-            "(нормировка на sigma уже в residual). Интервалы маргинальные, "
+            "GN-ковариация (JᵀJ + P)⁻¹ в единицах полного NLL: строки J "
+            "умножены на JacobianResult.likelihood_scale (sqrt(N) для "
+            "ResidualLoss с normalization='mean'). Интервалы маргинальные, "
             "границы ParameterSpace не вшиты; прижатая к границе MAP может "
             "давать интервалы за пределами [min, max]."
         )
@@ -1081,10 +1088,12 @@ def laplace_approximation(
                 f"получено n={n}. Кап защищает от 2n+1 прогонов с "
                 "градиентом; используйте method='gn'."
             )
-        gn, loss = _fd_hessian(problem, phi, float(fd_h))
+        with likelihood_normalization(problem):
+            gn, loss = _fd_hessian(problem, phi, float(fd_h))
         max_params_used = int(max_params)
         notes = (
-            "fd-hessian — явно приближённый sanity-check: H — центральные "
+            "fd-hessian — явно приближённый sanity-check в единицах полного "
+            "NLL (ResidualLoss временно с normalization='sum'): H — центральные "
             f"конечные разности градиента (шаг {fd_h}·max(|φ_j|, 1), O(h²) "
             f"погрешность, {2 * n + 1} прогонов с градиентом). Вне минимума "
             "H = JᵀJ + Σ rᵢ∇²rᵢ ≠ JᵀJ; ковариация осмысленна только около "

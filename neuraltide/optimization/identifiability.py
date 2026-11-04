@@ -20,18 +20,24 @@
   * якобиан здесь НЕ вычисляется: compute_fim/select_subset принимают готовый
     JacobianResult (например, из sensitivities.residual_jacobian). Способ
     получения J (forward sensitivities, конечные разности) — вне контракта;
-  * невязки считаются уже нормированными на sigma (контракт ResidualLoss:
-    0.5·||r||² == loss), поэтому F = JᵀJ — FIM для гауссовой модели шума
-    с известной диагональной Σ; дополнительный множитель 1/σ² вносить не нужно;
+  * статистика считается в единицах полного NLL. ResidualLoss по умолчанию
+    делит вклад наблюдения на число точек N (удобно для оптимизации), поэтому
+    compute_fim умножает строки J на sqrt(N) (JacobianResult.likelihood_scale),
+    а likelihood_profile считает потери в контексте
+    objectives.likelihood_normalization (normalization='sum'). Тогда F = JᵀJ —
+    FIM гауссовой модели шума с известной диагональной Σ, а пороги χ² —
+    пороги на ΔNLL. Duck-задачи без ResidualLoss считаются уже заданными в
+    единицах NLL;
   * выбор спектра: effective rank считается по накопленной энергии
     СОБСТВЕННЫХ значений F (λ = s²) — кривизна логарифма правдоподобия
     определяется спектром F, а не J; condition_number — κ(J) = s_max/s_min
     по ненулевым сингулярным значениям (κ(F) = κ(J)² — отдельное поле
     condition_number_fim);
-  * интервалы профиля: loss = NLL(θ) − const = 0.5·||r||², статистика
+  * интервалы профиля: loss = NLL(θ) − const = 0.5·||r||² (в контексте
+    likelihood_normalization; ProfileResult.losses — в этих единицах), статистика
     2·ΔNLL ~ χ²(1), поэтому порог на rel_loss равен χ²_{0.95}(1)/2 ≈ 1.9207
     (χ²-порог 3.8414588 задан в поле chi2_threshold). Допущение: гауссов шум
-    с ИЗВЕСТНОЙ sigma (нормировка уже в residual), один параметр, профиль
+    с ИЗВЕСТНОЙ sigma (нормировка на sigma — в residual), один параметр, профиль
     правдоподобия; для huber/robust-видов штрафов интервалы — эвристика;
   * узлы неуспешных запусков не скрываются (losses = NaN, successes = False,
     phi_path = None) и не участвуют в интервалах; немонотонность, несвязность
@@ -42,6 +48,7 @@ Eager API; numpy-выходы — float64. Глобальный dtype (neuraltid
 используется только при взаимодействии с ParameterSpace/трансформами.
 """
 
+import functools
 import time
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
@@ -52,6 +59,7 @@ from scipy import stats as sp_stats
 
 import neuraltide.config
 from neuraltide.optimization.local import least_squares, minimize_lbfgsb
+from neuraltide.optimization.objectives import likelihood_normalization
 from neuraltide.optimization.problem import FrozenProblem
 from neuraltide.optimization.results import (
     JacobianResult,
@@ -343,8 +351,11 @@ def compute_fim(
 
     Якобиан НЕ вычисляется здесь — передайте готовый JacobianResult
     (например, из neuraltide.optimization.sensitivities.residual_jacobian).
-    Невязки должны быть уже нормированы на sigma (тогда F — FIM гауссовой
-    модели с известной Σ; множитель 1/σ² вносить не нужно).
+    F строится в единицах полного NLL: если у jac есть likelihood_scale
+    (ResidualLoss с normalization='mean' делит вклад на N), строки J
+    умножаются на sqrt(N) — иначе F была бы FIM/N, а интервалы шире в
+    sqrt(N) раз. Без likelihood_scale невязки считаются уже заданными в
+    единицах NLL (нормированными на sigma, без деления на N).
 
     Args:
         jac: JacobianResult с J [n_residuals, n_params] (float64).
@@ -361,7 +372,8 @@ def compute_fim(
         FIMResult: спектр, обусловленность, effective_rank, направления
         с вкладом параметров, коллинеарные пары, нормы столбцов J.
     """
-    J = np.asarray(jac.J, dtype=np.float64)
+    to_nll = getattr(jac, "likelihood_jacobian", None)
+    J = np.asarray(to_nll() if to_nll is not None else jac.J, dtype=np.float64)
     if J.ndim != 2:
         raise ValueError(
             f"compute_fim: ожидается двумерный J [n_residuals, n_params], "
@@ -712,7 +724,7 @@ def _default_profile_grid(entry, theta_current: float, n_points: int) -> np.ndar
     return float(theta_current) + span * np.linspace(-1.0, 1.0, n_points)
 
 
-def likelihood_profile(
+def _likelihood_profile(
     problem,
     name: str,
     *,
@@ -758,8 +770,9 @@ def likelihood_profile(
     Returns:
         ProfileResult с theta_values/losses/rel_loss/successes/phi_path,
         intervals['0.95'] по успешным узлам (χ²-порог 3.8414588 на 2·ΔNLL,
-        т.е. 1.9207 на Δloss; допущение — гауссов шум с известной sigma,
-        нормировка уже в residual) и warnings о форме профиля.
+        т.е. 1.9207 на ΔNLL; допущение — гауссов шум с известной sigma;
+        потери считаются в единицах полного NLL, см. likelihood_normalization)
+        и warnings о форме профиля.
 
     Raises:
         ValueError: неизвестная запись/сетка/optimizer, а также когда
@@ -949,6 +962,15 @@ def likelihood_profile(
 # ---------------------------------------------------------------------------
 # DTO: SubsetResult и select_subset
 # ---------------------------------------------------------------------------
+
+
+@functools.wraps(_likelihood_profile)
+def likelihood_profile(problem, name: str, **kwargs: Any) -> "ProfileResult":
+    # Профиль считается в единицах полного NLL: ResidualLoss задачи временно
+    # переводятся в normalization='sum', поэтому и доводка остальных
+    # координат, и порог χ²/2 относятся к правдоподобию, а не к NLL/N.
+    with likelihood_normalization(problem):
+        return _likelihood_profile(problem, name, **kwargs)
 
 
 @dataclass

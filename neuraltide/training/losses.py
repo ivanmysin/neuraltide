@@ -13,16 +13,28 @@ from neuraltide.training.readouts import IdentityReadout, BaseReadout
 _MASK_DENOM_EPS = 1e-8
 
 
+def _mask_mass(mask_val: TensorType, shape, dtype) -> TensorType:
+    """
+    Число выбранных элементов: sum(broadcast(mask, shape)), не меньше eps.
+
+    Маска расширяется до формы ошибки, поэтому маска из единиц любой
+    broadcast-формы (например [1, T, 1] при n_units > 1) даёт то же
+    среднее, что и её отсутствие.
+    """
+    m = cast_if_needed(mask_val, dtype) * tf.ones(shape, dtype=dtype)
+    return tf.maximum(tf.reduce_sum(m), tf.constant(_MASK_DENOM_EPS, dtype=dtype))
+
+
 def _masked_mean(err: TensorType, mask_val: TensorType) -> TensorType:
     """
-    Masked mean: sum(mask * err) / max(sum(mask), eps).
+    Masked mean: sum(mask * err) / max(sum(broadcast(mask)), eps).
 
     Маска масштаб не меняет: умножение маски на константу сокращается
-    числителем и знаменателем.
+    числителем и знаменателем; знаменатель считается по маске, расширенной
+    до формы err.
     """
     m = cast_if_needed(mask_val, err.dtype)
-    denom = tf.maximum(tf.reduce_sum(m), tf.constant(_MASK_DENOM_EPS, dtype=err.dtype))
-    return tf.reduce_sum(m * err) / denom
+    return tf.reduce_sum(m * err) / _mask_mass(m, tf.shape(err), err.dtype)
 
 
 class BaseLoss(ABC):
@@ -139,7 +151,11 @@ class _TrajectoryLoss(BaseLoss):
         target: Dict[str, TensorType],
         mask: Optional[Dict[str, TensorType]] = None,
     ) -> TensorType:
-        """Аддитивный вклад шага t; сумма по t даёт полную loss."""
+        """
+        Аддитивный вклад шага t (rates [batch, n]) или среза шагов
+        (rates [batch, L, n]); сумма по любому разбиению времени даёт
+        полную loss.
+        """
         total_loss = tf.constant(0.0, dtype=neuraltide.config.get_dtype())
 
         for pop_name, target_t in target.items():
@@ -156,16 +172,22 @@ class _TrajectoryLoss(BaseLoss):
                 mask_t = self._per_step_mask_view(pop_name, err)
 
             if mask_t is None:
-                T = tf.cast(self._target_T(pop_name), err.dtype)
-                total_loss += tf.reduce_mean(err) / T
+                # Делим на число элементов полной траектории: для одного шага
+                # [batch, n] это mean(err)/T, для среза [batch, L, n] — вклад
+                # всех L шагов, поэтому сумма по любому разбиению времени
+                # равна полной loss.
+                numel = tf.cast(tf.size(self.target[pop_name]), err.dtype)
+                total_loss += tf.reduce_sum(err) / numel
             else:
                 m = cast_if_needed(mask_t, err.dtype)
                 m_full = self._full_mask(pop_name)
                 if m_full is not None:
-                    mass = tf.reduce_sum(cast_if_needed(m_full, err.dtype))
+                    # масса полной маски, расширенной до формы полного target
+                    denom = _mask_mass(
+                        m_full, tf.shape(self.target[pop_name]), err.dtype
+                    )
                 else:
-                    mass = tf.reduce_sum(m)
-                denom = tf.maximum(mass, tf.constant(_MASK_DENOM_EPS, dtype=err.dtype))
+                    denom = _mask_mass(m, tf.shape(err), err.dtype)
                 total_loss += tf.reduce_sum(m * err) / denom
 
         return total_loss

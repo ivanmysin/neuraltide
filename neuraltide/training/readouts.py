@@ -113,6 +113,28 @@ def _depthwise_causal_conv(x: TensorType, kernel: TensorType) -> TensorType:
     return tf.transpose(y, [0, 2, 1])
 
 
+def _fft_causal_conv(x: TensorType, kernel: TensorType) -> TensorType:
+    """
+    Каузальная свёртка y[t] = Σ_j kernel[j]·x[t−j] через FFT.
+
+    То же, что _depthwise_causal_conv, но за O((T+K) log(T+K)) — для
+    длинных ядер (HRF длиной десятки секунд при шаге в доли мс). Каналы
+    не смешиваются.
+    """
+    n = tf.shape(x)[1]
+    k_len = tf.shape(kernel)[0]
+    length = n + k_len - 1
+    x_t = tf.transpose(x, [0, 2, 1])  # [b, C, T]
+    h = tf.reshape(kernel[:, 0, 0], [1, 1, -1])
+    fft_len = tf.reshape(length, [1])
+    y = tf.signal.irfft(
+        tf.signal.rfft(x_t, fft_length=fft_len) * tf.signal.rfft(h, fft_length=fft_len),
+        fft_length=fft_len,
+    )
+    y = tf.cast(y[:, :, :n], x.dtype)
+    return tf.transpose(y, [0, 2, 1])
+
+
 class BandpassReadout(BaseReadout):
     """
     Bandpass FIR-фильтр через tf.nn.conv1d.
@@ -152,29 +174,49 @@ class BandpassReadout(BaseReadout):
 
 class HemodynamicReadout(BaseReadout):
     """
-    Каузальная свёртка с HRF (двойная гамма, параметры фиксированы).
+    Каузальная свёртка с канонической HRF (двойная гамма SPM, Glover 1999).
+
+        h(t) = Γ(t; 6) − Γ(t; 16)/6,   t — в секундах,
+
+    где Γ(t; a) — плотность гамма-распределения с формой a и масштабом 1 с:
+    пик отклика около 5 с, минимум постстимульного провала около 15 с.
+    Ядро длиной duration_s (по умолчанию 32 с) строится на сетке шага dt
+    (мс) и нормируется на max|h| = 1. Свёртка выполняется через FFT:
+    при dt порядка 0.1–1 мс ядро содержит десятки тысяч отсчётов.
 
     Каналы фильтруются независимо (без смешивания).
 
     Args:
         dt: шаг интегрирования (ms).
+        duration_s: длина ядра в секундах (по умолчанию 32).
     """
 
-    def __init__(self, dt: float, **kwargs):
+    def __init__(self, dt: float, duration_s: float = 32.0, **kwargs):
         super().__init__(**kwargs)
+        if dt <= 0.0:
+            raise ValueError(f"HemodynamicReadout: dt must be positive, got {dt}.")
+        if duration_s <= 0.0:
+            raise ValueError(
+                f"HemodynamicReadout: duration_s must be positive, got {duration_s}."
+            )
         self.dt = dt
+        self.duration_s = duration_s
+
+    @staticmethod
+    def _gamma_pdf(t_s: tf.Tensor, shape: float) -> tf.Tensor:
+        a = tf.constant(shape, dtype=t_s.dtype)
+        safe_t = tf.where(t_s > 0.0, t_s, tf.ones_like(t_s))
+        log_pdf = (a - 1.0) * tf.math.log(safe_t) - safe_t - tf.math.lgamma(a)
+        return tf.where(t_s > 0.0, tf.exp(log_pdf), tf.zeros_like(t_s))
 
     def build(self, input_shape):
         dtype = neuraltide.config.get_dtype()
-        t = tf.range(0, 20, self.dt, dtype=dtype)
-        tau1, tau2 = tf.constant(2.5, dtype=dtype), tf.constant(10.0, dtype=dtype)
-        a1, a2 = tf.constant(6.0, dtype=dtype), tf.constant(16.0, dtype=dtype)
-        hrf = (t / tau1) ** a1 * tf.exp(-t / tau1) / (a1**a1 * tf.exp(-a1)) - (
-            t / tau2
-        ) ** a2 * tf.exp(-t / tau2) / (a2**a2 * tf.exp(-a2))
+        n_taps = max(int(round(self.duration_s * 1000.0 / self.dt)), 1)
+        t_s = tf.range(n_taps, dtype=dtype) * tf.constant(self.dt / 1000.0, dtype=dtype)
+        hrf = self._gamma_pdf(t_s, 6.0) - self._gamma_pdf(t_s, 16.0) / 6.0
         hrf = hrf / tf.reduce_max(tf.abs(hrf))
         self._kernel = tf.reshape(hrf, [-1, 1, 1])
 
     def call(self, x: TensorType) -> TensorType:
         kernel = cast_if_needed(self._kernel, x.dtype)
-        return _depthwise_causal_conv(x, kernel)
+        return _fft_causal_conv(x, kernel)

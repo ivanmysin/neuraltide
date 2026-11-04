@@ -802,7 +802,7 @@ ev_free = problem.evaluate(phi_best)      # честный free-run
 Демонстрирует набор этапа P2 на малой синтетической E–I сети
 (WilsonCowan x 2 + StaticSynapse от SinusoidalGenerator) с известным
 theta* и зашумлёнными целями (шум с тем же sigma, что в ObservationSpec —
-иначе exact-fit вырождает residual-нормировку и UQ):
+так интервалы UQ имеют статистический смысл):
 
 1. **global_search** — DE малого бюджета (max_evals) с доводкой
    refine_top_k через L-BFGS-B;
@@ -847,6 +847,6 @@ diag = residual_diagnostics(problem_uq, phi_map)
 Ограничения P2 (eager/batch=1, optional extras `global`/`pareto` для
 cma/pymoo, экономика process parallelism в `benchmarks/l3_parallel_scaling.py`,
 tensor candidate-batch вне P2, несовместимость TF forward-AD с
-GradientTape в пределах одного NetworkRNN, exact-fit вырожден для UQ,
+GradientTape в пределах одного NetworkRNN,
 балансировка — BPTT-only) см. в
 [`docs/optimization.md`](optimization.md). Бенчмарки L0–L3 — в `benchmarks/`.

@@ -838,12 +838,14 @@ class Transform:
 - `LogitTransform(min, max)` — θ = lo + (hi−lo)·sigmoid(φ)
 - `ScaledSigmoidTransform(min, max, s=1.0)` — θ = lo + (hi−lo)·sigmoid(φ/s)
 - `SoftplusTransform(floor=None)` — θ = softplus(φ) + floor
-- `BoundedLogTransform(min, max)` — лог-координата внутри диапазона
+- `BoundedLogTransform(min, max)` — лог-координата внутри диапазона, 0 < min < max:
+  θ = exp(log min + (log max − log min)·sigmoid(φ)), θ(0) = √(min·max)
 
 > **Примечание**: sigmoid-образные преобразования (logit, scaled_sigmoid,
 > bounded_log) насыщаются у границ интервала — производная dθ/dφ стремится
-> к нулю. Для параметров с естественной границей у нуля предпочтительнее
-> `softplus` или `log`.
+> к нулю. У нижней границы (и у `softplus`/`log` около нуля) dθ/dφ ≈ e^φ:
+> по затуханию градиента у нуля `softplus` и `log` не лучше sigmoid-образных;
+> их преимущество — отсутствие верхней границы.
 
 ### Фабрика и реестр
 
@@ -1157,13 +1159,14 @@ class SingleShootingCheck:
 
 class MultipleShootingProblem:
     def __init__(self, problem, config, *, continuity_weight=1.0,
-                 include_syn_states=False): ...
+                 include_syn_states=True): ...
     # duck parity с CalibrationProblem + специфичные:
     def simulate_segment(self, phi, k) -> NetworkOutput: ...
     def continuity_gaps(self, phi=None) -> Dict[str, Any]: ...
     def initialize_from_single_shooting(self, phi_base=None) -> tf.Tensor: ...
     def to_single_shooting_problem(self, phi) -> CalibrationProblem: ...
-    def finalize(self, phi, gap_tol=1e-6) -> SingleShootingCheck: ...
+    def finalize(self, phi, gap_tol=1e-6, loss_rtol=1e-6,
+                 loss_atol=1e-10) -> SingleShootingCheck: ...  # + сравнение loss_ms и loss_single
 ```
 
 Residual-раскладка `r = [r_data; √w·gap_k]`, `0.5·‖r‖² == loss_ms` точно.

@@ -9,7 +9,7 @@
 - стратегии адаптивных весов компонент (WeightStrategy): FixedWeights,
   UncertaintyWeighting, GradNormWeights, SelfAdaptiveWeights;
 - проекторы конфликтующих градиентов: pcgrad_project (PCGrad, Yu et al.
-  2020) и cagrad_project (CAGrad, Liu et al. 2021, в min-max постановке);
+  2020) и cagrad_project (CAGrad, Liu et al. 2021: max_d min_i <g_i, d>);
 - balanced_gradient — один прямой прогон с per-component GradientTape;
 - adaptive_window_sampler — выбор временного окна с большим остатком и
   построение focused view задачи с усиленной маской окна;
@@ -29,12 +29,12 @@
   CalibrationProblem (per-component градиенты через tf.GradientTape).
   Применение к adjoint-режиму (problem с grad_method == 'adjoint') или к
   training.Trainer поднимает NotImplementedError.
-- CAGrad здесь — min-max постановка conflict-averse проекции: минимизируется
-  максимальное направленное произведение max_i <g_i, d> (верхняя граница
-  косинусного конфликта по Коши–Шварцу) в шаре ||d - g0|| <= c ||g0|| вокруг
-  среднего градиента g0; гарантия прогресса <d, g0> >= (1-c) ||g0||^2.
-  Точное решение малого QP — через SLSQP (scipy); при сходимости решателя
-  возвращается g0 (документированный fallback).
+- CAGrad (Liu et al., 2021): в шаре ||d - g0|| <= c ||g0|| вокруг среднего
+  градиента g0 максимизируется худшее локальное убывание задач
+  min_i <g_i, d>, поэтому худшая задача убывает не медленнее, чем при
+  усреднении; также <d, g0> >= (1-c) ||g0||^2. Малая задача решается SLSQP
+  (scipy) в прямой и двойственной формах, берётся лучший допустимый
+  кандидат; g0 — fallback.
 - adaptive_window_sampler строит НОВЫЙ view задачи (with_objective); исходные
   ObservationSpec не мутируются. Один вызов = один прямой прогон
   (problem.simulate); phi != None переводит модель по общему контракту
@@ -621,18 +621,23 @@ def pcgrad_project(grads: GradMap) -> np.ndarray:
 
 def cagrad_project(grads: GradMap, c: float = 0.5) -> np.ndarray:
     """
-    CAGrad-проекция (conflict-averse) в min-max постановке.
+    CAGrad-проекция (conflict-averse, Liu et al., NeurIPS 2021).
 
-    g0 = mean_i g_i. Решается малое QP:
-        min_d  max_i <g_i, d>
+    g0 = mean_i g_i. Направление d максимизирует худшее локальное убывание
+    задач в шаре вокруг среднего градиента:
+        max_d  min_i <g_i, d>
         s.t.   ||d - g0|| <= c ||g0||.
-    Гарантия прогресса: <d, g0> >= (1-c) ||g0||^2 (из ограничения шара);
-    c=0 возвращает d=g0 точно; c ближе к 1 — больше свободы ухода от g0
-    ради уменьшения max_i <g_i, d> (конфликта по Коши–Шварцу:
-    cos(g_i, d) <= <g_i, d> / (||g_i|| ||d||)).
+    Шаг θ ← θ − α·d уменьшает потерю i на α·<g_i, d> + O(α²), поэтому
+    min_i <g_i, d> >= min_i <g_i, g0>: худшая задача убывает не медленнее,
+    чем при простом усреднении (g0 — допустимая точка). Из ограничения шара
+    также <d, g0> >= (1-c) ||g0||^2. c=0 возвращает d=g0 точно.
 
-    Решение — точное (SLSQP, scipy, детерминированно); при неудаче решателя
-    возвращается g0 с документированным fallback.
+    Решение (scipy SLSQP, детерминированно): прямая задача max t при
+    <g_i, d> >= t и двойственная задача статьи
+    min_{w ∈ симплекс} <g_w, g0> + c||g0||·||g_w||, d = g0 + c||g0||·g_w/||g_w||.
+    SLSQP иногда сообщает о неудаче уже в оптимуме, поэтому из допустимых
+    кандидатов (g0, прямое и двойственное решения) берётся лучший по
+    min_i <g_i, d>; g0 остаётся fallback.
 
     Args:
         grads: Mapping {имя: grad} или Sequence градиентов (одной формы).
@@ -656,19 +661,20 @@ def cagrad_project(grads: GradMap, c: float = 0.5) -> np.ndarray:
     radius = c * g0_norm
 
     def _objective(x: np.ndarray) -> float:
-        return float(x[-1])
+        return -float(x[-1])  # максимизируем t
 
-    # t >= <g_i, d>  <=>  <g_i, d> - t <= 0 (линейные ограничения).
+    # t <= <g_i, d>  <=>  <g_i, d> - t >= 0 (линейные ограничения).
     a_mat = np.hstack([G, -np.ones((n, 1))])
-    linear = sp_optimize.LinearConstraint(a_mat, -np.inf, 0.0)
+    linear = sp_optimize.LinearConstraint(a_mat, 0.0, np.inf)
     # ||d - g0||^2 <= radius^2.
     ball = sp_optimize.NonlinearConstraint(
         lambda x: float(np.sum((x[:-1] - g0) ** 2)),
         -np.inf,
         radius**2,
     )
-    t0 = float(np.max(G @ g0))
+    t0 = float(np.min(G @ g0))
     x0 = np.concatenate([g0, [t0]])
+    candidates = [g0]
     res = sp_optimize.minimize(
         _objective,
         x0,
@@ -677,10 +683,36 @@ def cagrad_project(grads: GradMap, c: float = 0.5) -> np.ndarray:
         tol=1e-12,
         options={"maxiter": 500, "ftol": 1e-12},
     )
-    if not res.success or not np.all(np.isfinite(res.x)):
-        return g0.reshape(shapes)
-    d = res.x[:-1]
-    return d.reshape(shapes)
+    if np.all(np.isfinite(res.x)):
+        candidates.append(res.x[:-1])
+
+    # Двойственная задача (Liu et al., 2021, ур. 4–5): решение допустимо
+    # по построению (||d − g0|| = c||g0||).
+    def _dual(w: np.ndarray) -> float:
+        gw = w @ G
+        return float(gw @ g0 + radius * np.linalg.norm(gw))
+
+    res_dual = sp_optimize.minimize(
+        _dual,
+        np.full(n, 1.0 / n),
+        method="SLSQP",
+        bounds=[(0.0, 1.0)] * n,
+        constraints=[{"type": "eq", "fun": lambda w: float(np.sum(w) - 1.0)}],
+        options={"maxiter": 500, "ftol": 1e-14},
+    )
+    if np.all(np.isfinite(res_dual.x)):
+        gw = res_dual.x @ G
+        gw_norm = float(np.linalg.norm(gw))
+        if gw_norm > 0.0:
+            candidates.append(g0 + radius * gw / gw_norm)
+
+    feasible = [
+        d
+        for d in candidates
+        if float(np.linalg.norm(d - g0)) <= radius * (1.0 + 1e-6) + 1e-12
+    ]
+    best = max(feasible, key=lambda d: float(np.min(G @ d)))
+    return best.reshape(shapes)
 
 
 # ---------------------------------------------------------------------------

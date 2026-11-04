@@ -78,7 +78,11 @@ class TestMSEEquivalence:
         loss = MSELoss({"pop": tf.constant(target)}, mask={"pop": tf.constant(mask)})
 
         err = (rates - target) ** 2
-        expected = float(np.sum(mask * err) / np.sum(mask))
+        # Эталон — среднее по выбранным элементам (маска [1, T, 1] выбирает
+        # шаги для всех N юнитов). Прежний эталон sum(m·e)/sum(m) делил на
+        # число шагов без учёта broadcast и завышал loss в N раз (В3 ревью).
+        selected = np.broadcast_to(mask, err.shape) > 0
+        expected = float(err[selected].mean())
         full = float(loss(_predictions(rates), None))
         assert full == pytest.approx(expected, rel=1e-6)
 
@@ -144,7 +148,9 @@ class TestMSLEEquivalence:
         )
 
         err = (np.log(rates + eps) - np.log(target + eps)) ** 2
-        expected = float(np.sum(mask * err) / np.sum(mask))
+        # Эталон — среднее по выбранным элементам (см. TestMSEEquivalence).
+        selected = np.broadcast_to(mask, err.shape) > 0
+        expected = float(err[selected].mean())
         full = float(loss(_predictions(rates), None))
         assert full == pytest.approx(expected, rel=1e-6)
 

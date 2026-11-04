@@ -71,6 +71,7 @@ n_forward. Eager-режим, batch=1, dtype — через neuraltide.config.
 """
 
 import time
+import warnings
 from dataclasses import dataclass
 from numbers import Integral
 from typing import Any, Dict, List, Optional, Sequence, Tuple, Union
@@ -87,11 +88,13 @@ from neuraltide.optimization.parameters import (
     StateLocator,
 )
 from neuraltide.optimization.problem import (
+    SEARCH_BOX_REL_MARGIN,
     CalibrationProblem,
     _bounds_phi_from_space,
     _chain_gradient,
     _make_evaluation,
     _materialize_initial_state,
+    _search_box_phi_from_space,
 )
 from neuraltide.optimization.results import Evaluation
 from neuraltide.optimization.transforms import IdentityTransform
@@ -212,9 +215,9 @@ class SingleShootingCheck:
         loss_single: потеря честного свободного single-shooting прогона
             (полный горизонт, x0 = s_0, те же параметры);
         gaps: словарь continuity_gaps (max/mean/l2/finite/joints);
-        consistent: True, если разрывы не превосходят допуска и обе
-            потери конечны — тогда MS-траектория является допустимой
-            траекторией единого прогона.
+        consistent: True, если разрывы не превосходят допуска, обе
+            потери конечны и совпадают в пределах допуска — тогда
+            MS-траектория является траекторией единого прогона.
     """
 
     loss_ms: float
@@ -240,7 +243,11 @@ class MultipleShootingProblem:
         config: ShootingConfig или сырой nodes (int | Sequence[int]).
         continuity_weight: неотрицательный вес continuity-штрафа w.
         include_syn_states: включать syn-слоты в shooting-переменные и
-            continuity-разрывы (по умолчанию только pop-состояния).
+            continuity-разрывы (по умолчанию True). При False каждый сегмент
+            стартует с начального состояния синапсов протокола (для
+            TsodyksMarkram — R = 1, U = 0, A = 0), склейка не совпадает со
+            свободным прогоном, и при синапсах с состоянием выдаётся
+            предупреждение.
 
     Duck-type API совместим с CalibrationProblem; градиент всегда
     chain-режимом (см. модульную документацию).
@@ -252,7 +259,7 @@ class MultipleShootingProblem:
         config: Union[ShootingConfig, int, Sequence[int]],
         *,
         continuity_weight: float = 1.0,
-        include_syn_states: bool = False,
+        include_syn_states: bool = True,
     ):
         if not isinstance(config, ShootingConfig):
             config = ShootingConfig(config)
@@ -266,6 +273,21 @@ class MultipleShootingProblem:
         self.continuity_weight = float(continuity_weight)
         self.include_syn_states = bool(include_syn_states)
         self.network = problem.network
+        if not self.include_syn_states:
+            stateful = [
+                name
+                for name in self.network._graph.synapse_names
+                if self.network._graph._synapses[name].model.state_size
+            ]
+            if stateful:
+                warnings.warn(
+                    "MultipleShootingProblem: include_syn_states=False при "
+                    f"синапсах с состоянием {stateful}: их состояние "
+                    "сбрасывается к начальному на каждом узле, склейка не "
+                    "совпадает со свободным прогоном (finalize это покажет).",
+                    UserWarning,
+                    stacklevel=2,
+                )
         self._base_space = problem.parameter_space
         self._base_size = self._base_space.size
 
@@ -480,6 +502,12 @@ class MultipleShootingProblem:
     def bounds_phi(self) -> Tuple[np.ndarray, np.ndarray]:
         """Границы φ; shooting-записи без физических границ → ±inf."""
         return _bounds_phi_from_space(self._space)
+
+    def search_box_phi(
+        self, rel_margin: float = SEARCH_BOX_REL_MARGIN
+    ) -> Tuple[np.ndarray, np.ndarray]:
+        """Поисковый бокс φ для глобальных методов (см. problem.py)."""
+        return _search_box_phi_from_space(self._space, rel_margin)
 
     # ------------------------------------------------------------------
     # Внутренние хелперы
@@ -816,22 +844,38 @@ class MultipleShootingProblem:
                 init_pop[idx] = value
         return spawn(initial_state=(init_pop, init_syn))
 
-    def finalize(self, phi: Any, gap_tol: float = 1e-6) -> SingleShootingCheck:
+    def finalize(
+        self,
+        phi: Any,
+        gap_tol: float = 1e-6,
+        loss_rtol: float = 1e-6,
+        loss_atol: float = 1e-10,
+    ) -> SingleShootingCheck:
         """
         Финальная проверка: свободный single-shooting прогон с x0 = s_0
         на полном горизонте и сравнение потерь/разрывов.
 
-        consistent = разрывы <= gap_tol и обе потери конечны.
+        consistent = разрывы <= gap_tol, обе потери конечны и
+        |loss_ms − loss_single| <= loss_atol + loss_rtol·|loss_single|.
+        Сравнение потерь ловит расхождение, которое разрывы по отобранным
+        слотам не видят (например, сброс состояний синапсов при
+        include_syn_states=False после того, как оптимизатор свёл разрывы
+        популяций к нулю).
         """
         ev_ms = self.evaluate(phi)
         gaps = self.continuity_gaps(phi)
         single = self.to_single_shooting_problem(phi)
         ev_single = single.evaluate(None)
+        losses_match = bool(
+            abs(ev_ms.loss - ev_single.loss)
+            <= float(loss_atol) + float(loss_rtol) * abs(ev_single.loss)
+        )
         consistent = bool(
             gaps["finite"]
             and gaps["max"] <= gap_tol
             and np.isfinite(ev_ms.loss)
             and np.isfinite(ev_single.loss)
+            and losses_match
         )
         return SingleShootingCheck(
             loss_ms=ev_ms.loss,

@@ -51,6 +51,7 @@ history) — JSON-сериализация через _JsonDTO (to_dict/from_dic
 import math
 import os
 import time
+import warnings
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple
 
@@ -302,9 +303,18 @@ def _resolve_phi0(problem, phi0, size: int) -> np.ndarray:
 def _resolve_bounds(
     problem, size: int, bounds
 ) -> Optional[Tuple[np.ndarray, np.ndarray]]:
-    """Границы: явный аргумент > problem.bounds_phi() > None."""
+    """
+    Границы: явный аргумент > problem.search_box_phi() > problem.bounds_phi()
+    > None.
+
+    search_box_phi — бокс по θ без 1 % у краёв физического диапазона; в
+    bounds_phi у sigmoid-образных преобразований стоят границы машинной
+    точности, и равномерная выборка DE/CMA ложилась бы к краям диапазона.
+    """
     if bounds is None:
-        fn = getattr(problem, "bounds_phi", None)
+        fn = getattr(problem, "search_box_phi", None)
+        if not callable(fn):
+            fn = getattr(problem, "bounds_phi", None)
         if not callable(fn):
             return None
         lb, ub = fn()
@@ -714,8 +724,25 @@ def _run_cma(
     if checkpoint_path is not None and resume and os.path.exists(checkpoint_path):
         completed = _load_ask_tell_checkpoint(checkpoint_path, seed, config)
         for gen in completed:
-            es.ask()  # дизайн восстанавливается из seed: ask повторяет спрос
-            es.tell(gen["x"], gen["y"])
+            # Дизайн восстанавливается из seed: ask повторяет спрос. В tell
+            # передаются те же массивы, что вернул ask (как в живом цикле):
+            # копии из JSON cma считает внешними (injected) решениями и
+            # обрабатывает иначе, из-за чего resume расходился с непрерывным
+            # прогоном на ~1e-10.
+            asked = [np.asarray(x, dtype=np.float64).reshape(-1) for x in es.ask()]
+            stored = [np.asarray(x, dtype=np.float64).reshape(-1) for x in gen["x"]]
+            same = len(asked) == len(stored) and all(
+                np.array_equal(a, b) for a, b in zip(asked, stored)
+            )
+            if not same:
+                warnings.warn(
+                    "global_search(cma): resume — ask() после восстановления из "
+                    "seed не совпал с сохранённым поколением (другая версия "
+                    "cma или опции); используются сохранённые точки.",
+                    RuntimeWarning,
+                    stacklevel=2,
+                )
+            es.tell(asked if same else stored, gen["y"])
             n_eval = int(gen.get("n_eval", len(gen["y"])))
             oracle._replay(
                 [float(v) for v in gen["y"][:n_eval]],

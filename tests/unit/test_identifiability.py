@@ -49,6 +49,7 @@ from neuraltide.optimization.results import (
     LocalOptimizerResult,
 )
 from neuraltide.optimization.sensitivities import residual_jacobian
+from neuraltide.optimization.uq import laplace_approximation
 
 CHI2_95_DF1 = float(sp_stats.chi2.ppf(0.95, df=1))  # 3.841458820694124
 REL_LOSS_THRESHOLD = CHI2_95_DF1 / 2.0  # 1.920729410347062
@@ -504,17 +505,36 @@ class TestLikelihoodProfileL0:
         problem = CalibrationProblem(
             network, space, t_seq, inputs=inputs, objective=loss
         )
-        grid = np.linspace(6.0, 10.0, 9)
-        prof = likelihood_profile(problem, "exc/tau", grid=grid)
+        # Шаг сетки 0.1 меньше полуширины 95 %-интервала (~0.44 при N = 60,
+        # sigma = 2): иначе интервал схлопывается в один узел.
+        # TRF: L-BFGS-B по умолчанию в единицах полного NLL изредка
+        # завершает узел с ABNORMAL_TERMINATION_IN_LNSRCH уже в оптимуме
+        # (замечание С9 ревью), узел тогда помечается неуспешным.
+        grid = np.linspace(7.0, 9.0, 21)
+        prof = likelihood_profile(
+            problem, "exc/tau", grid=grid, optimizer="least_squares"
+        )
 
         assert all(prof.successes)
         assert prof.phi_path[0].dtype == np.float64
         i_min = int(np.nanargmin(prof.losses))
-        assert prof.theta_values[i_min] == pytest.approx(8.0, abs=0.25)
+        assert prof.theta_values[i_min] == pytest.approx(8.0, abs=0.1)
         lo, hi = prof.intervals["0.95"]
         assert lo is not None and hi is not None
         assert lo < 8.0 < hi
         assert min(prof.rel_loss) == pytest.approx(0.0, abs=1e-9)
+
+        # Независимая сверка: у почти линейной в окрестности задачи профильный
+        # интервал совпадает с маргинальным интервалом Лапласа (оба — в
+        # единицах полного NLL). Лаплас — на свежем экземпляре (ограничение
+        # forward-AD после GradientTape, docs/optimization.md).
+        network2, space2, t_seq2, inputs2, loss2 = l0_factory()
+        fresh = CalibrationProblem(
+            network2, space2, t_seq2, inputs=inputs2, objective=loss2
+        )
+        lap = laplace_approximation(fresh, np.asarray(fresh.pack(), dtype=np.float64))
+        lap_lo, lap_hi = lap.intervals["exc/tau"]
+        assert (hi - lo) == pytest.approx(lap_hi - lap_lo, rel=0.1)
 
 
 # ---------------------------------------------------------------------------

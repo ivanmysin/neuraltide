@@ -23,7 +23,7 @@ continuation-расписания и анализ идентифицируемо
 | `log` | положительные параметры, меняющиеся по порядкам величины (θ = exp φ) |
 | `logit`, `scaled_sigmoid` | параметры ограниченного интервала |
 | `softplus` | неотрицательные параметры с достижимой окрестностью нуля |
-| `bounded_log` | логарифмическая координата внутри диапазона |
+| `bounded_log` | логарифмическая координата внутри диапазона, 0 < min: θ(0) = √(min·max) |
 
 Фабрика `make_transform(kind, **kwargs)` и регистр `TRANSFORM_REGISTRY`.
 Обратное преобразование `inverse(θ)` клиппит θ в допустимую область с
@@ -223,8 +223,15 @@ print(check.consistent, check.gaps["max"])
 (записи `x0s/<k>/<pop>/<slot>`), общими физическими параметрами и
 continuity-штрафом `0.5·w·Σ‖x_end,k − s_{k+1}‖²` (penalty method — не
 augmented Lagrangian). Residual-раскладка `r = [r_data; √w·gap_k]` даёт
-`0.5·‖r‖² == loss_ms` точно. `finalize` выполняет честный свободный
-single-shooting прогон с `x0 = s_0` и проверяет разрывы.
+`0.5·‖r‖² == loss_ms` точно. Состояния синапсов (например, R, U, A у
+`TsodyksMarkramSynapse`) по умолчанию тоже shooting-переменные
+(`include_syn_states=True`); при `False` они сбрасываются к начальным на
+каждом узле, и склейка не совпадает со свободным прогоном (выдаётся
+предупреждение). `finalize` выполняет честный свободный single-shooting
+прогон с `x0 = s_0`, проверяет разрывы и сравнивает `loss_ms` с
+`loss_single` (`loss_rtol`, `loss_atol`). Начальное состояние первого
+сегмента `s_0` тоже свободно, то есть оценивается, а не берётся из
+протокола.
 `BrunelFokkerPlanck` не поддерживается (буфер задержки и CFL-субшагивание
 несовместимы с точной сегментацией) — честный `NotImplementedError`.
 
@@ -267,7 +274,11 @@ print(subset.loss_before, subset.loss_after, subset.prediction_delta)
 ```
 
 - `compute_fim(jac, energy=0.99, collinearity_threshold=0.95, max_dirs=10)` —
-  FIM `F = JᵀJ` по готовому якобиану невязок (нормированным на sigma):
+  FIM `F = JᵀJ` по готовому якобиану невязок в единицах полного NLL:
+  `ResidualLoss` по умолчанию делит вклад наблюдения на число точек N, и
+  `compute_fim` снимает это деление через `JacobianResult.likelihood_scale`
+  (строки J умножаются на sqrt(N)); без этого F была бы FIM/N, а интервалы
+  шире в sqrt(N) раз;
   спектр, `condition_number` = κ(J), `condition_number_fim` = κ(F),
   effective rank по накопленной энергии собственных значений, жёсткие/мягкие
   направления с вкладом параметров, коллинеарные пары столбцов J, нормы
@@ -278,9 +289,13 @@ print(subset.loss_before, subset.loss_after, subset.prediction_delta)
   доводятся локально (warm start от соседнего успешного узла). `phi=None` —
   старт из `problem.pack()`; если `pack()` невозможен (tensor-backed записи
   без переменных модели, например начальное состояние), передайте стартовую
-  точку явно через `phi=...` — иначе `ValueError` с пояснением. Интервал
+  точку явно через `phi=...` — иначе `ValueError` с пояснением. Профиль
+  считается в единицах полного NLL (контекст
+  `objectives.likelihood_normalization` временно ставит `ResidualLoss`
+  в `normalization='sum'`; `losses` — в этих единицах). Интервал
   `intervals['0.95']` по порогу `χ²_0.95(1)/2 ≈ 1.9207` на `rel_loss` для
-  гауссова шума с известной sigma; неуспешные узлы честно фиксируются
+  гауссова шума с известной sigma; шаг сетки должен быть меньше полуширины
+  интервала, иначе интервал схлопывается в узел минимума; неуспешные узлы честно фиксируются
   (losses=NaN, successes=False), немонотонность/несвязность/минимум на
   границе — в `warnings`. Только скалярные записи (numel == 1);
 - `select_subset(problem, jac, keep, refit=True)` — совместная доводка
@@ -309,6 +324,12 @@ print(res.base.loss_best, res.n_evals, res.message)
   результат — `ParetoResult`, не `GlobalOptimizerResult`);
 - `'de'`/`'cma'`/`'nsga2'` требуют конечных границ по всем координатам
   (явные `min`/`max` в params), иначе честный `ValueError` с советом;
+- область поиска — `problem.search_box_phi()`: физический диапазон без
+  1 % у каждого края, переведённый в φ. `bounds_phi()` для этого не годится:
+  у sigmoid-образных преобразований там граница машинной точности (±11 во
+  float32, ±31 во float64), и равномерная выборка ложилась бы к краям
+  диапазона, а результат зависел бы от dtype. Локальная доводка использует
+  полные `bounds_phi()`; явный аргумент `bounds` имеет приоритет;
 - единый бюджет `max_evals`; `refine_top_k` — локальная доводка лучших
   кандидатов (`'lbfgsb'` | `'least_squares'` | callable);
 - checkpoint/resume — только `'cma'`/`'spsa'` (scipy DE и basinhopping из
@@ -345,7 +366,9 @@ print(bt.base.loss_best, bt.weight_history[-1], bt.baseline["best_loss"])
   веса не гарантируют улучшения, сравнивайте `best_loss`;
 - `pcgrad_project` / `cagrad_project(grads, c=0.5)` — проекции
   конфликтующих градиентов (Yu et al. 2020 / Liu et al. 2021) по карте
-  {имя: grad} или списку градиентов;
+  {имя: grad} или списку градиентов; CAGrad решает
+  `max_d min_i <g_i, d>` в шаре `||d − g0|| <= c||g0||`, поэтому худшая
+  задача убывает не медленнее, чем при простом усреднении;
 - `adaptive_window_sampler(problem, window_size, focus, boost)` — выбор
   временного окна с большим остатком и focused view задачи
   (`with_objective`, маска усилена в окне; исходные spec не мутируются);
@@ -401,7 +424,7 @@ pred = predictive_intervals(problem, samples, level=0.95)    # per-(pop, t, unit
   окнам; fallback на плоский псевдо-spec без метаданных observations;
 - `laplace_approximation(problem, phi_map, jac=None, prior_cov=None,
   method='gn'|'fd-hessian')` — гауссово приближение постериора: covariance =
-  (JᵀJ + P)⁻¹ по нормированным невязкам (`'gn'`; J — готовый `JacobianResult`
+  (JᵀJ + P)⁻¹ в единицах полного NLL (`'gn'`; J — готовый `JacobianResult`
   или внутренний `residual_jacobian` с капом `max_params`); `'fd-hessian'` —
   только sanity-check (2n+1 прогонов, кап `max_fd_params=50`). PD-проверка
   через Cholesky с нарастающим jitter (`pd`, `jitter_used`); маргинальные
@@ -418,12 +441,14 @@ pred = predictive_intervals(problem, samples, level=0.95)    # per-(pop, t, unit
 - `noise_sensitivity(laplace_result, sigma_factors)` — чувствительность
   posterior к масштабу шума.
 
-Интервалы осмысленны при ненулевых MAP-невязках: exact-fit (потеря ровно 0)
-— вырожденный случай, residual-нормировка `sign(e)·sqrt(2ψ)` в нуле
-недифференцируема, forward-чувствительности дают NaN. На практике это
-значит: цели калибровки должны содержать шум/невязку, иначе UQ-блок
-запускайте из возмущённой точки. Тесты P2 (`tests/integration/
-test_p2_workflow.py`, `tests/unit/test_uq.py`) фиксируют эти границы.
+Все статистические величины (FIM, Лаплас, профили) — в единицах полного
+NLL; покрытие 95 %-интервалов Лапласа на синтетических ансамблях проверяет
+`tests/unit/test_audit_regressions.py::test_laplace_coverage_on_noisy_l0`
+(`-m slow`). Якобиан невязок конечен и при точном совпадении (exact-fit):
+для l2/relative/msle невязка — сама ошибка `e`, для робастных видов
+`sign(e)·sqrt(2ψ)` заменяется на `e` в точках ψ = 0. Прогнозные интервалы
+`predictive_intervals` по сэмплам постериора — неопределённость параметров,
+без шума наблюдений: их сравнивают с бесшумной траекторией, а не с данными.
 
 ## Пакетная оценка кандидатов (`parallel`, P2)
 
@@ -490,9 +515,6 @@ finally:
   «Laplace/якобиан ДО градиентных методов» или свежий экземпляр задачи
   через фабрику (как в `examples/example_09_p2_workflow.py`) — рабочие
   обходные пути; это ограничение TF+кэша tf.function, не P2-модулей;
-- **Exact-fit вырожден для UQ**: при нулевых MAP-невязках residual
-  sqrt-нормировка недифференцируема (NaN в J); калибруйте по зашумлённым/
-  несводимым данным или оценивайте неопределённость из возмущённой точки;
 - **Optional deps**: `'cma'` — extra `global` (`pip install
   'neuraltide[global]'`), `'pymoo'` — extra `pareto`; отсутствие поднимает
   `OptionalDependencyError` с сообщением об установке;

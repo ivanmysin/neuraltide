@@ -20,6 +20,7 @@ jacobian(φ) возвращает dθ/dφ поэлементно, в той же
 и со скалярами, и с тензорами произвольной формы.
 """
 
+import math
 from typing import Dict, Optional, Type
 
 import numpy as np
@@ -228,10 +229,10 @@ class SoftplusTransform(Transform):
     θ = softplus(φ) + floor — неотрицательные параметры с достижимой
     окрестностью нуля.
 
-    В отличие от sigmoid-образных преобразований, производная sigmoid(φ)
-    около нижней границы затухает как exp(φ) (экспоненциально, но не
-    двойственно-экспоненциально как u·(1−u) у границы интервала), поэтому
-    градиентный поток около нуля сохраняется заметно дольше.
+    Производная dθ/dφ = sigmoid(φ) около нуля затухает как exp(φ) — так же,
+    как у log и у sigmoid-образных преобразований у нижней границы
+    (u·(1−u) ≈ exp(φ) при φ → −∞). Преимущества перед ними по затуханию
+    градиента у нуля нет; отличие — линейный рост θ при больших φ.
 
     inverse вычисляется в стабильной форме φ = y + log(−expm1(−y)),
     y = θ − floor, с клиппингом y снизу на min normal выбранного dtype.
@@ -264,8 +265,13 @@ class SoftplusTransform(Transform):
 
 class BoundedLogTransform(Transform):
     """
-    θ = lo + (hi − lo)·sigmoid(φ) — логарифмическая координата внутри
-    заданного диапазона (без дополнительного масштаба s).
+    Логарифмическая координата внутри диапазона [lo, hi], 0 < lo < hi:
+
+        θ = exp(log lo + (log hi − log lo)·sigmoid(φ)).
+
+    Равные шаги sigmoid(φ) дают равные шаги log θ; θ(0) = √(lo·hi) —
+    геометрическое среднее. Подходит для величин, различающихся на порядки
+    (например, постоянные времени синапсов 5–600 мс).
 
     .. warning::
         Как и у остальных sigmoid-образных преобразований, производная
@@ -279,25 +285,31 @@ class BoundedLogTransform(Transform):
             raise ValueError(
                 f"BoundedLogTransform: require min < max, got min={min}, max={max}."
             )
+        if min <= 0.0:
+            raise ValueError(
+                f"BoundedLogTransform: require min > 0 (logarithmic scale), got min={min}."
+            )
         self.min = float(min)
         self.max = float(max)
+        self._log_min = math.log(self.min)
+        self._log_span = math.log(self.max) - self._log_min
 
     def _u(self, phi) -> tf.Tensor:
         return tf.sigmoid(_to_tensor(phi))
 
     def forward(self, phi) -> tf.Tensor:
-        return self.min + (self.max - self.min) * self._u(phi)
+        return tf.exp(self._log_min + self._log_span * self._u(phi))
 
     def inverse(self, theta) -> tf.Tensor:
-        span = self.max - self.min
-        u = (_to_tensor(theta) - self.min) / span
+        theta_t = tf.maximum(_to_tensor(theta), tf.constant(self.min, dtype=_dtype()))
+        u = (tf.math.log(theta_t) - self._log_min) / self._log_span
         m = _margin()
         u = tf.clip_by_value(u, m, 1.0 - m)
         return tf.math.log(u) - tf.math.log1p(-u)
 
     def jacobian(self, phi) -> tf.Tensor:
         u = self._u(phi)
-        return (self.max - self.min) * u * (1.0 - u)
+        return self.forward(phi) * self._log_span * u * (1.0 - u)
 
 
 TRANSFORM_REGISTRY: Dict[str, Type[Transform]] = {

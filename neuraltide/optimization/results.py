@@ -485,7 +485,11 @@ class JacobianResult(_JsonDTO):
         phi: точка оценки;
         n_forward: число прямых прогонов, потребованное оценкой;
         wall_time: время оценки, секунды;
-        method: способ построения ('forward' по умолчанию).
+        method: способ построения ('forward' по умолчанию);
+        likelihood_scale: множители строк для перевода невязок в единицы
+            полного NLL (r_nll = s·r, J_nll = s[:, None]·J; см.
+            objectives.likelihood_row_scale) или None — невязки уже в этих
+            единицах. Используется compute_fim / laplace_approximation.
     """
 
     J: np.ndarray = field(default_factory=lambda: np.zeros((0, 0)))
@@ -495,11 +499,27 @@ class JacobianResult(_JsonDTO):
     n_forward: int = 0
     wall_time: float = 0.0
     method: str = "forward"
+    likelihood_scale: Optional[np.ndarray] = None
 
     def __post_init__(self) -> None:
         self.J = np.asarray(self.J, dtype=np.float64)
         self.r = np.asarray(self.r, dtype=np.float64)
         self.phi = np.asarray(self.phi, dtype=np.float64)
+        if self.likelihood_scale is not None:
+            self.likelihood_scale = np.asarray(
+                self.likelihood_scale, dtype=np.float64
+            ).reshape(-1)
+
+    def likelihood_jacobian(self) -> np.ndarray:
+        """J в единицах полного NLL: s[:, None]·J (или J, если s нет)."""
+        if self.likelihood_scale is None:
+            return self.J
+        if self.likelihood_scale.shape[0] != self.J.shape[0]:
+            raise ValueError(
+                f"JacobianResult: likelihood_scale has "
+                f"{self.likelihood_scale.shape[0]} rows, J has {self.J.shape[0]}."
+            )
+        return self.likelihood_scale[:, None] * self.J
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -510,10 +530,16 @@ class JacobianResult(_JsonDTO):
             "n_forward": int(self.n_forward),
             "wall_time": float(self.wall_time),
             "method": str(self.method),
+            "likelihood_scale": (
+                None
+                if self.likelihood_scale is None
+                else self.likelihood_scale.tolist()
+            ),
         }
 
     @classmethod
     def from_dict(cls, data: Mapping[str, Any]) -> "JacobianResult":
+        scale = data.get("likelihood_scale")
         return cls(
             J=np.asarray(data.get("J", []), dtype=np.float64),
             r=np.asarray(data.get("r", []), dtype=np.float64),
@@ -522,4 +548,7 @@ class JacobianResult(_JsonDTO):
             n_forward=int(data.get("n_forward", 0)),
             wall_time=float(data.get("wall_time", 0.0)),
             method=str(data.get("method", "forward")),
+            likelihood_scale=None
+            if scale is None
+            else np.asarray(scale, dtype=np.float64),
         )

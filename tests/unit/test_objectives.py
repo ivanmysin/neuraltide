@@ -64,7 +64,9 @@ def _ref_loss(
         psi = delta**2 * (np.sqrt(1.0 + (e / delta) ** 2) - 1.0)
     else:  # l2
         psi = 0.5 * e**2
-    m = np.ones_like(psi) if mask is None else mask
+    # Маска расширяется до формы psi: знаменатель — число выбранных
+    # элементов, а не сумма маски исходной (broadcast) формы (В3 ревью).
+    m = np.ones_like(psi) if mask is None else np.broadcast_to(mask, psi.shape)
     norm = max(float(m.sum()), 1e-8)
     return weight * float((m * psi).sum()) / (norm * sigma**2)
 

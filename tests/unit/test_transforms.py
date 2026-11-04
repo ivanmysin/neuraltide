@@ -50,7 +50,7 @@ class TestContract:
         assert LogitTransform(0.0, 1.0).name == "logit"
         assert ScaledSigmoidTransform(0.0, 1.0).name == "scaled_sigmoid"
         assert SoftplusTransform().name == "softplus"
-        assert BoundedLogTransform(0.0, 1.0).name == "bounded_log"
+        assert BoundedLogTransform(0.1, 1.0).name == "bounded_log"
 
     def test_scalar_and_tensor_inputs(self):
         tr = make_transform("log")
@@ -81,7 +81,7 @@ class TestFactory:
         )
         assert isinstance(make_transform("softplus"), SoftplusTransform)
         assert isinstance(
-            make_transform("bounded_log", min=0.0, max=1.0),
+            make_transform("bounded_log", min=0.1, max=1.0),
             BoundedLogTransform,
         )
 

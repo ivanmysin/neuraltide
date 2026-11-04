@@ -192,14 +192,16 @@ def _chain_gradient(
     tape: tf.GradientTape,
     loss_t: tf.Tensor,
     phi_t: tf.Tensor,
-    x0_map: Mapping[str, tf.Tensor],
+    x0_map: Mapping[str, Any],
 ) -> tf.Tensor:
     """
     dloss/dφ = dloss/dисточник × dисточник/dφ (поэлементно × jacobian).
 
     model_var: dloss/dθ по переменным модели × transform.jacobian;
     tensor-записи: dloss/dx0 по подставленному тензору × transform.jacobian.
-    Записи без доступного источника дают нулевой вклад.
+    x0_map[name] может быть списком тензоров — по одному на эксперимент,
+    в котором подставлялась запись (MultiExperimentProblem): вклады
+    суммируются. Записи без доступного источника дают нулевой вклад.
     """
     dtype = neuraltide.config.get_dtype()
     entries = space.entries
@@ -212,11 +214,17 @@ def _chain_gradient(
                 source_names.append(name)
         else:
             x0 = x0_map.get(name)
-            if x0 is not None:
-                sources.append(x0)
+            if x0 is None:
+                continue
+            for tensor in x0 if isinstance(x0, (list, tuple)) else [x0]:
+                sources.append(tensor)
                 source_names.append(name)
     grads = tape.gradient(loss_t, sources) if sources else []
-    grad_by_name = dict(zip(source_names, grads))
+    grad_by_name: Dict[str, tf.Tensor] = {}
+    for name, g in zip(source_names, grads):
+        if g is None:
+            continue
+        grad_by_name[name] = g if name not in grad_by_name else grad_by_name[name] + g
 
     pieces = []
     start = 0
@@ -280,6 +288,61 @@ def _bounds_phi_from_space(space: ParameterSpace) -> Tuple[np.ndarray, np.ndarra
         np.asarray(lower, dtype=np.float64),
         np.asarray(upper, dtype=np.float64),
     )
+
+
+# Отступ поискового бокса глобальных методов от физических границ (доля span).
+SEARCH_BOX_REL_MARGIN = 0.01
+
+
+def _search_box_phi_from_space(
+    space: ParameterSpace, rel_margin: float = SEARCH_BOX_REL_MARGIN
+) -> Tuple[np.ndarray, np.ndarray]:
+    """
+    Поисковый бокс φ для глобальных методов (DE, CMA-ES, ...).
+
+    bounds_phi берёт inverse(min/max): у sigmoid-образных преобразований
+    это граница отступа машинной точности (±11 во float32, ±31 во float64),
+    у log с min=0 — log(tiny). Равномерная выборка в таком боксе почти вся
+    ложится к краям физического диапазона и зависит от dtype. Здесь бокс
+    строится по θ ∈ [min + δ·span, max − δ·span], δ = rel_margin, и
+    переводится в φ; записи без одной из границ дают ±inf (глобальные
+    методы с конечными границами их отвергают).
+    """
+    if not 0.0 <= float(rel_margin) < 0.5:
+        raise ValueError(
+            f"search box: rel_margin должен быть в [0, 0.5), got {rel_margin}."
+        )
+    lower: list = []
+    upper: list = []
+    dtype = neuraltide.config.get_dtype()
+    for entry in space.entries.values():
+        lo, hi = -np.inf, np.inf
+        if entry.min is not None and entry.max is not None:
+            span = float(entry.max) - float(entry.min)
+            lo_t = float(entry.min) + float(rel_margin) * span
+            hi_t = float(entry.max) - float(rel_margin) * span
+            lo = float(entry.transform.inverse(tf.constant(lo_t, dtype)))
+            hi = float(entry.transform.inverse(tf.constant(hi_t, dtype)))
+            lo, hi = min(lo, hi), max(lo, hi)
+        elif entry.min is not None or entry.max is not None:
+            lo_b, hi_b = _bounds_phi_from_space_entry(entry, dtype)
+            lo, hi = lo_b, hi_b
+        lower.extend([lo] * entry.numel)
+        upper.extend([hi] * entry.numel)
+    return (
+        np.asarray(lower, dtype=np.float64),
+        np.asarray(upper, dtype=np.float64),
+    )
+
+
+def _bounds_phi_from_space_entry(entry, dtype) -> Tuple[float, float]:
+    """bounds_phi одной записи (для односторонних границ)."""
+    lo, hi = -np.inf, np.inf
+    if entry.min is not None:
+        lo = float(entry.transform.inverse(tf.constant(entry.min, dtype)))
+    if entry.max is not None:
+        hi = float(entry.transform.inverse(tf.constant(entry.max, dtype)))
+    return lo, hi
 
 
 def _make_evaluation(
@@ -674,6 +737,16 @@ class CalibrationProblem:
         """
         return _bounds_phi_from_space(self.parameter_space)
 
+    def search_box_phi(
+        self, rel_margin: float = SEARCH_BOX_REL_MARGIN
+    ) -> Tuple[np.ndarray, np.ndarray]:
+        """
+        Поисковый бокс φ для глобальных методов: θ ∈ [min + δ·span,
+        max − δ·span] в φ-координатах (не зависит от dtype и машинного
+        отступа inverse у границ). См. _search_box_phi_from_space.
+        """
+        return _search_box_phi_from_space(self.parameter_space, rel_margin)
+
     # ------------------------------------------------------------------
     # Сборка Evaluation
     # ------------------------------------------------------------------
@@ -837,6 +910,12 @@ class MultiExperimentProblem:
         """Границы φ общего ParameterSpace."""
         return _bounds_phi_from_space(self.parameter_space)
 
+    def search_box_phi(
+        self, rel_margin: float = SEARCH_BOX_REL_MARGIN
+    ) -> Tuple[np.ndarray, np.ndarray]:
+        """Поисковый бокс φ общего ParameterSpace (см. CalibrationProblem)."""
+        return _search_box_phi_from_space(self.parameter_space, rel_margin)
+
     # ------------------------------------------------------------------
     # Ядро
     # ------------------------------------------------------------------
@@ -961,11 +1040,14 @@ class MultiExperimentProblem:
             theta = self.parameter_space.unpack(phi_t)
             losses: List[tf.Tensor] = []
             outputs: List[NetworkOutput] = []
-            x0_map: Dict[str, tf.Tensor] = {}
+            # Тензор x0 создаётся заново в каждом эксперименте: собираем все,
+            # иначе градиент по x0 учитывал бы только последний эксперимент.
+            x0_map: Dict[str, List[tf.Tensor]] = {}
             for exp in self.experiments:
                 output, x0_e = self._run_experiment(exp, theta)
                 outputs.append(output)
-                x0_map.update(x0_e)
+                for key, tensor in x0_e.items():
+                    x0_map.setdefault(key, []).append(tensor)
                 losses.append(exp.objective(output, self.network))
             loss_t = tf.add_n(losses)
         grad_t = _phi_gradient(
@@ -1058,9 +1140,12 @@ class FrozenProblem:
         fixed: {full_name: физическое θ} — записи, зафиксированные на
             явных значениях.
 
-    Контракт мутации наследуется: phi=None не трогает модель; phi != None
-    переводит базовую модель в точку с phi_full (замороженные координаты
-    в ней всегда на зафиксированных значениях).
+    Контракт мутации: phi != None переводит базовую модель в точку с
+    phi_full (замороженные координаты в ней всегда на зафиксированных
+    значениях). phi=None без fixed не трогает модель. phi=None при
+    непустом fixed оценивает точку compose(pack()) — текущие свободные
+    координаты и значения fixed — и поэтому переводит модель в неё: иначе
+    потеря считалась бы при значениях модели, а не при fixed.
     """
 
     def __init__(
@@ -1089,6 +1174,7 @@ class FrozenProblem:
                     f"FrozenProblem: names both free and fixed: {overlap}."
                 )
         self._free_names: List[str] = free
+        self._has_fixed = bool(fixed)
 
         dtype = neuraltide.config.get_dtype()
         self._full_offsets: Dict[str, Tuple[int, int]] = {}
@@ -1208,12 +1294,31 @@ class FrozenProblem:
         lower, upper = self._problem.bounds_phi()
         return lower[self._free_index], upper[self._free_index]
 
+    def search_box_phi(
+        self, rel_margin: float = SEARCH_BOX_REL_MARGIN
+    ) -> Tuple[np.ndarray, np.ndarray]:
+        """Поисковый бокс reduced φ (строки бокса базовой задачи)."""
+        fn = getattr(self._problem, "search_box_phi", None)
+        lower, upper = fn(rel_margin) if callable(fn) else self._problem.bounds_phi()
+        return lower[self._free_index], upper[self._free_index]
+
     # ------------------------------------------------------------------
     # Операции (делегирование с compose)
     # ------------------------------------------------------------------
+    def _full_phi(self, phi: Optional[Any]) -> Optional[tf.Tensor]:
+        """
+        phi_full для делегирования: compose(phi); при phi=None — None (без
+        мутации), если fixed пуст, и compose(pack()) иначе (см. контракт).
+        """
+        if phi is not None:
+            return self._compose(phi)
+        if self._has_fixed:
+            return self._compose(self.pack())
+        return None
+
     def evaluate(self, phi: Optional[Any] = None) -> Evaluation:
         """Потеря базовой задачи в точке phi_full = compose(phi)."""
-        return self._problem.evaluate(None if phi is None else self._compose(phi))
+        return self._problem.evaluate(self._full_phi(phi))
 
     def value_and_gradient(
         self, phi: Optional[Any] = None
@@ -1224,23 +1329,21 @@ class FrozenProblem:
         Returns:
             (Evaluation базовой задачи, grad — tf.Tensor формы [size]).
         """
-        eval_result, grad_full = self._problem.value_and_gradient(
-            None if phi is None else self._compose(phi)
-        )
+        eval_result, grad_full = self._problem.value_and_gradient(self._full_phi(phi))
         grad_free = tf.gather(tf.convert_to_tensor(grad_full), self._free_index)
         return eval_result, grad_free
 
     def residual(self, phi: Optional[Any] = None) -> np.ndarray:
         """Невязки базовой задачи в точке phi_full = compose(phi)."""
-        return self._problem.residual(None if phi is None else self._compose(phi))
+        return self._problem.residual(self._full_phi(phi))
 
     def validate(self, phi: Optional[Any] = None) -> Dict[str, float]:
         """validate базовой задачи в точке phi_full = compose(phi)."""
-        return self._problem.validate(None if phi is None else self._compose(phi))
+        return self._problem.validate(self._full_phi(phi))
 
     def simulate(self, phi: Optional[Any] = None, experiment=None) -> NetworkOutput:
         """simulate базовой задачи (experiment — для MultiExperimentProblem)."""
-        full = None if phi is None else self._compose(phi)
+        full = self._full_phi(phi)
         if experiment is None:
             return self._problem.simulate(full)
         return self._problem.simulate(full, experiment=experiment)

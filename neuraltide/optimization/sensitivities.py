@@ -51,6 +51,7 @@ from neuraltide.optimization.problem import (
     CalibrationProblem,
 )
 from neuraltide.optimization.results import JacobianResult
+from neuraltide.optimization.objectives import likelihood_row_scale
 
 __all__ = [
     "CheckpointedGradient",
@@ -195,7 +196,13 @@ def _segment_loss(
     mask_map = getattr(objective, "mask", None)
     mask = None
     if isinstance(mask_map, dict) and mask_map:
-        mask = {name: m[:, s:e] for name, m in mask_map.items()}
+        mask = {}
+        for name, m in mask_map.items():
+            t_full = target_map[name].shape[1] if name in target_map else None
+            has_time = m.shape.rank == 3 and t_full is not None and m.shape[1] == t_full
+            # Маску без полной оси времени ([batch, n], [1, 1, n]) не режем:
+            # срез [:, s:e] резал бы её по оси юнитов или давал пустой тензор.
+            mask[name] = m[:, s:e] if has_time else m
     return per_step_fn(rates, target, mask)
 
 
@@ -313,7 +320,10 @@ def residual_jacobian(
 
     Returns:
         JacobianResult с J [n_residuals, size], r, loss = 0.5·||r||²,
-        phi, n_forward (дельта счётчика задачи), wall_time, method='forward'.
+        phi, n_forward (дельта счётчика задачи), wall_time, method='forward'
+        и likelihood_scale — множители строк для перевода J в единицы
+        полного NLL (для ResidualLoss с normalization='mean' это sqrt(N);
+        compute_fim и laplace_approximation применяют их сами).
     """
     n = problem.size
     if n > max_params and not force:
@@ -346,6 +356,9 @@ def residual_jacobian(
     assert r is not None and J is not None
     elapsed = time.perf_counter() - t0
     loss = 0.5 * float(r @ r)
+    scale = likelihood_row_scale(problem)
+    if scale is not None and scale.shape[0] != r.shape[0]:
+        scale = None  # предсказания другой формы, чем target: множители неизвестны
     return JacobianResult(
         J=J,
         r=r,
@@ -354,6 +367,7 @@ def residual_jacobian(
         n_forward=problem.n_forward - n_forward0,
         wall_time=elapsed,
         method="forward",
+        likelihood_scale=scale,
     )
 
 

@@ -365,10 +365,13 @@ class TestIncludeSynStates:
     def test_syn_states_in_entries_gaps_and_residual(self):
         network, space, t_seq, loss = self._build_tm_network()
         problem = CalibrationProblem(network, space, t_seq, objective=loss)
-        ms_syn = MultipleShootingProblem(
-            problem, ShootingConfig(2), include_syn_states=True
-        )
-        ms_pop = MultipleShootingProblem(problem, ShootingConfig(2))
+        # По умолчанию include_syn_states=True (К2 ревью).
+        ms_syn = MultipleShootingProblem(problem, ShootingConfig(2))
+        assert ms_syn.include_syn_states
+        with pytest.warns(UserWarning, match="include_syn_states=False"):
+            ms_pop = MultipleShootingProblem(
+                problem, ShootingConfig(2), include_syn_states=False
+            )
         # 2 сегмента × (1 pop-слот + 3 syn-слота) = 8 shooting-координат
         assert ms_syn.size == ms_pop.size + 2 * 3
         names = ms_syn.parameter_space.names

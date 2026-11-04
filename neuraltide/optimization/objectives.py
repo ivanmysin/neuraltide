@@ -21,10 +21,20 @@ observation (0-d Tensor/Variable — например, обучаемый или
 
     weight * sum(mask * psi(error)) / (N * sigma**2),
 
-где psi(e) — штрафная функция вида, а N — нормировка:
-``max(sum(mask), eps)`` при заданной маске и число элементов траектории
-без неё. Маска масштаб не меняет: умножение маски на константу сокращается
-числителем и знаменателем.
+где psi(e) — штрафная функция вида, а N — нормировка: число
+выбранных элементов ``max(sum(broadcast(mask)), eps)`` при заданной маске
+(маска расширяется до формы траектории, поэтому маска из единиц любой
+broadcast-формы эквивалентна её отсутствию) и число элементов траектории
+без неё. Умножение маски на константу сокращается числителем и
+знаменателем.
+
+Нормировка ``normalization='mean'`` (по умолчанию) удобна для оптимизации:
+масштаб loss не зависит от длины записи. Для статистики (FIM, Лаплас,
+профили правдоподобия) нужен полный NLL — ``normalization='sum'`` (N = 1):
+тогда для гауссова шума ``0.5 * ||r||^2`` равна NLL с точностью до
+константы. Модули identifiability/uq переводят невязки в эти единицы сами:
+через ``likelihood_row_scale(problem)`` (множитель sqrt(N) на строку
+невязок) и контекст ``likelihood_normalization(problem)``.
 
 Residual-вектор согласован с этой нормировкой поэлементно:
 
@@ -39,9 +49,11 @@ Residual-вектор согласован с этой нормировкой п
     predictions.firing_rates[population]: [batch, T, n_units].
 """
 
+import contextlib
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Dict, Iterator, List, Optional, Sequence
 
+import numpy as np
 import tensorflow as tf
 
 import neuraltide.config
@@ -49,7 +61,14 @@ from neuraltide.core.types import TensorType, cast_if_needed
 from neuraltide.training.losses import BaseLoss, _MASK_DENOM_EPS
 from neuraltide.training.readouts import BaseReadout, IdentityReadout
 
-__all__ = ["ObservationSpec", "ResidualLoss"]
+__all__ = [
+    "ObservationSpec",
+    "ResidualLoss",
+    "likelihood_row_scale",
+    "likelihood_normalization",
+]
+
+_NORMALIZATIONS = ("mean", "sum")
 
 _KINDS = ("l2", "relative", "msle", "huber", "pseudo_huber", "cauchy", "tukey")
 
@@ -183,6 +202,10 @@ class ResidualLoss(BaseLoss):
     Args:
         observations: последовательность ObservationSpec; имена должны
             быть уникальны.
+        normalization: 'mean' (по умолчанию) — вклад наблюдения делится на
+            число элементов N (masked mean); 'sum' — без деления (N = 1),
+            тогда для гауссова шума 0.5·||r||² — полный NLL. Атрибут можно
+            временно переключать (см. likelihood_normalization).
 
     Скалярный интерфейс:
         __call__(predictions, model) — полная loss (сумма вкладов);
@@ -199,7 +222,15 @@ class ResidualLoss(BaseLoss):
         с учётом sigma/weight/mask/kind (см. модульную документацию).
     """
 
-    def __init__(self, observations: Sequence[ObservationSpec]):
+    def __init__(
+        self, observations: Sequence[ObservationSpec], normalization: str = "mean"
+    ):
+        if normalization not in _NORMALIZATIONS:
+            raise ValueError(
+                f"ResidualLoss: normalization must be one of {_NORMALIZATIONS}, "
+                f"got {normalization!r}."
+            )
+        self.normalization = normalization
         self.observations: List[ObservationSpec] = list(observations)
         if not self.observations:
             raise ValueError("ResidualLoss: at least one observation is required.")
@@ -266,18 +297,57 @@ class ResidualLoss(BaseLoss):
         return tf.where(a <= spec.scale, quadratic, constant)
 
     @staticmethod
-    def _norm(spec: ObservationSpec, psi: TensorType) -> TensorType:
+    def _count(spec: ObservationSpec, full_shape, dtype) -> TensorType:
         """
-        Нормировка N полной траектории: max(sum(mask), eps) либо число
-        элементов target'а (без маски).
+        Число элементов N полной траектории: max(sum(broadcast(mask)), eps)
+        либо число элементов траектории (без маски). Маска расширяется до
+        full_shape, поэтому маска из единиц любой broadcast-формы даёт то же
+        N, что и её отсутствие.
         """
-        dtype = psi.dtype
         eps_const = tf.constant(_MASK_DENOM_EPS, dtype=dtype)
+        ones = tf.ones(full_shape, dtype=dtype)
         if spec.mask is None:
-            n = tf.cast(tf.size(spec.target), dtype)
-            return tf.maximum(n, eps_const)
-        m = cast_if_needed(spec.mask, dtype)
+            return tf.maximum(tf.reduce_sum(ones), eps_const)
+        m = cast_if_needed(spec.mask, dtype) * ones
         return tf.maximum(tf.reduce_sum(m), eps_const)
+
+    def _norm(self, spec: ObservationSpec, psi: TensorType) -> TensorType:
+        """
+        Нормировка вклада: N полной траектории при normalization='mean',
+        1 при 'sum'. psi — штраф полной траектории (его форма задаёт форму
+        расширения маски).
+        """
+        if self.normalization == "sum":
+            return tf.constant(1.0, dtype=psi.dtype)
+        return self._count(spec, tf.shape(psi), psi.dtype)
+
+    def _full_shape(self, spec: ObservationSpec):
+        """Форма полной траектории наблюдения (для per_step_loss)."""
+        shape = tf.shape(spec.target)
+        if spec.mask is not None:
+            shape = tf.broadcast_dynamic_shape(shape, tf.shape(spec.mask))
+        return shape
+
+    def likelihood_row_scale(self) -> np.ndarray:
+        """
+        Множители строк невязок для перевода в единицы полного NLL:
+        sqrt(N_k) для элементов наблюдения k при normalization='mean'
+        (1 при 'sum'). r_sum = scale * r, J_sum = scale[:, None] * J.
+
+        Длина равна длине residual(predictions) при предсказаниях формы
+        target (контракт ObservationSpec).
+        """
+        pieces: List[np.ndarray] = []
+        for spec in self.observations:
+            shape = self._full_shape(spec)
+            numel = int(tf.reduce_prod(shape))
+            if self.normalization == "sum":
+                factor = 1.0
+            else:
+                n = self._count(spec, shape, tf.float64)
+                factor = float(np.sqrt(float(n)))
+            pieces.append(np.full(numel, factor, dtype=np.float64))
+        return np.concatenate(pieces)
 
     def _spec_terms(self, spec: ObservationSpec, pred: TensorType, tgt: TensorType):
         """e, psi, mask (broadcastable) и нормировка N для полной траектории."""
@@ -369,7 +439,10 @@ class ResidualLoss(BaseLoss):
                 m = tf.ones_like(psi)
             else:
                 m = cast_if_needed(mask_t, psi.dtype)
-            n = self._norm(spec, psi)
+            if self.normalization == "sum":
+                n = tf.constant(1.0, dtype=psi.dtype)
+            else:
+                n = self._count(spec, self._full_shape(spec), psi.dtype)
             total += self._spec_loss(spec, psi, m, n)
         return total
 
@@ -383,7 +456,6 @@ class ResidualLoss(BaseLoss):
         Поэлементная структура (см. документацию модуля):
             r_i = sqrt(weight * mask_i / (N sigma^2)) * sign(e_i) * sqrt(2 psi(e_i)).
         """
-        dtype = neuraltide.config.get_dtype()
         pieces: List[TensorType] = []
         for spec in self.observations:
             pred = self._rates(predictions, spec)
@@ -396,11 +468,96 @@ class ResidualLoss(BaseLoss):
             n = self._norm(spec, psi)
             w = ObservationSpec._weight_tensor(spec, psi.dtype)
             scale = tf.sqrt(w / (n * spec.sigma**2))
-            r = (
-                scale
-                * tf.sqrt(m)
-                * tf.sign(e)
-                * tf.sqrt(tf.maximum(2.0 * psi, tf.constant(0.0, dtype=dtype)))
-            )
+            r = scale * tf.sqrt(m) * self._signed_root(spec, e, psi)
             pieces.append(tf.reshape(r, [-1]))
         return tf.concat(pieces, axis=0)
+
+    @staticmethod
+    def _signed_root(
+        spec: ObservationSpec, e: TensorType, psi: TensorType
+    ) -> TensorType:
+        """
+        sign(e)·sqrt(2 psi(e)) с конечной производной в e = 0.
+
+        Для l2/relative/msle (psi = e²/2) это ровно e. Для робастных видов
+        psi ≈ e²/2 около нуля, поэтому в точках psi = 0 подставляется e:
+        значение то же (0), производная равна пределу (1). Прямая запись
+        sign(e)·sqrt(2 psi) давала 0·∞ = NaN в якобиане при точном
+        совпадении предсказания и цели.
+        """
+        if spec.kind in ("l2", "relative", "msle"):
+            return e
+        positive = psi > 0.0
+        psi_safe = tf.where(positive, psi, tf.ones_like(psi))
+        return tf.where(positive, tf.sign(e) * tf.sqrt(2.0 * psi_safe), e)
+
+
+# ---------------------------------------------------------------------------
+# Единицы правдоподобия для статистических модулей
+# ---------------------------------------------------------------------------
+
+
+def _residual_objectives(problem) -> Optional[List[Any]]:
+    """
+    Objective'ы, чьи невязки составляют problem.residual, в порядке
+    конкатенации; None, если состав невязок неизвестен (duck-задачи,
+    multiple shooting с невязками разрывов).
+    """
+    from neuraltide.optimization.shooting import MultipleShootingProblem
+
+    if isinstance(problem, MultipleShootingProblem):
+        return None
+    inner = getattr(problem, "_problem", None)
+    if inner is not None and hasattr(problem, "_compose"):  # FrozenProblem
+        return _residual_objectives(inner)
+    experiments = getattr(problem, "experiments", None)
+    if isinstance(experiments, (list, tuple)):  # MultiExperimentProblem
+        return [exp.objective for exp in experiments]
+    if hasattr(problem, "objective"):
+        return [problem.objective]
+    return None
+
+
+def likelihood_row_scale(problem) -> Optional[np.ndarray]:
+    """
+    Множители строк problem.residual для перевода в единицы полного NLL.
+
+    Для ResidualLoss с normalization='mean' невязки нормированы так, что
+    0.5·||r||² = NLL/N; статистике (FIM, Лаплас) нужен NLL. Возвращает
+    вектор s (sqrt(N_k) на элементы наблюдения k), такой что
+    r_nll = s·r и J_nll = s[:, None]·J. None — если задача не построена на
+    ResidualLoss (невязки duck-задач считаются уже заданными в единицах NLL).
+    """
+    objectives = _residual_objectives(problem)
+    if not objectives:
+        return None
+    pieces = []
+    for obj in objectives:
+        fn = getattr(obj, "likelihood_row_scale", None)
+        if fn is None:
+            return None
+        pieces.append(fn())
+    return np.concatenate(pieces)
+
+
+@contextlib.contextmanager
+def likelihood_normalization(problem) -> Iterator[None]:
+    """
+    Временно переводит ResidualLoss задачи в normalization='sum'.
+
+    Внутри контекста loss и невязки задачи — в единицах полного NLL
+    (гауссов шум с известной sigma), поэтому пороги χ² профилей и
+    гессиан потерь имеют статистический смысл. Задачи без ResidualLoss
+    не меняются. Исходные значения восстанавливаются при выходе.
+    """
+    objectives = _residual_objectives(problem) or []
+    saved = []
+    for obj in objectives:
+        if hasattr(obj, "likelihood_row_scale") and hasattr(obj, "normalization"):
+            saved.append((obj, obj.normalization))
+            obj.normalization = "sum"
+    try:
+        yield
+    finally:
+        for obj, value in saved:
+            obj.normalization = value

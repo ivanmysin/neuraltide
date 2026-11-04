@@ -366,13 +366,22 @@ class TestP2Workflow:
             assert lo <= star <= hi, (name, lo, hi, star)
 
         # 5. Прогнозные интервалы по ансамблю posterior: монотонность
-        #    lower <= central <= upper и разумное покрытие цели.
+        #    lower <= central <= upper. Полоса — неопределённость параметров
+        #    (без шума наблюдений), поэтому сверяется с истинной бесшумной
+        #    траекторией при theta*: она должна в основном лежать внутри,
+        #    а сама полоса — быть уже шума σ. Прежняя проверка покрытия
+        #    зашумлённой цели проходила только при завышенной в √N раз
+        #    ковариации (К1 ревью).
+        clean = build_ei_problem().simulate(None)  # модель при theta*
         rng = np.random.default_rng(7)
         cov = lap.covariance + 1e-12 * np.eye(lap.phi_map.size)
-        phi_samples = rng.multivariate_normal(lap.phi_map, cov, size=16)
+        # 200 сэмплов: квантили 2.5/97.5 % по 16 сэмплам — почти min/max, и
+        # полоса случайно может не накрыть истину, лежащую внутри 95 %-
+        # интервала параметров (при seed 7 все 16 сэмплов inh/tau < 12).
+        phi_samples = rng.multivariate_normal(lap.phi_map, cov, size=200)
         pred = predictive_intervals(problem_uq, phi_samples, level=0.95)
         assert isinstance(pred, PredictiveResult)
-        assert pred.n_samples == 16
+        assert pred.n_samples == 200
         assert pred.n_skipped_nonfinite == 0
         assert set(pred.populations) == {"exc", "inh"}
         for pop in pred.populations:
@@ -380,12 +389,11 @@ class TestP2Workflow:
             assert lo.shape == mid.shape == hi.shape == (L2_T, 1)
             assert np.all(lo <= mid + 1e-12)
             assert np.all(mid <= hi + 1e-12)
-            spec = next(
-                s for s in problem_uq.objective.observations if s.population == pop
-            )
-            target = np.asarray(spec.target, dtype=np.float64)[0]
-            coverage = float(np.mean((lo <= target) & (target <= hi)))
-            assert 0.5 <= coverage <= 1.0, (pop, coverage)
+            truth = np.asarray(clean.firing_rates[pop], dtype=np.float64)[0]
+            coverage = float(np.mean((lo <= truth) & (truth <= hi)))
+            assert coverage >= 0.5, (pop, coverage)
+            half_width = float(np.mean(hi - lo)) / 2.0
+            assert half_width < L2_SIGMA, (pop, half_width)
 
         # 6. Диагностика остатков в MAP-точке.
         diag = residual_diagnostics(problem_uq, phi_map, max_lag=5)
