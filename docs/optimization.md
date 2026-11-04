@@ -50,6 +50,21 @@ continuation-расписания и анализ идентифицируемо
 readout-слои автоматически не охватываются; nuisance-параметры (сдвиги,
 масштабы, параметры шума) регистрируются вручную через `add_entry`.
 
+Флаг `ParameterEntry.trainable` значим: вектор φ строится **только** по
+записям с `trainable=True`. `entries`/`names` содержат все записи реестра
+(интроспекция, duplicate-check), а `phi_entries`/`trainable_names` —
+trainable-only view в порядке регистрации; именно оно определяет координаты
+φ. Записи с `trainable=False` (ручные `add_entry(..., trainable=False)`,
+а также переменные модели с `trainable=False`) — реестровые константы вне
+φ: `size`, `pack`, `unpack`, `project`, `apply_to_model` и все φ-операции
+задач их игнорируют. Совместимость старых phi-векторов и checkpoint'ей
+по размеру зависит от состава пространства: где все записи trainable,
+они по-прежнему совпадают по размеру с `size` пересобранного пространства;
+для смешанных пространств с ручными non-trainable записями размер φ мог
+измениться — пересобирайте стартовые точки через `pack()`; обращение к non-trainable имени там, где
+ожидается координата φ (`likelihood_profile`, `select_subset`,
+`sample_phi0s(log_uniform=...)`, `FrozenProblem`), отклоняется `ValueError`.
+
 ## Наблюдения и невязки (`objectives`)
 
 `ObservationSpec` описывает одно наблюдение: популяция, целевая траектория
@@ -91,6 +106,11 @@ readout-слои автоматически не охватываются; nuisa
 - `residual(phi=None)` — вектор невязок для GN/LM/TRF;
 - `bounds_phi()` — φ-границы из физических min/max (заготовка для
   SciPy-адаптеров).
+
+Все φ-операции задачи (`pack`/`unpack`/`bounds_phi`/`search_box_phi`,
+материализация x0, `FrozenProblem`) работают только с trainable-записями
+ParameterSpace (`phi_entries`/`trainable_names`): non-trainable записи —
+реестровые константы вне вектора φ, их размерность не меняют.
 
 Контракт мутации модели: `phi=None` модель не изменяет; `phi != None`
 явно переводит модель в состояние θ = unpack(phi) перед прогоном и
@@ -137,7 +157,15 @@ print(res.base.loss_best, res.n_forward, res.bounds_active)
 ```
 
 - `minimize_lbfgsb` — `scipy.optimize.minimize(method='L-BFGS-B', jac=True)`
-  поверх `value_and_gradient`; bounds из `problem.bounds_phi()`;
+  поверх `value_and_gradient`; bounds из `problem.bounds_phi()`; `ftol=None`
+  — dtype-aware auto: float64 → 2.2e-9 (прежнее поведение scipy),
+  float32 → ≈eps32 (1.19e-7). Явный `ftol`/`options['ftol']` чтится без
+  изменений (приоритет у `options`; `options['ftol']=None` — как «не
+  задано»: fallback на явный `ftol`/auto, `None` в scipy не передаётся),
+  resolved-значение фиксируется в
+  `config['options']['ftol']`; при float32-координатах φ и эффективном
+  `ftol < 1e-7` — одноразовый `UserWarning` (риск
+  `ABNORMAL_TERMINATION_IN_LNSRCH`), значение не переопределяется;
 - `least_squares` — `scipy.optimize.least_squares` поверх `problem.residual`:
   `'trf'` с bounds как основной метод, `'lm'` только без bounds (честный
   `ValueError` с подсказкой перейти на `'trf'`); `jacobian` —
@@ -158,7 +186,10 @@ print(res.base.loss_best, res.n_forward, res.bounds_active)
   `max_nfev = maxiter * (problem.size + 2)` (~n+1 оценка невязок на
   итерацию: n на конечно-разностный якобиан + пробные шаги; эффективное
   значение — в `config["max_nfev"]`); одновременная передача `maxiter` и
-  `max_nfev` отклоняется `ValueError`.
+  `max_nfev` отклоняется `ValueError`. scipy-defaults ftol/xtol/gtol не
+  меняются; явный `kwargs['ftol']` при float32-φ ниже 1e-7 даёт тот же
+  одноразовый `UserWarning`, что и в `minimize_lbfgsb` (значение не
+  переопределяется);
 - оба проверяют финитность стартовой точки/потери/невязок до запуска
   (`ValueError` вместо безмолвных больших штрафов), пишут validation-метрики
   при непустом `held_out`, счётчики — дельта счётчиков задачи за запуск.
@@ -529,6 +560,15 @@ finally:
   `ProcessPool` — spawn-процессы, каждый со своей копией задачи (TF-граф
   строится в worker'е один раз), родительская модель не мутирует;
   `ordered=False` — выдача по мере завершения (индексы сохраняются);
+- `tf_threads` (у `ProcessPool`, `evaluate_candidates`, `make_evaluator`;
+  по умолчанию 1) — ограничение intra-op и inter-op пулов потоков
+  TensorFlow в каждом worker-процессе: без него n_workers процессов
+  держали бы пулы TF на все ядра CPU (oversubscription). `None` — не
+  трогать потоки TF (поведение до появления параметра). Если пулы TF в
+  worker'е уже инициализированы и настройка бросает `RuntimeError`, worker
+  остаётся на дефолтной конфигурации потоков (fallback) — семантика оценки
+  не меняется. `SerialPool` TF не затрагивает; при `n_workers=1` параметр
+  валидируется, но игнорируется;
 - один seed → одинаковые per-candidate сиды → потери воспроизводимы между
   SerialPool и ProcessPool (см. `benchmarks/l3_parallel_scaling.py`);
 - экономика: spawn + импорт TF в каждом worker'е стоят секунд — выигрыш
@@ -577,7 +617,8 @@ finally:
 - **Процессный параллелизм**: spawn-процессы заново импортируют TF — на
   мелких задачах serial быстрее; выигрыш при дорогих оценках и живом пуле
   (`make_evaluator`), потолок — число ядер с учётом конкуренции за
-  intra-op потоки; tensor candidate-batch — вне P2;
+  intra-op потоки (worker'ы по умолчанию ограничены `tf_threads=1`, см.
+  раздел `parallel`); tensor candidate-batch — вне P2;
 - **Балансировка — BPTT-only**: PCGrad/CAGrad/GradNorm/self-adaptive веса
   не работают с adjoint-режимом (`NotImplementedError`); аналитический
   adjoint Trainer для этих целей не поддержан;

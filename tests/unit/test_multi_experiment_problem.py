@@ -21,6 +21,7 @@ from neuraltide.optimization import (
     Experiment,
     MultiExperimentProblem,
     ObservationSpec,
+    ParameterEntry,
     ResidualLoss,
 )
 
@@ -248,3 +249,37 @@ class TestSimulateAndCounters:
         problem.validate()
         assert problem.n_forward == 7  # один held-out прогон
         assert problem.wall_time > 0.0
+
+
+class TestNonTrainableEntry:
+    """C8: ручная non-trainable запись вне φ — duck-type API не ломается."""
+
+    def test_nontrainable_entry_excluded_from_multi_problem(self, l0_factory):
+        neuraltide.config.set_dtype(tf.float64)
+        network, space, t_seq, inputs, loss = l0_factory()
+        var = tf.Variable([0.5], dtype=tf.float64, name="manual_const")
+        space.add_entry(
+            ParameterEntry(
+                full_name="manual/const",
+                shape=tf.TensorShape([1]),
+                trainable=False,
+                variable=var,
+                group="population",
+            )
+        )
+        problem = MultiExperimentProblem(
+            network,
+            space,
+            [Experiment(name="exp1", t_sequence=t_seq, inputs=inputs, objective=loss)],
+        )
+        assert "manual/const" in problem.parameter_space.entries
+        assert "manual/const" not in problem.parameter_space.phi_entries
+        assert problem.size == 3
+        phi0 = np.asarray(problem.pack(), dtype=np.float64)
+        assert phi0.shape == (problem.size,)
+        theta = problem.unpack(phi0)
+        assert "manual/const" not in theta
+        ev, grad = problem.value_and_gradient(phi0)
+        assert np.asarray(grad).shape == (problem.size,)
+        lower, upper = problem.bounds_phi()
+        assert lower.shape == upper.shape == (problem.size,)

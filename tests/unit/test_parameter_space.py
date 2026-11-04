@@ -525,3 +525,161 @@ class TestInitialStateEntries:
             )
         with pytest.raises(ValueError, match="StateLocator"):
             ParameterEntry(full_name="x", shape=(1,), kind="shooting_state")
+
+
+class TestTrainableExclusion:
+    """C8: trainable=False превращает запись в реестровую константу вне φ."""
+
+    @staticmethod
+    def _space_with_const(network):
+        space = ParameterSpace.from_network(network)
+        const_var = tf.Variable([0.7], dtype=tf.float32)
+        space.add_entry(
+            ParameterEntry(
+                full_name="noise/offset",
+                shape=(1,),
+                trainable=False,
+                group="noise",
+                variable=const_var,
+            )
+        )
+        return space, const_var
+
+    def test_non_trainable_excluded_from_size_pack_unpack(self, network):
+        space, _ = self._space_with_const(network)
+        size_before = space.size
+        # в реестре запись остаётся (интроспекция)
+        assert "noise/offset" in space.names
+        assert "noise/offset" in space.entries
+        assert space.size == size_before
+        phi = space.pack()
+        assert phi.shape == (size_before,)
+        theta = space.unpack(phi)
+        assert "noise/offset" not in theta
+        assert set(theta.keys()) == set(space.trainable_names)
+
+    def test_pack_values_ignores_non_trainable_and_unknown_keys(self, network):
+        space, _ = self._space_with_const(network)
+        # ключа 'noise/offset' нет — pack(values) работает
+        values = {
+            name: np.full(space.shape(name), 1.25) for name in space.trainable_names
+        }
+        phi = space.pack(values)
+        # лишние ключи (non-trainable имя + неизвестное имя) молча игнорируются
+        values["noise/offset"] = [9.9]
+        values["unknown/param"] = [1.0]
+        phi_extra = space.pack(values)
+        np.testing.assert_allclose(phi_extra.numpy(), phi.numpy())
+
+    def test_pack_none_reads_only_trainable_variables(self, network):
+        space, const_var = self._space_with_const(network)
+        const_var.assign([42.0])
+        phi = space.pack()  # pack(None) не трогает non-trainable переменную
+        space_ref = ParameterSpace.from_network(network)
+        np.testing.assert_allclose(phi.numpy(), space_ref.pack().numpy())
+        assert "noise/offset" not in space.unpack(phi)
+
+    def test_apply_to_model_keeps_non_trainable_variable(self, network):
+        space, const_var = self._space_with_const(network)
+        theta = space.unpack(space.pack())
+        theta["exc/w"] = np.array([3.0, 4.0], dtype=np.float32)
+        before = const_var.numpy().copy()
+        # ключа 'noise/offset' в theta_dict нет — apply_to_model не падает
+        space.apply_to_model(theta)
+        np.testing.assert_allclose(const_var.numpy(), before)
+        np.testing.assert_allclose(space.entries["exc/w"].variable.numpy(), [3.0, 4.0])
+
+    def test_project_ignores_non_trainable_bounds(self, network):
+        space, _ = self._space_with_const(network)
+        space.add_entry(
+            ParameterEntry(
+                full_name="noise/clipped",
+                shape=(1,),
+                trainable=False,
+                min=0.0,
+                max=1.0,
+            )
+        )
+        phi = space.pack()
+        phi_proj = space.project(phi + 50.0)  # за пределами max=1.0 константы
+        assert phi_proj.shape == (space.size,)  # длина φ не выросла
+        theta = space.unpack(phi_proj)
+        assert "noise/clipped" not in theta
+
+    def test_from_network_spaces_all_trainable(self, network):
+        """Автопространства from_network: поведение прежнее (trainable-only)."""
+        space = ParameterSpace.from_network(network)
+        assert space.trainable_names == EXPECTED_NAMES
+        assert list(space.phi_entries.keys()) == EXPECTED_NAMES
+        assert set(space.phi_entries.keys()) == set(space.entries.keys())
+        assert space.size == 2 + 2 + 1 + 2 + 2 + 2 + 2 + 2 + 2
+
+    def test_trainable_names_and_phi_entries_order_and_identity(self, network):
+        space = ParameterSpace.from_network(network)
+        space.add_entry(
+            ParameterEntry(full_name="noise/sigma", shape=(1,), group="noise")
+        )  # trainable по умолчанию
+        space.add_entry(
+            ParameterEntry(
+                full_name="noise/offset", shape=(1,), trainable=False, group="noise"
+            )
+        )
+        assert space.names == EXPECTED_NAMES + ["noise/sigma", "noise/offset"]
+        assert space.trainable_names == EXPECTED_NAMES + ["noise/sigma"]
+        assert list(space.phi_entries.keys()) == EXPECTED_NAMES + ["noise/sigma"]
+        assert "noise/offset" not in space.phi_entries
+        # view возвращает те же объекты записей, что и entries
+        assert space.phi_entries["exc/w"] is space.entries["exc/w"]
+
+    def test_all_non_trainable_space_has_zero_size(self):
+        var = tf.Variable([1.0], dtype=tf.float32)
+        space = ParameterSpace()
+        space.add_entry(
+            ParameterEntry(
+                full_name="const/a", shape=(1,), trainable=False, variable=var
+            )
+        )
+        space.add_entry(
+            ParameterEntry(full_name="const/b", shape=(2,), trainable=False)
+        )
+        assert space.size == 0
+        assert space.trainable_names == []
+        assert dict(space.phi_entries) == {}
+        assert space.names == ["const/a", "const/b"]
+        phi_none = space.pack()  # pack(None): trainable переменных нет
+        phi_vals = space.pack({"const/a": [1.0], "const/b": [2.0, 3.0]})
+        for phi in (phi_none, phi_vals):
+            assert phi.shape == (0,)
+            assert phi.dtype == tf.float32  # глобальный dtype
+        assert space.unpack(phi_none) == {}
+        assert space.project(phi_none).shape == (0,)
+
+    def test_all_non_trainable_pack_uses_global_dtype(self):
+        neuraltide.config.set_dtype(tf.float64)
+        try:
+            space = ParameterSpace()
+            space.add_entry(
+                ParameterEntry(full_name="const/a", shape=(1,), trainable=False)
+            )
+            phi = space.pack({"const/a": [1.0]})
+            assert phi.dtype == tf.float64
+            assert phi.shape == (0,)
+        finally:
+            neuraltide.config.set_dtype(tf.float32)
+
+    def test_duplicate_non_trainable_name_raises(self, network):
+        space = ParameterSpace.from_network(network)
+        space.add_entry(ParameterEntry(full_name="const/x", shape=(1,)))
+        space.add_entry(
+            ParameterEntry(full_name="const/y", shape=(1,), trainable=False)
+        )
+        # duplicate non-trainable против non-trainable
+        with pytest.raises(ValueError, match="duplicate"):
+            space.add_entry(
+                ParameterEntry(full_name="const/y", shape=(1,), trainable=False)
+            )
+        # duplicate non-trainable против trainable-имени из from_network
+        with pytest.raises(ValueError, match="duplicate"):
+            space.add_entry(
+                ParameterEntry(full_name="exc/w", shape=(2,), trainable=False)
+            )

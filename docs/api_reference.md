@@ -866,9 +866,13 @@ class ParameterEntry:
     min: Optional[float] = None    # физические границы
     max: Optional[float] = None
     group: str = "population"      # 'population' | 'synapse' | пользовательская
-    trainable: bool = True
+    trainable: bool = True         # False — реестровая константа вне вектора φ
     variable: Optional[tf.Variable] = None  # None для ручных записей
 ```
+
+`trainable=False` — реестровая константа: запись остаётся в `entries`/
+`names` (интроспекция, duplicate-check), но не входит в `size`, `pack`,
+`unpack`, `project`, `apply_to_model` и любые φ-операции задач.
 
 ### ParameterSpace
 
@@ -876,7 +880,9 @@ class ParameterEntry:
 class ParameterSpace:
 ```
 
-Плоский вектор φ оптимизатора над trainable-параметрами сети.
+Плоский вектор φ оптимизатора над trainable-параметрами сети. φ строится
+только по записям с `trainable=True`; записи с `trainable=False` —
+реестровые константы вне φ.
 
 **Построение**:
 - `ParameterSpace.from_network(network, transforms=None) -> ParameterSpace` —
@@ -891,7 +897,17 @@ class ParameterSpace:
 - `project(phi) -> tf.Tensor` — проекция φ в допустимую область (клиппинг θ в [min, max])
 
 **Свойства**:
-- `entries`, `names`, `size`, `shape(name)`, `group(name)`
+- `entries` — все записи реестра {full_name: ParameterEntry}
+  (интроспекция, duplicate-check);
+- `names` — имена всех записей реестра;
+- `phi_entries` — ordered trainable-only view {full_name: ParameterEntry};
+  подмножество, определяющее вектор φ (его длина — `size`; pack/unpack/
+  project/apply_to_model работают только с этими записями);
+- `trainable_names` — имена trainable-записей в порядке регистрации
+  (координаты φ);
+- `size` — длина вектора φ (суммарное число элементов trainable-записей);
+- `shape(name)`, `group(name)`; также `model_entry_names`,
+  `tensor_entry_names` (записи начального состояния)
 
 ### ObservationSpec
 
@@ -1103,13 +1119,21 @@ class FrozenProblem:
 
 ```python
 def minimize_lbfgsb(problem, phi0=None, *, maxiter=200, gtol=1e-6,
-                    ftol=2.2e-9, validate=True, options=None
+                    ftol=None, validate=True, options=None
                     ) -> LocalOptimizerResult
 def least_squares(problem, phi0=None, *, method="trf", jacobian=None,
                   jacobian_max_params=200, callback=None, x_scale="jac",
                   max_nfev=None, maxiter=None, validate=True, **kwargs
                   ) -> LocalOptimizerResult
 ```
+
+`minimize_lbfgsb`: `ftol=None` — dtype-aware auto (float64 → 2.2e-9,
+прежнее поведение scipy; float32 → ≈eps32, 1.19e-7). Явный `ftol`/
+`options['ftol']` чтится без изменений (приоритет у `options`), resolved
+значение фиксируется в `config['options']['ftol']`. При float32-координатах
+φ и эффективном `ftol < 1e-7` — одноразовый `UserWarning` о риске
+`ABNORMAL_TERMINATION_IN_LNSRCH` (значение не переопределяется;
+рекомендуется `ftol >= 1e-7` или dtype float64).
 
 `least_squares`: `method` — `'trf'` (bounds) | `'lm'` (только без bounds);
 `jacobian` — `None | '2-point' | '3-point' | callable(x) -> [m, n]`
@@ -1125,7 +1149,9 @@ forward-AD state одного `NetworkRNN`): честный fallback на `'2-po
 поддержан scipy — `UserWarning`). `maxiter` — унифицированный бюджет
 итераций (как у `minimize_lbfgsb`): при `max_nfev=None` маппируется как
 `max_nfev = maxiter * (problem.size + 2)`; одновременная передача `maxiter`
-и `max_nfev` — `ValueError`. Нефинитный
+и `max_nfev` — `ValueError`. scipy-defaults ftol/xtol/gtol не меняются;
+явный `kwargs['ftol']` при float32-φ ниже 1e-7 — одноразовый `UserWarning`
+(значение не переопределяется). Нефинитный
 старт/невязки отклоняются `ValueError` до запуска решателя.
 
 ### Чувствительности (P1)
@@ -1246,6 +1272,11 @@ def compute_fim(jac: JacobianResult, *, energy=0.99, param_names=None,
 def likelihood_profile(problem, name, *, values=None, n_points=11, grid=None,
                        optimizer="lbfgsb", warm_start=True) -> ProfileResult
 def select_subset(problem, jac, keep, *, refit=True) -> SubsetResult
+```
+
+`likelihood_profile` и `select_subset` работают только с trainable-именами
+ParameterSpace (координатами φ): non-trainable имя (реестровая константа
+вне вектора φ) отклоняется `ValueError`, как и неизвестное.
 
 @dataclass
 class FIMDirection:
@@ -1586,18 +1617,29 @@ class SerialPool:
     def close(self) -> None: ...
 
 class ProcessPool:                 # spawn-процессы, TF-граф в worker'е
-    def __init__(self, build_problem, fn="evaluate", n_workers=2): ...
+    def __init__(self, build_problem, fn="evaluate", n_workers=2,
+                 tf_threads=1): ...
     def map(self, tasks, *, ordered=True) -> List[EvalRecord]: ...
     def close(self) -> None: ...
     def terminate(self) -> None: ...
 
 def evaluate_candidates(build_problem, candidates, *, fn="evaluate",
-                        n_workers=1, seed=None, ordered=True
+                        n_workers=1, seed=None, ordered=True, tf_threads=1
                         ) -> List[EvalRecord]
 def make_evaluator(build_problem, n_workers=1, seed=None, *,
-                   fn="evaluate") -> Callable[..., Sequence[float]]
+                   fn="evaluate", tf_threads=1
+                   ) -> Callable[..., Sequence[float]]
     # у callable есть .close(); инъекция в global_search(evaluator=...)
 ```
+
+`tf_threads` — ограничение intra-op и inter-op пулов потоков TensorFlow в
+каждом worker-процессе (по умолчанию 1 — защита от CPU oversubscription
+между n_workers процессами); `None` — не трогать потоки TF (поведение до
+появления параметра). Если пулы TF в worker'е уже инициализированы и
+настройка бросает `RuntimeError`, worker остаётся на дефолтной
+конфигурации потоков (fallback) — семантика оценки не меняется. При
+`n_workers=1` параметр валидируется, но игнорируется (SerialPool потоки
+родителя не трогает); недопустимые значения (< 1) — `ValueError`.
 
 `build_problem` — picklable фабрика уровня модуля; исключение кандидата
 даёт `loss=+inf` и `error`, остальные вычисляются; один seed → одинаковые

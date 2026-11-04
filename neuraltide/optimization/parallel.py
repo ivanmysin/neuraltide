@@ -19,12 +19,13 @@ fn) над множеством независимых точек φ: screening 
 - ProcessPool — multiprocessing.get_context('spawn'), n_workers
   процессов, TF-граф строится лениво внутри worker'а;
 - evaluate_candidates(build_problem, candidates, *, fn='evaluate',
-  n_workers=1, seed=None, ordered=True) -> List[EvalRecord] — разовый
-  прогон списка кандидатов (сырые массивы или CandidateTask);
-- make_evaluator(build_problem, n_workers=1, seed=None) ->
-  Callable[[Sequence[np.ndarray]], Sequence[float]] — переиспользуемый
-  evaluator потерь для инъекции в global_search; у возвращаемого
-  callable есть атрибут close(), освобождающий worker-процессы.
+  n_workers=1, seed=None, ordered=True, tf_threads=1) -> List[EvalRecord]
+  — разовый прогон списка кандидатов (сырые массивы или CandidateTask);
+- make_evaluator(build_problem, n_workers=1, seed=None, *, fn='evaluate',
+  tf_threads=1) -> Callable[[Sequence[np.ndarray]], Sequence[float]] —
+  переиспользуемый evaluator потерь для инъекции в global_search; у
+  возвращаемого callable есть атрибут close(), освобождающий
+  worker-процессы.
 
 Требования к build_problem
 --------------------------
@@ -54,6 +55,19 @@ np.random.SeedSequence(seed).generate_state(n) — детерминирован�
 что делает воспроизводимыми цели со стохастикой на np.random. Одинаковый
 seed -> одинаковый набор потерь; явный CandidateTask.seed имеет приоритет
 над производными.
+
+Ограничение TF-потоков в worker'ах (tf_threads)
+------------------------------------------------
+Каждый spawn-worker по умолчанию держал бы пулы потоков TensorFlow на
+все ядра CPU — n_workers процессов перемножают потоки и дают
+oversubscription. Поэтому в worker-процессах TF импортируется лениво
+(initializer пула) и число intra-op и inter-op потоков ограничивается
+tf_threads (по умолчанию 1). tf_threads=None означает «не трогать TF» —
+поведение до появления параметра. Если TF-пулы в worker'е уже
+инициализированы и настройка бросает RuntimeError, worker не падает:
+остаётся дефолтная конфигурация TF-потоков (fallback), семантика оценки
+не меняется. SerialPool TF не затрагивает (потоки родительского
+процесса не трогаются).
 
 Политика ошибок
 ---------------
@@ -175,6 +189,31 @@ def _check_picklable_factory(build_problem: Callable[[], Any]) -> None:
         ) from exc
 
 
+def _check_tf_threads(tf_threads: Optional[int]) -> Optional[int]:
+    """
+    Валидирует tf_threads до запуска процессов.
+
+    None — не трогать потоки TensorFlow; целое int >= 1 — валидное
+    ограничение; иначе ValueError. Возвращает нормализованное значение.
+    """
+    if tf_threads is None:
+        return None
+    try:
+        value = int(tf_threads)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            "parallel: tf_threads должен быть None (не трогать потоки "
+            "TensorFlow) или целым числом >= 1; получен "
+            f"{tf_threads!r}."
+        ) from exc
+    if value < 1:
+        raise ValueError(
+            "parallel: tf_threads должен быть >= 1 (или None — не трогать "
+            f"потоки TensorFlow), получен {value}."
+        )
+    return value
+
+
 def _derived_seeds(seed: Optional[int], n: int) -> List[Optional[int]]:
     """
     Детерминированные per-candidate сиды из np.random.SeedSequence(seed).
@@ -268,11 +307,34 @@ def _evaluate_one(problem: Any, fn: str, task: CandidateTask) -> EvalRecord:
 _WORKER: Dict[str, Any] = {}
 
 
-def _init_worker(build_problem: Callable[[], Any], fn: str) -> None:
-    """Initializer процесса: запоминает фабрику, задача строится лениво."""
+def _init_worker(
+    build_problem: Callable[[], Any],
+    fn: str,
+    tf_threads: Optional[int] = 1,
+) -> None:
+    """
+    Initializer процесса: ограничивает TF-потоки, запоминает фабрику.
+
+    Задача строится лениво при первой задаче. tf_threads (None — не
+    трогать TensorFlow) ограничивает intra-op и inter-op пулы потоков в
+    worker'е — без этого каждый worker держал бы пулы TF на все ядра CPU
+    (oversubscription). TensorFlow импортируется здесь, лениво, до первой
+    TF-операции. Если пулы уже инициализированы и настройка бросает
+    RuntimeError, worker не падает: остаётся дефолтная конфигурация
+    TF-потоков (fallback), семантика оценки не меняется.
+    """
     _WORKER["build_problem"] = build_problem
     _WORKER["fn"] = fn
     _WORKER["problem"] = None
+    if tf_threads is None:
+        return
+    try:
+        import tensorflow as tf
+
+        tf.config.threading.set_inter_op_parallelism_threads(tf_threads)
+        tf.config.threading.set_intra_op_parallelism_threads(tf_threads)
+    except RuntimeError:
+        pass  # Пулы TF уже созданы — fallback на дефолтную конфигурацию.
 
 
 def _worker_evaluate(task: CandidateTask) -> EvalRecord:
@@ -358,6 +420,13 @@ class ProcessPool:
     возвращаются в порядке подачи задач, ordered=False — в порядке
     завершения (все EvalRecord.index сохраняются, выборка полная).
 
+    tf_threads ограничивает intra-op и inter-op пулы потоков TensorFlow
+    в каждом worker-процессе (по умолчанию 1 — защита от CPU
+    oversubscription между n_workers процессами); None — не трогать
+    потоки TF (поведение до появления параметра). Если TF-пулы в worker'е
+    уже инициализированы, worker остаётся на дефолтной конфигурации
+    потоков (fallback), семантика оценки не меняется.
+
     close() завершает worker'ов по завершении; terminate() — немедленно.
     Повторный map() после close() пересоздаёт процессы.
     """
@@ -367,6 +436,7 @@ class ProcessPool:
         build_problem: Callable[[], Any],
         fn: str = "evaluate",
         n_workers: int = 2,
+        tf_threads: Optional[int] = 1,
     ):
         _check_picklable_factory(build_problem)
         n_workers = int(n_workers)
@@ -374,6 +444,7 @@ class ProcessPool:
             raise ValueError(
                 f"ProcessPool: n_workers должен быть >= 1, получен {n_workers}."
             )
+        self._tf_threads = _check_tf_threads(tf_threads)
         self._build_problem = build_problem
         self._fn = str(fn)
         self.n_workers = n_workers
@@ -385,7 +456,7 @@ class ProcessPool:
             self._pool = context.Pool(
                 processes=self.n_workers,
                 initializer=_init_worker,
-                initargs=(self._build_problem, self._fn),
+                initargs=(self._build_problem, self._fn, self._tf_threads),
             )
         return self._pool
 
@@ -434,6 +505,7 @@ def evaluate_candidates(
     n_workers: int = 1,
     seed: Optional[int] = None,
     ordered: bool = True,
+    tf_threads: Optional[int] = 1,
 ) -> List[EvalRecord]:
     """
     Оценивает список кандидатов и возвращает EvalRecord на каждого.
@@ -452,6 +524,11 @@ def evaluate_candidates(
             None — без явного сидирования.
         ordered: True — записи в порядке подачи кандидатов; False —
             в порядке завершения.
+        tf_threads: ограничение intra-op и inter-op пулов потоков
+            TensorFlow в каждом worker-процессе (по умолчанию 1 — защита
+            от CPU oversubscription); None — не трогать потоки TF
+            (старое поведение). При n_workers=1 игнорируется (SerialPool
+            потоки родителя не трогает), но валидируется.
 
     Returns:
         Список EvalRecord, выровненный с candidates (ordered=True).
@@ -459,11 +536,14 @@ def evaluate_candidates(
     Политика ошибок — см. модульную документацию: исключение кандидата
     даёт loss=inf и error, остальные кандидаты вычисляются.
     """
+    tf_threads = _check_tf_threads(tf_threads)
     tasks = _normalize_candidates(candidates, seed)
     if int(n_workers) <= 1:
         pool: Union[SerialPool, ProcessPool] = SerialPool(build_problem, fn=fn)
     else:
-        pool = ProcessPool(build_problem, fn=fn, n_workers=n_workers)
+        pool = ProcessPool(
+            build_problem, fn=fn, n_workers=n_workers, tf_threads=tf_threads
+        )
     try:
         if not tasks:
             return []
@@ -478,6 +558,7 @@ def make_evaluator(
     seed: Optional[int] = None,
     *,
     fn: str = "evaluate",
+    tf_threads: Optional[int] = 1,
 ) -> Callable[[Sequence[np.ndarray]], Sequence[float]]:
     """
     Переиспользуемый evaluator потерь для инъекции в global_search.
@@ -489,6 +570,10 @@ def make_evaluator(
     атрибут close() — штатное завершение процессов (дублируется
     при сборке garbage collector'ом через финализатор multiprocessing,
     но явный close() предсказуемее).
+
+    tf_threads (keyword-only) пробрасывается в ProcessPool: ограничение
+    intra-op и inter-op пулов потоков TensorFlow в worker-процессах
+    (по умолчанию 1; None — не трогать потоки TF, старое поведение).
     """
 
     def _evaluate(candidates: Sequence[np.ndarray]) -> List[float]:
@@ -497,9 +582,12 @@ def make_evaluator(
             return []
         return [float(record.loss) for record in pool.map(tasks)]
 
+    tf_threads = _check_tf_threads(tf_threads)
     if int(n_workers) <= 1:
         pool: Union[SerialPool, ProcessPool] = SerialPool(build_problem, fn=fn)
     else:
-        pool = ProcessPool(build_problem, fn=fn, n_workers=n_workers)
+        pool = ProcessPool(
+            build_problem, fn=fn, n_workers=n_workers, tf_threads=tf_threads
+        )
     _evaluate.close = pool.close  # type: ignore[attr-defined]
     return _evaluate

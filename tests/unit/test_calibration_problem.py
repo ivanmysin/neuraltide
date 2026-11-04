@@ -28,6 +28,7 @@ from neuraltide.optimization import (
     LogTransform,
     ObservationSpec,
     OptimizationResult,
+    ParameterEntry,
     ParameterSpace,
     ResidualLoss,
     taylor_test,
@@ -290,6 +291,52 @@ class TestBoundsPhi:
         assert lower[i_tau] == pytest.approx(np.log(1.0), rel=1e-6)
         # I_ext без ограничений
         assert lower[i_iext] == -np.inf and upper[i_iext] == np.inf
+
+
+class TestNonTrainableRegistryEntries:
+    """C8: ручная non-trainable model_var запись — реестровая константа вне φ."""
+
+    def test_manual_nontrainable_entry_excluded_from_phi(self):
+        network, space, t_seq, inputs, loss = _build()
+        var = tf.Variable([0.37], dtype=tf.float32, name="manual_const")
+        space.add_entry(
+            ParameterEntry(
+                full_name="manual/const",
+                shape=tf.TensorShape([1]),
+                trainable=False,
+                variable=var,
+                group="population",
+            )
+        )
+        problem = CalibrationProblem(
+            network, space, t_seq, inputs=inputs, objective=loss
+        )
+        # запись в реестре (интроспекция), но вне вектора φ
+        assert "manual/const" in space.entries
+        assert "manual/const" not in space.phi_entries
+        assert len(space.entries) == 4
+        assert problem.size == space.size == 3
+
+        phi0 = np.asarray(problem.pack())
+        assert phi0.shape == (problem.size,)
+        theta = space.unpack(phi0)
+        assert "manual/const" not in theta
+
+        # value_and_gradient: градиент ровно длины size
+        ev, grad = problem.value_and_gradient(phi0)
+        assert np.asarray(grad).shape == (problem.size,)
+        assert ev.loss == pytest.approx(problem.evaluate(phi0).loss, rel=1e-6)
+
+        # bounds/search-box: только trainable-записи
+        lower, upper = problem.bounds_phi()
+        assert lower.shape == upper.shape == (problem.size,)
+        s_lo, s_hi = problem.search_box_phi()
+        assert s_lo.shape == s_hi.shape == (problem.size,)
+
+        # apply_to_model не трогает переменную реестровой константы
+        before = float(var.numpy()[0])
+        space.apply_to_model(space.unpack(phi0))
+        assert float(var.numpy()[0]) == before
 
 
 class TestOptimizationResult:

@@ -44,7 +44,10 @@ Uncertainty quantification этапа P2 (дорожная карта, разд�
 DTO JSON-сериализуемы (to_dict/from_dict/save/load, нефинитные значения
 кодируются null). Eager-режим, numpy-выходы float64, batch=1 (контракт
 NetworkRNN). Глобальный dtype (neuraltide.config) используется только при
-взаимодействии с ParameterSpace/трансформами и Objective.
+взаимодействии с ParameterSpace/трансформами и Objective. Координаты φ,
+имена параметров и интервалы строятся только по trainable-записям
+ParameterSpace (``phi_entries``/``trainable_names``): ручные non-trainable
+записи реестра вне вектора φ и в статистику не входят.
 """
 
 import time
@@ -100,19 +103,22 @@ _PRIOR_SYM_RTOL = 1e-8
 
 
 def _entry_offsets(space) -> Dict[str, Tuple[int, int]]:
-    """Смещения записей ParameterSpace в плоском векторе φ."""
+    """Смещения trainable-записей ParameterSpace в плоском векторе φ."""
     offsets: Dict[str, Tuple[int, int]] = {}
     start = 0
-    for name, entry in space.entries.items():
+    for name, entry in space.phi_entries.items():
         offsets[str(name)] = (start, entry.numel)
         start += entry.numel
     return offsets
 
 
 def _flat_names(space, size: int) -> List[str]:
-    """Имена φ-координат: full_name для скалярных записей, 'name[i]' иначе."""
+    """
+    Имена φ-координат: full_name для скалярных trainable-записей,
+    'name[i]' иначе (non-trainable записи реестра в φ не входят).
+    """
     names: List[str] = []
-    for name, entry in space.entries.items():
+    for name, entry in space.phi_entries.items():
         if entry.numel == 1:
             names.append(str(name))
         else:
@@ -328,7 +334,7 @@ def _theta_row(space, phi_row: np.ndarray) -> Dict[str, np.ndarray]:
         for name, value in unpacked.items():
             theta[str(name)] = np.asarray(value, dtype=np.float64)
     except Exception:  # noqa: BLE001 — нефинитная строка/трансформ: честный NaN
-        for name, entry in space.entries.items():
+        for name, entry in space.phi_entries.items():
             theta[str(name)] = np.full(entry.shape.as_list(), np.nan)
     return theta
 
@@ -910,7 +916,7 @@ def _intervals_from_covariance(space, phi, covariance, z):
     intervals: Dict[str, Tuple[float, float]] = {}
     phi_intervals: Dict[str, Tuple[float, float]] = {}
     dtype = neuraltide.config.get_dtype()
-    for name, entry in space.entries.items():
+    for name, entry in space.phi_entries.items():
         start, numel = offsets[name]
         piece = phi[start : start + numel]
         sd = std[start : start + numel]
@@ -1271,8 +1277,12 @@ class _WeightedObjective:
 
 
 def _collect_theta_samples(space, phi_samples: np.ndarray) -> Dict[str, np.ndarray]:
-    """Стек физических θ по draw: {full_name: [n_draws, *entry.shape]}."""
-    columns: Dict[str, List[np.ndarray]] = {str(n): [] for n in space.entries}
+    """Стек физических θ по draw: {full_name: [n_draws, *entry.shape]}.
+
+    Ключи — только trainable-записи (координаты φ): non-trainable
+    реестровые записи в φ-строках отсутствуют.
+    """
+    columns: Dict[str, List[np.ndarray]] = {str(n): [] for n in space.phi_entries}
     for row in phi_samples:
         theta_row = _theta_row(space, row)
         for name in columns:

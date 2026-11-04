@@ -23,6 +23,7 @@ from neuraltide.integrators import EulerIntegrator
 from neuraltide.optimization import (
     CalibrationProblem,
     ObservationSpec,
+    ParameterEntry,
     ParameterSpace,
     ResidualLoss,
 )
@@ -432,3 +433,40 @@ class TestDuckAPI:
         ev = ms.evaluate(phi)
         assert ev.status in ("non_finite", "ok")  # WC ограничен, но статус честный
         assert np.isfinite(ev.loss) == (ev.status != "non_finite")
+
+
+class TestMixedSpaceBase:
+    """Базовое пространство с ручной non-trainable записью реестра."""
+
+    def test_non_trainable_base_entries_not_copied(self, l0_factory):
+        neuraltide.config.set_dtype(tf.float64)
+        network, space, t_seq, inputs, loss = l0_factory()
+        space.add_entry(
+            ParameterEntry(
+                full_name="noise/sigma",
+                shape=[1],
+                group="noise",
+                trainable=False,
+            )
+        )
+        base = CalibrationProblem(network, space, t_seq, inputs=inputs, objective=loss)
+        ms = MultipleShootingProblem(base, ShootingConfig(2))
+
+        # Non-trainable запись реестра в расширенное пространство не
+        # копируется; все его записи — trainable (base + shooting).
+        assert "noise/sigma" not in ms.parameter_space.entries
+        assert all(entry.trainable for entry in ms.parameter_space.entries.values())
+        for name in space.trainable_names:
+            assert name in ms.parameter_space.entries
+        expected = base.size + sum(
+            entry.numel
+            for name, entry in ms.parameter_space.entries.items()
+            if name.startswith("x0s/")
+        )
+        assert ms.size == expected
+
+        # Задача работоспособна: φ инициализации имеет ожидаемый размер.
+        phi = np.asarray(ms.initialize_from_single_shooting(), dtype=np.float64)
+        assert phi.shape == (ms.size,)
+        ev = ms.evaluate(phi)
+        assert np.isfinite(ev.loss)

@@ -48,6 +48,7 @@ from neuraltide.optimization import (
     ParameterSpace,
     ResidualLoss,
 )
+from neuraltide.optimization.identifiability import compute_fim
 from neuraltide.optimization.transforms import IdentityTransform, LogTransform
 
 DT = 0.5
@@ -463,6 +464,61 @@ class TestLaplaceApproximation:
         # phi_map несовместимого размера.
         with pytest.raises(ValueError, match="элементов"):
             uq.laplace_approximation(problem, np.zeros(3), jac=jac)
+
+
+class TestMixedSpaceConsistency:
+    """Смешанное пространство: Laplace/FIM/интервалы согласованы по n.
+
+    Ручная non-trainable запись реестра размерность φ не меняет и в
+    статистику не входит.
+    """
+
+    def test_laplace_fim_intervals_dimensions(self, linear_space):
+        space = linear_space
+        space.add_entry(
+            ParameterEntry(
+                full_name="noise/sigma",
+                shape=tf.TensorShape([1]),
+                group="noise",
+                trainable=False,
+            )
+        )
+        problem = _StaticProblem(space)
+        phi_map = np.array([0.3, 0.1], dtype=np.float64)
+        jac = _linear_jacobian(phi_map)
+
+        res = uq.laplace_approximation(problem, phi_map, jac=jac)
+        n = int(space.size)
+        assert n == 2
+        assert res.phi_map.shape == (n,)
+        assert res.covariance.shape == (n, n)
+        assert res.precision_gn.shape == (n, n)
+        assert res.eigvals.shape == (n,)
+        assert res.eigvecs.shape == (n, n)
+        assert res.std.shape == (n,)
+        assert len(res.param_names) == n
+        assert set(res.intervals) == {"a", "b"}
+        assert set(res.phi_intervals) == {"a", "b"}
+        assert "noise/sigma" not in res.intervals
+
+        fim = compute_fim(jac, param_names=res.param_names)
+        assert fim.fim.shape == (n, n)
+        assert fim.eigenvalues.shape == (n,)
+        assert fim.eigenvectors.shape == (n, n)
+        assert fim.param_names == res.param_names
+
+        sens = uq.noise_sensitivity(res)
+        for entry in sens.entries:
+            assert entry.covariance.shape == (n, n)
+            assert entry.std.shape == (n,)
+            assert set(entry.phi_intervals) == {"a", "b"}
+
+        # Сериализация не ломается на смешанном пространстве.
+        data = res.to_dict()
+        json.dumps(data)
+        restored = uq.LaplaceResult.from_dict(data)
+        assert restored.covariance.shape == (n, n)
+        assert set(restored.intervals) == {"a", "b"}
 
 
 # ---------------------------------------------------------------------------

@@ -26,7 +26,12 @@ import tensorflow as tf
 
 import neuraltide.config
 import neuraltide.optimization.sensitivities as sensitivities
-from neuraltide.optimization import CalibrationProblem, JacobianResult
+from neuraltide.optimization import (
+    CalibrationProblem,
+    JacobianResult,
+    ParameterEntry,
+)
+from neuraltide.optimization.local import least_squares
 from neuraltide.optimization.sensitivities import (
     CheckpointedGradient,
     TruncatedResult,
@@ -192,6 +197,55 @@ class TestResidualJacobian:
             problem_f64, phi, max_params=problem_f64.size - 1, force=True
         )
         assert result.J.shape[1] == problem_f64.size
+
+
+def _mixed_problem_f64(l0_factory) -> CalibrationProblem:
+    """L0-задача float64 с ручной non-trainable записью реестра."""
+    neuraltide.config.set_dtype(tf.float64)
+    network, space, t_seq, inputs, loss = l0_factory()
+    space.add_entry(
+        ParameterEntry(
+            full_name="noise/sigma",
+            shape=[1],
+            group="noise",
+            trainable=False,
+        )
+    )
+    return CalibrationProblem(network, space, t_seq, inputs=inputs, objective=loss)
+
+
+class TestMixedSpace:
+    """Смешанное пространство: trainable-записи + ручная non-trainable."""
+
+    def test_residual_jacobian_trainable_only_and_fd_consistent(self, l0_factory):
+        problem = _mixed_problem_f64(l0_factory)
+        phi = _perturbed_phi(problem)
+        result = residual_jacobian(problem, phi)
+        n = int(problem.size)
+        assert n == 3  # non-trainable запись размерность φ не меняет
+        assert result.J.shape[1] == n
+        assert result.phi.shape == (n,)
+        # Столбцы forward-якобиана согласованы с центральными разностями
+        # trainable-only residual.
+        for j in range(n):
+            step = 1e-6 * max(abs(phi[j]), 1.0)
+            e = np.zeros(n, dtype=np.float64)
+            e[j] = step
+            r_plus = np.asarray(problem.residual(phi + e), dtype=np.float64)
+            r_minus = np.asarray(problem.residual(phi - e), dtype=np.float64)
+            fd = (r_plus - r_minus) / (2.0 * step)
+            np.testing.assert_allclose(result.J[:, j], fd, rtol=1e-5, atol=1e-8)
+
+    def test_least_squares_default_forward_jacobian(self, l0_factory):
+        # jacobian=None на свежем экземпляре со смешанным пространством:
+        # default forward-якобиан согласован с trainable-only residual —
+        # без явного jacobian='2-point'.
+        problem = _mixed_problem_f64(l0_factory)
+        phi0 = _perturbed_phi(problem)
+        res = least_squares(problem, phi0, maxiter=5)
+        assert res.base.config["jacobian"] == "forward"
+        assert res.base.phi_best.shape == (problem.size,)
+        assert np.isfinite(res.base.loss_best)
 
 
 def _x0_base_phi(problem: CalibrationProblem) -> np.ndarray:

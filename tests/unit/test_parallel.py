@@ -11,7 +11,9 @@ ProcessPool помечены skipif(cpu_count < 2).
 Бюджет времени: каждый ProcessPool-тест платит spawn + повторный импорт
 TensorFlow в worker'ах (~10-20 с на старт пула), прогоны L0 (T=120 шагов)
 миллисекундные; duck-задача _QuadraticProblem без TF удешевляет тесты
-политики ошибок. При запуске файла используйте внешний timeout ~5-10 минут.
+политики ошибок, а _ThreadProbeProblem — проверку tf_threads в worker'ах
+(ограничение TF-потоков, замечание C10). При запуске файла используйте
+внешний timeout ~5-10 минут.
 """
 
 import os
@@ -34,6 +36,8 @@ from neuraltide.optimization.parallel import (
     EvalRecord,
     ProcessPool,
     SerialPool,
+    _init_worker,
+    _worker_evaluate,
     evaluate_candidates,
     make_evaluator,
 )
@@ -139,6 +143,26 @@ class _QuadraticProblem:
 def build_quadratic_problem() -> _QuadraticProblem:
     """Module-level фабрика _QuadraticProblem (picklable)."""
     return _QuadraticProblem()
+
+
+class _ThreadProbeProblem:
+    """
+    Duck-задача-зонд для TF-потоков: loss = число inter-op потоков TF,
+    components несёт оба значения. TF импортируется лениво в evaluate —
+    в worker-процессе initializer пула уже успел ограничить пулы потоков.
+    """
+
+    def evaluate(self, phi) -> _SimpleEval:
+        import tensorflow as tf
+
+        inter = tf.config.threading.get_inter_op_parallelism_threads()
+        intra = tf.config.threading.get_intra_op_parallelism_threads()
+        return _SimpleEval(float(inter), {"inter": float(inter), "intra": float(intra)})
+
+
+def build_thread_probe_problem() -> _ThreadProbeProblem:
+    """Module-level фабрика _ThreadProbeProblem (picklable)."""
+    return _ThreadProbeProblem()
 
 
 def _l0_phis(problem: CalibrationProblem, n: int = 4) -> list:
@@ -312,6 +336,91 @@ def test_non_callable_factory_raises():
 def test_process_pool_rejects_zero_workers():
     with pytest.raises(ValueError, match="n_workers"):
         ProcessPool(build_quadratic_problem, n_workers=0)
+
+
+# ---------------------------------------------------------------------------
+# tf_threads: ограничение TF-потоков в worker-процессах (C10)
+# ---------------------------------------------------------------------------
+
+
+@NEEDS_TWO_CPUS
+def test_process_pool_worker_tf_threads_are_limited():
+    """
+    tf_threads=1 доходит до worker'ов: TF-пулы внутри каждого процесса
+    ограничены единицей (intra-op и inter-op), оценка при этом корректна.
+    """
+    phis = [np.array([0.0]), np.array([1.0])]
+    records = evaluate_candidates(
+        build_thread_probe_problem, phis, n_workers=2, tf_threads=1
+    )
+
+    assert all(r.error is None for r in records)
+    assert all(r.loss == 1.0 for r in records)
+    assert all(r.components["inter"] == 1.0 for r in records)
+    assert all(r.components["intra"] == 1.0 for r in records)
+
+
+@NEEDS_TWO_CPUS
+def test_make_evaluator_passes_tf_threads_to_workers():
+    """make_evaluator пробрасывает tf_threads в worker-процессы."""
+    evaluator = make_evaluator(build_thread_probe_problem, n_workers=2, tf_threads=1)
+    try:
+        losses = list(evaluator([np.zeros(1)]))
+    finally:
+        evaluator.close()
+    assert losses == [1.0]
+
+
+@NEEDS_TWO_CPUS
+def test_process_pool_tf_threads_none_keeps_loss_semantics():
+    """tf_threads=None не падает и не меняет семантику потерь."""
+    phis = [np.array([1.0, 2.0]), np.array([3.0, 0.0])]
+    records = evaluate_candidates(
+        build_quadratic_problem, phis, n_workers=2, tf_threads=None
+    )
+    assert all(r.error is None for r in records)
+    np.testing.assert_allclose([r.loss for r in records], [5.0, 9.0])
+
+    evaluator = make_evaluator(build_quadratic_problem, n_workers=2, tf_threads=None)
+    try:
+        np.testing.assert_allclose(list(evaluator(phis)), [5.0, 9.0])
+    finally:
+        evaluator.close()
+
+
+def test_invalid_tf_threads_raise_before_processes_start():
+    """tf_threads=0/-1 -> ValueError до запуска процессов (все API)."""
+    with pytest.raises(ValueError, match="tf_threads"):
+        ProcessPool(build_quadratic_problem, n_workers=2, tf_threads=0)
+    with pytest.raises(ValueError, match="tf_threads"):
+        ProcessPool(build_quadratic_problem, n_workers=2, tf_threads=-1)
+    with pytest.raises(ValueError, match="tf_threads"):
+        evaluate_candidates(
+            build_quadratic_problem, [np.zeros(2)], n_workers=2, tf_threads=0
+        )
+    with pytest.raises(ValueError, match="tf_threads"):
+        make_evaluator(build_quadratic_problem, n_workers=2, tf_threads=-1)
+    # SerialPool-путь (n_workers=1) тоже валидирует, хоть и не использует.
+    with pytest.raises(ValueError, match="tf_threads"):
+        evaluate_candidates(
+            build_quadratic_problem, [np.zeros(2)], n_workers=1, tf_threads=0
+        )
+
+
+def test_init_worker_falls_back_when_tf_pools_initialized():
+    """
+    Если TF-пулы уже инициализированы, _init_worker не убивает процесс:
+    RuntimeError от set_*_threads перехватывается (fallback на дефолт
+    TF-потоков), оценка работает с прежней семантикой.
+    """
+    import tensorflow as tf
+
+    _ = tf.constant(0.0)  # форсируем инициализацию TF-пулов в родителе
+    _init_worker(build_quadratic_problem, "evaluate", 1)  # не должно подняться
+
+    record = _worker_evaluate(CandidateTask(index=0, phi=np.array([1.0, 2.0])))
+    assert record.error is None
+    np.testing.assert_allclose(record.loss, 5.0)
 
 
 # ---------------------------------------------------------------------------

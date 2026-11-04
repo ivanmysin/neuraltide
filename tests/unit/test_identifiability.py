@@ -446,6 +446,26 @@ class _TensorBackedProblem(_QuadraticProblem):
         return super().pack(phi)
 
 
+class _MixedQuadraticProblem(_QuadraticProblem):
+    """Квадратичная задача с ручной non-trainable записью реестра.
+
+    pack(None) читает только trainable-координаты (через ParameterSpace);
+    non-trainable запись размерность φ не меняет.
+    """
+
+    def __init__(self, A, b, names=("p0", "p1"), extra="noise/sigma"):
+        super().__init__(A, b, names=names)
+        self.parameter_space.add_entry(
+            ParameterEntry(full_name=extra, shape=[], group="noise", trainable=False)
+        )
+        self._extra = extra
+
+    def pack(self, phi=None) -> np.ndarray:
+        if phi is None:
+            return np.asarray(self.parameter_space.pack(), dtype=np.float64)
+        return np.asarray(phi, dtype=np.float64).reshape(-1)
+
+
 class TestLikelihoodProfilePhiStart:
     def test_pack_none_unavailable_requires_explicit_phi(self, quadratic):
         """pack() без phi невозможен (tensor-backed записи) — честный
@@ -491,6 +511,48 @@ class TestLikelihoodProfilePhiStart:
         phi_min = prof.phi_path[i_min]
         assert phi_min[0] == pytest.approx(phi_true[0], abs=1e-6)
         assert phi_min[2] == pytest.approx(phi_true[2], abs=1e-6)
+
+
+# ---------------------------------------------------------------------------
+# likelihood_profile / select_subset: смешанные пространства
+# ---------------------------------------------------------------------------
+
+
+class TestMixedSpace:
+    """Ручная non-trainable запись реестра: профиль и выбор подмножества
+    работают только по trainable-именам; non-trainable -> ValueError."""
+
+    def _problem(self):
+        neuraltide.config.set_dtype(tf.float64)
+        rng = np.random.default_rng(0)
+        A = rng.standard_normal((6, 2))
+        phi_true = np.array([1.0, -2.0])
+        return _MixedQuadraticProblem(A, A @ phi_true), A, phi_true
+
+    def test_likelihood_profile_trainable_only(self):
+        problem, A, phi_true = self._problem()
+        grid = phi_true[0] + np.linspace(-1.0, 1.0, 5)
+        prof = likelihood_profile(problem, "p0", grid=grid)
+        assert all(prof.successes)
+        for row in prof.phi_path:
+            assert row is not None
+            assert row.shape == (problem.size,)
+        with pytest.raises(ValueError, match="trainable=False"):
+            likelihood_profile(problem, "noise/sigma", grid=[0.1, 0.2])
+
+    def test_select_subset_trainable_only(self):
+        problem, A, phi_true = self._problem()
+        jac = _jac_result(A, phi=phi_true)
+        result = select_subset(problem, jac, keep=["p0"])
+        assert result.kept_names == ["p0"]
+        # fixed_names — только trainable-записи вне keep.
+        assert "noise/sigma" not in result.fixed_names
+        assert set(result.fixed_names) == {"p1"}
+        assert "noise/sigma" not in result.theta_delta_kept
+        assert "noise/sigma" not in result.theta_delta_fixed
+        assert result.loss_after <= result.loss_before + 1e-12
+        with pytest.raises(ValueError, match="non-trainable"):
+            select_subset(problem, jac, keep=["noise/sigma"])
 
 
 # ---------------------------------------------------------------------------

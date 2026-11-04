@@ -30,7 +30,28 @@ from neuraltide.optimization.results import (
     RunCheckpoint,
     StartResult,
 )
-from neuraltide.optimization.strategies import multistart, sample_phi0s
+from neuraltide.optimization.strategies import (
+    multistart,
+    sample_phi0s,
+    subset_continuation,
+)
+from neuraltide.optimization.transforms import IdentityTransform
+
+
+def _add_non_trainable_entry(space: ParameterSpace, name: str = "noise/sigma") -> str:
+    """Регистрирует ручную non-trainable запись реестра (вне вектора φ)."""
+    space.add_entry(
+        ParameterEntry(
+            full_name=name,
+            shape=[1],
+            transform=IdentityTransform(),
+            min=0.0,
+            max=1.0,
+            group="noise",
+            trainable=False,
+        )
+    )
+    return name
 
 
 class _Eval:
@@ -243,6 +264,28 @@ class TestSamplePhi0s:
         with pytest.raises(ValueError, match="min > 0"):
             sample_phi0s(space, 2, log_uniform=["noise/sigma"])
 
+    def test_mixed_space_non_trainable_not_sampled(self, l0_problem):
+        # Ручная non-trainable запись реестра: размерность φ не меняет,
+        # не семплируется и в предупреждение о неограниченных не попадает.
+        space = l0_problem.parameter_space
+        size_before = space.size
+        _add_non_trainable_entry(space)
+        assert space.size == size_before
+        with pytest.warns(UserWarning, match="exc/I_ext") as record:
+            phi = sample_phi0s(space, 8, seed=0)
+        assert phi.shape == (8, size_before)
+        assert all("noise/sigma" not in str(w.message) for w in record)
+        for row in phi:
+            theta = space.unpack(row)
+            assert "noise/sigma" not in theta
+            assert set(theta) == set(space.trainable_names)
+
+    def test_log_uniform_non_trainable_rejected(self, l0_problem):
+        space = l0_problem.parameter_space
+        _add_non_trainable_entry(space)
+        with pytest.raises(ValueError, match="non-trainable"):
+            sample_phi0s(space, 2, log_uniform=["noise/sigma"])
+
 
 # ---------------------------------------------------------------------------
 # multistart
@@ -396,6 +439,40 @@ class TestMultistart:
         assert res.best_index == -1  # некому доводить
         assert all(s.status == "screen_rejected" for s in res.solutions)
         assert res.base.loss_best == min(s.loss for s in res.solutions)
+
+
+# ---------------------------------------------------------------------------
+# Смешанные пространства: ручная non-trainable запись реестра
+# ---------------------------------------------------------------------------
+
+
+class TestMixedSpace:
+    def test_multistart_ignores_non_trainable(self, l0_problem):
+        problem = l0_problem
+        _add_non_trainable_entry(problem.parameter_space)
+        res = multistart(problem, n_starts=4, refine_top_k=1, seed=0)
+        assert res.n_starts == 4
+        assert res.base.phi_best.shape == (problem.size,)
+        # Доводка идёт только по trainable-координатам φ.
+        assert set(res.base.theta_best) == set(problem.parameter_space.trainable_names)
+        assert "noise/sigma" not in res.base.theta_best
+
+    def test_subset_continuation_trainable_only(self, l0_problem):
+        problem = l0_problem
+        space = problem.parameter_space
+        _add_non_trainable_entry(space)
+        res = subset_continuation(problem, [["exc/tau"]], maxiter=5)
+        # Переданная стадия + автоматическая финальная по всем trainable.
+        assert len(res.stage_results) == 2
+        assert res.final_result.base.loss_best <= (
+            res.stage_results[0].base.loss_best + 1e-12
+        )
+
+    def test_subset_continuation_non_trainable_rejected(self, l0_problem):
+        problem = l0_problem
+        _add_non_trainable_entry(problem.parameter_space)
+        with pytest.raises(ValueError, match="non-trainable"):
+            subset_continuation(problem, [["noise/sigma"]])
 
 
 # ---------------------------------------------------------------------------

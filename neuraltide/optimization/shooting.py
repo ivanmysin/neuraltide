@@ -21,8 +21,9 @@ objective на склеенной траектории, поэтому при н
 с записями вида ``x0s/<k>/<pop>/<slot>`` (kind='shooting_state',
 locator=StateLocator, shape [1, n_units] слота состояния, transforms
 по умолчанию identity). Свой ParameterSpace = пространство базовой задачи
-плюс shooting-записи; записи базового пространства разделяются по ссылке
-(те же tf.Variable). Сегмент k стартует из s_k: записи подставляются в
+плюс shooting-записи; trainable-записи базового пространства разделяются
+по ссылке (те же tf.Variable), а его non-trainable записи реестра (вне
+вектора φ) не копируются. Сегмент k стартует из s_k: записи подставляются в
 начальное состояние сегмента (дополняя/переопределяя начальное состояние
 протокола и x0-записи базового пространства — shooting-записи имеют
 приоритет на своём сегменте).
@@ -335,9 +336,11 @@ class MultipleShootingProblem:
                     _SegmentProtocol(t_sequence=t_seq[:, start:stop], inputs=inputs)
                 )
 
-        # Расширенное пространство: базовые записи (по ссылке) + shooting.
+        # Расширенное пространство: trainable-записи базового пространства
+        # (по ссылке) + shooting. Non-trainable записи реестра базового
+        # пространства в φ не входят и сюда не копируются.
         self._space = ParameterSpace()
-        for name, entry in self._base_space.entries.items():
+        for name, entry in self._base_space.phi_entries.items():
             self._space.add_entry(entry)
         self._shooting: List[List[Tuple[str, ParameterEntry]]] = []
         self._subst: List[List[Tuple[str, ParameterEntry, bool, int]]] = []

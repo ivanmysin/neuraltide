@@ -32,7 +32,9 @@
 
 Ограничения: eager-режим; batch=1 (контракт NetworkRNN); objective для
 residual-операций обязан предоставлять residual(predictions) (иначе TypeError
-от problem.residual); все numpy-выходы — float64.
+от problem.residual); все numpy-выходы — float64. Координаты φ и смещения
+записей — только по trainable-записям ParameterSpace (``phi_entries``):
+non-trainable записи реестра вне вектора φ и в чувствительности не входят.
 """
 
 import time
@@ -143,10 +145,10 @@ def _tf_variable(var: tf.Variable) -> tf.Variable:
 
 
 def _entry_offsets(space) -> Dict[str, Tuple[int, int]]:
-    """Смещения записей ParameterSpace в плоском векторе φ."""
+    """Смещения trainable-записей ParameterSpace в плоском векторе φ."""
     offsets: Dict[str, Tuple[int, int]] = {}
     start = 0
-    for name, entry in space.entries.items():
+    for name, entry in space.phi_entries.items():
         offsets[name] = (start, entry.numel)
         start += entry.numel
     return offsets
@@ -250,7 +252,7 @@ def _forward_jvp_only(
     offsets = _entry_offsets(space)
     var_primals: List[tf.Tensor] = []
     var_tangents: List[tf.Tensor] = []
-    for name, entry in space.entries.items():
+    for name, entry in space.phi_entries.items():
         if entry.kind != "model_var" or entry.variable is None:
             continue
         start, numel = offsets[name]

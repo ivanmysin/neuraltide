@@ -64,7 +64,11 @@ phi != None: модель явно переводится в состояние 
 Ограничения: eager-режим (без tf.function вокруг методов задачи);
 batch=1 (контракт NetworkRNN); записи ParameterSpace kind 'model_var'
 без привязанной переменной не включаются в градиент — их вклад
-тождественно нулевой.
+тождественно нулевой. Все φ-операции задач (bounds_phi/search_box_phi,
+материализация x0, FrozenProblem) работают только с trainable-записями
+ParameterSpace (``phi_entries``/``trainable_names``): non-trainable
+записи — реестровые константы вне вектора φ, они не оптимизируются и
+не влияют на его размерность.
 """
 
 import time
@@ -131,7 +135,14 @@ class Experiment:
 
 
 def _tensor_entries(space: ParameterSpace):
-    return [(n, e) for n, e in space.entries.items() if e.kind in _TENSOR_KINDS]
+    """
+    Trainable tensor-записи (kind 'initial_state'/'shooting_state').
+
+    Только они участвуют в материализации x0: non-trainable записи —
+    реестровые константы вне вектора φ, их слоты состояния сохраняют
+    base/network initial state.
+    """
+    return [(n, e) for n, e in space.phi_entries.items() if e.kind in _TENSOR_KINDS]
 
 
 def _materialize_initial_state(
@@ -146,6 +157,9 @@ def _materialize_initial_state(
     theta — физические значения из space.unpack (дифференцируемы по φ,
     если построены внутри GradientTape). base_initial_state — начальное
     состояние протокола (pop, syn) или None → сетевое по умолчанию.
+    Материализуются только trainable tensor-записи: non-trainable записи
+    пропускаются (без валидации locator), их слоты сохраняют значения
+    base/network initial state.
 
     Returns:
         (initial_state, x0_map): initial_state — None, если нет ни
@@ -204,7 +218,9 @@ def _chain_gradient(
     суммируются. Записи без доступного источника дают нулевой вклад.
     """
     dtype = neuraltide.config.get_dtype()
-    entries = space.entries
+    # Смещения по trainable-записям — в согласии с ParameterSpace.unpack
+    # и длиной phi_t (non-trainable записи вне φ).
+    entries = space.phi_entries
     sources: List[tf.Tensor] = []
     source_names: List[str] = []
     for name, entry in entries.items():
@@ -262,7 +278,7 @@ def _phi_gradient(
     """
     has_model_vars = any(
         entry.kind == "model_var" and entry.variable is not None
-        for entry in space.entries.values()
+        for entry in space.phi_entries.values()
     )
     if grad_mode == "assign" and not has_model_vars:
         g = tape.gradient(loss_t, phi_t)
@@ -272,11 +288,11 @@ def _phi_gradient(
 
 
 def _bounds_phi_from_space(space: ParameterSpace) -> Tuple[np.ndarray, np.ndarray]:
-    """Границы вектора φ из физических min/max записей ParameterSpace."""
+    """Границы вектора φ из физических min/max trainable-записей ParameterSpace."""
     lower: list = []
     upper: list = []
     dtype = neuraltide.config.get_dtype()
-    for entry in space.entries.values():
+    for entry in space.phi_entries.values():
         lo, hi = -np.inf, np.inf
         if entry.min is not None:
             lo = float(entry.transform.inverse(tf.constant(entry.min, dtype)))
@@ -300,7 +316,8 @@ def _search_box_phi_from_space(
     """
     Поисковый бокс φ для глобальных методов (DE, CMA-ES, ...).
 
-    bounds_phi берёт inverse(min/max): у sigmoid-образных преобразований
+    По trainable-записям ParameterSpace. bounds_phi берёт inverse(min/max):
+    у sigmoid-образных преобразований
     это граница отступа машинной точности (±11 во float32, ±31 во float64),
     у log с min=0 — log(tiny). Равномерная выборка в таком боксе почти вся
     ложится к краям физического диапазона и зависит от dtype. Здесь бокс
@@ -315,7 +332,7 @@ def _search_box_phi_from_space(
     lower: list = []
     upper: list = []
     dtype = neuraltide.config.get_dtype()
-    for entry in space.entries.values():
+    for entry in space.phi_entries.values():
         lo, hi = -np.inf, np.inf
         if entry.min is not None and entry.max is not None:
             span = float(entry.max) - float(entry.min)
@@ -728,7 +745,8 @@ class CalibrationProblem:
     # ------------------------------------------------------------------
     def bounds_phi(self) -> Tuple[np.ndarray, np.ndarray]:
         """
-        Границы вектора φ из физических min/max записей ParameterSpace.
+        Границы вектора φ из физических min/max trainable-записей
+        ParameterSpace (non-trainable записи вне φ не учитываются).
 
         Записи без границ дают -inf / +inf. Границы преобразуются через
         inverse соответствующего transform'а; предназначены для
@@ -1124,19 +1142,23 @@ class FrozenProblem:
     """
     Подпространство φ поверх CalibrationProblem/MultiExperimentProblem.
 
-    Свободными остаются записи free_names (по умолчанию — все, кроме
-    fixed); остальные координаты заморожены: fixed — на явных физических
-    значениях θ из словаря fixed, прочие — на текущих значениях модели
-    на момент конструирования. Все операции делегируются базовой задаче
-    с полным вектором phi_full = compose(phi_free); счётчики общие
-    (делятся с базовой задачей). Градиент по замороженным координатам
-    тождественно ноль — они исключены из reduced-градиента.
+    Свободными остаются записи free_names (по умолчанию — все trainable,
+    кроме fixed; non-trainable записи ParameterSpace — реестровые константы
+    вне вектора φ и в подпространство никогда не входят); остальные
+    координаты заморожены: fixed — на явных физических значениях θ из
+    словаря fixed, прочие — на текущих значениях модели на момент
+    конструирования. Все операции делегируются базовой задаче с полным
+    вектором phi_full = compose(phi_free); счётчики общие (делятся с базовой
+    задачей). Градиент по замороженным координатам тождественно ноль — они
+    исключены из reduced-градиента.
 
     Args:
         problem: базовая задача (CalibrationProblem или
             MultiExperimentProblem).
-        free_names: имена записей ParameterSpace, остающихся свободными;
-            None — все записи, кроме fixed.
+        free_names: имена trainable-записей ParameterSpace, остающихся
+            свободными; None — все trainable-записи, кроме fixed.
+            Non-trainable имя в free_names/fixed отклоняется ValueError
+            («не входит в оптимизируемый φ»), как и неизвестное имя.
         fixed: {full_name: физическое θ} — записи, зафиксированные на
             явных значениях.
 
@@ -1156,10 +1178,20 @@ class FrozenProblem:
     ):
         self._problem = problem
         space = problem.parameter_space
-        entries = space.entries
+        # φ подпространство строится только по trainable-записям; реестр
+        # (space.entries) нужен лишь чтобы отличить «неизвестное имя» от
+        # «известной non-trainable записи вне оптимизируемого φ».
+        entries = space.phi_entries
+        registry = space.entries
         fixed = {str(k): v for k, v in (fixed or {}).items()}
         for name in fixed:
             if name not in entries:
+                if name in registry:
+                    raise ValueError(
+                        f"FrozenProblem: fixed name '{name}' не входит в "
+                        "оптимизируемый φ (запись trainable=False; "
+                        "фиксировать можно только trainable-записи)."
+                    )
                 raise ValueError(f"FrozenProblem: unknown fixed name '{name}'.")
         if free_names is None:
             free = [n for n in entries if n not in fixed]
@@ -1167,6 +1199,12 @@ class FrozenProblem:
             free = [str(n) for n in free_names]
             for name in free:
                 if name not in entries:
+                    if name in registry:
+                        raise ValueError(
+                            f"FrozenProblem: free name '{name}' не входит в "
+                            "оптимизируемый φ (запись trainable=False; "
+                            "свободными могут быть только trainable-записи)."
+                        )
                     raise ValueError(f"FrozenProblem: unknown free name '{name}'.")
             overlap = sorted(set(free) & set(fixed))
             if overlap:

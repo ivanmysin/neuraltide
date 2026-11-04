@@ -13,6 +13,7 @@ CalibrationProblem.
 """
 
 import json
+import warnings
 
 import numpy as np
 import pytest
@@ -25,6 +26,7 @@ from neuraltide.optimization import (
     Experiment,
     FrozenProblem,
     ObservationSpec,
+    ParameterEntry,
     ResidualLoss,
 )
 from neuraltide.optimization.local import least_squares, minimize_lbfgsb
@@ -53,7 +55,7 @@ def _problem64(l0_factory) -> CalibrationProblem:
 def _offsets(problem) -> dict:
     offsets = {}
     start = 0
-    for name, entry in problem.parameter_space.entries.items():
+    for name, entry in problem.parameter_space.phi_entries.items():
         offsets[name] = (start, entry.numel)
         start += entry.numel
     return offsets
@@ -587,3 +589,192 @@ class TestValidationAndSerialization:
         assert loaded.method == res.method
         np.testing.assert_array_equal(loaded.base.phi_best, res.base.phi_best)
         assert loaded.validation == pytest.approx(res.validation)
+
+
+class TestNonTrainableEntries:
+    """C8: ручная non-trainable запись не оптимизируется и не ломает
+    bounds/history локальных адаптеров."""
+
+    @staticmethod
+    def _problem(l0_factory) -> CalibrationProblem:
+        neuraltide.config.set_dtype(tf.float64)
+        network, space, t_seq, inputs, loss = l0_factory()
+        var = tf.Variable([0.5], dtype=tf.float64, name="manual_const")
+        space.add_entry(
+            ParameterEntry(
+                full_name="manual/const",
+                shape=tf.TensorShape([1]),
+                trainable=False,
+                variable=var,
+                group="population",
+            )
+        )
+        return CalibrationProblem(network, space, t_seq, inputs=inputs, objective=loss)
+
+    def test_lbfgsb_ignores_nontrainable_entry(self, l0_factory):
+        problem = self._problem(l0_factory)
+        res = minimize_lbfgsb(problem, _shifted_start(problem))
+
+        assert res.success
+        assert "manual/const" not in res.base.theta_best
+        assert res.bounds_active == []
+        assert len(res.base.history) > 1
+        # переменная реестровой константы не оптимизируется
+        const_var = problem.parameter_space.entries["manual/const"].variable
+        assert float(const_var.numpy()[0]) == 0.5
+
+    def test_least_squares_ignores_nontrainable_entry(self, l0_factory):
+        problem = self._problem(l0_factory)
+        # jacobian='2-point': default forward-режим sensitivities пока
+        # обходит space.entries (вне правок C8) — здесь проверяем сам адаптер.
+        res = least_squares(problem, _shifted_start(problem), jacobian="2-point")
+
+        assert res.success
+        assert "manual/const" not in res.base.theta_best
+        assert res.bounds_active == []
+
+
+class TestFtolDtypeAware:
+    """C9: ftol=None — dtype-aware auto; явный ftol/options['ftol'] чтим;
+    float32 с ftol < 1e-7 — одноразовый UserWarning, значение сохраняется."""
+
+    _EPS32 = float(np.finfo(np.float32).eps)
+
+    @staticmethod
+    def _ftol_of(res) -> float:
+        return float(res.base.config["options"]["ftol"])
+
+    @staticmethod
+    def _problem32(l0_factory) -> CalibrationProblem:
+        # autouse reset_dtype → float32; сеть строится в текущем dtype.
+        network, space, t_seq, inputs, loss = l0_factory()
+        return CalibrationProblem(network, space, t_seq, inputs=inputs, objective=loss)
+
+    def test_float64_auto_ftol_is_legacy_default(self, l0_factory):
+        problem = _problem64(l0_factory)
+        with warnings.catch_warnings(record=True) as rec:
+            warnings.simplefilter("always")
+            res = minimize_lbfgsb(problem, _shifted_start(problem))
+        assert self._ftol_of(res) == pytest.approx(2.2e-9)
+        assert not [w for w in rec if "ABNORMAL" in str(w.message)]
+
+    def test_float32_auto_ftol_is_eps32(self, l0_factory):
+        problem = self._problem32(l0_factory)
+        with warnings.catch_warnings(record=True) as rec:
+            warnings.simplefilter("always")
+            res = minimize_lbfgsb(problem, _shifted_start(problem), maxiter=50)
+        assert self._ftol_of(res) == pytest.approx(self._EPS32)
+        assert not [w for w in rec if "ABNORMAL" in str(w.message)]
+
+    def test_float32_auto_ftol_smoke_success(self, l0_factory):
+        problem = self._problem32(l0_factory)
+        res = minimize_lbfgsb(problem, _shifted_start(problem))
+        assert res.success
+        assert self._ftol_of(res) == pytest.approx(self._EPS32)
+
+    def test_float32_explicit_ftol_arg_warns_and_kept(self, l0_factory):
+        problem = self._problem32(l0_factory)
+        with pytest.warns(UserWarning, match="ABNORMAL"):
+            res = minimize_lbfgsb(
+                problem, _shifted_start(problem), ftol=1e-9, maxiter=20
+            )
+        assert self._ftol_of(res) == pytest.approx(1e-9)
+
+    def test_float32_options_ftol_warns_and_kept(self, l0_factory):
+        problem = self._problem32(l0_factory)
+        with pytest.warns(UserWarning, match="ABNORMAL"):
+            res = minimize_lbfgsb(
+                problem, _shifted_start(problem), options={"ftol": 1e-9}, maxiter=20
+            )
+        assert self._ftol_of(res) == pytest.approx(1e-9)
+
+    def test_float64_explicit_small_ftol_no_warning(self, l0_factory):
+        problem = _problem64(l0_factory)
+        with warnings.catch_warnings(record=True) as rec:
+            warnings.simplefilter("always")
+            res = minimize_lbfgsb(
+                problem, _shifted_start(problem), ftol=1e-9, maxiter=50
+            )
+        assert self._ftol_of(res) == pytest.approx(1e-9)
+        assert not [w for w in rec if "ABNORMAL" in str(w.message)]
+
+    def test_least_squares_float32_ftol_kwarg_warns_and_kept(self, l0_factory):
+        problem = self._problem32(l0_factory)
+        with pytest.warns(UserWarning, match="ABNORMAL"):
+            res = least_squares(
+                problem,
+                _shifted_start(problem),
+                jacobian="2-point",
+                max_nfev=60,
+                ftol=1e-9,
+            )
+        assert res.base.config["kwargs"]["ftol"] == pytest.approx(1e-9)
+
+    # -- края C-фикса: options={'ftol': None} и порядок warning ---------
+
+    def test_options_ftol_none_treated_as_unset(self, l0_factory):
+        """options={'ftol': None} — None как «не задано»: resolved ftol
+        берётся из dtype-aware auto (float64 → 2.2e-9), None в scipy не
+        уходит, значение зафиксировано в config."""
+        problem = _problem64(l0_factory)
+        with warnings.catch_warnings(record=True) as rec:
+            warnings.simplefilter("always")
+            res = minimize_lbfgsb(
+                problem,
+                _shifted_start(problem),
+                options={"ftol": None},
+                maxiter=50,
+            )
+        assert self._ftol_of(res) == pytest.approx(2.2e-9)
+        assert res.success
+        assert not [w for w in rec if "ABNORMAL" in str(w.message)]
+
+    def test_options_ftol_none_falls_back_to_explicit_ftol(self, l0_factory):
+        """options={'ftol': None} не перезатирает явный ftol (auto — только
+        при отсутствии и ключа, и аргумента)."""
+        problem = _problem64(l0_factory)
+        res = minimize_lbfgsb(
+            problem,
+            _shifted_start(problem),
+            ftol=1e-8,
+            options={"ftol": None},
+            maxiter=50,
+        )
+        assert self._ftol_of(res) == pytest.approx(1e-8)
+
+    def test_least_squares_ftol_no_warning_when_run_rejected(self, l0_factory):
+        """float32-ftol warning не всплывает, если запуск всё равно
+        завершится ValueError (ранние валидации method/bounds)."""
+        problem = self._problem32(l0_factory)
+        for bad_kwargs, match in (
+            ({"method": "lm"}, "trf"),  # lm + bounds задачи
+            ({"method": "dogbox"}, "method"),  # неподдержанный метод
+        ):
+            with warnings.catch_warnings(record=True) as rec:
+                warnings.simplefilter("always")
+                with pytest.raises(ValueError, match=match):
+                    least_squares(
+                        problem, _shifted_start(problem), ftol=1e-9, **bad_kwargs
+                    )
+            assert not [w for w in rec if "ABNORMAL" in str(w.message)]
+
+
+class TestDuckTypedProblem:
+    def test_minimize_lbfgsb_without_pack_keeps_clear_error(self):
+        """Duck-typed проблема без pack: прежняя понятная ошибка
+        AttributeError с именем метода (C9: dtype-detect не маскирует её)."""
+
+        class _NoPackProblem:
+            size = 1
+            held_out = []
+            n_forward = 0
+            n_gradient = 0
+
+            def value_and_gradient(self, phi):
+                return _EvalStub(0.0), np.zeros(1)
+
+            def bounds_phi(self):
+                return np.array([-np.inf]), np.array([np.inf])
+
+        with pytest.raises(AttributeError, match="pack"):
+            minimize_lbfgsb(_NoPackProblem(), np.zeros(1))

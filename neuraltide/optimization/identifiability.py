@@ -11,10 +11,12 @@
 - likelihood_profile(problem, name, ...) — одномерный профиль правдоподобия
     по физическому θ фиксированной сеткой (не адаптивной в P1) с доводкой
     остальных координат через локальный оптимизатор (warm start от соседнего
-    успешного узла) и интервалами по χ²(1);
+    успешного узла) и интервалами по χ²(1); имя должно быть trainable —
+    non-trainable запись реестра отклоняется ValueError;
 - select_subset(problem, jac, keep, ...) — совместная доводка выбранного
     подмножества параметров (FrozenProblem) с честной оценкой смещения:
-    изменение замороженных θ относительно точки якобиана, потерь и прогноза.
+    изменение замороженных θ относительно точки якобиана, потерь и прогноза;
+    keep — только trainable-имена (non-trainable -> ValueError).
 
 Допущения и ограничения (P1):
   * якобиан здесь НЕ вычисляется: compute_fim/select_subset принимают готовый
@@ -92,10 +94,10 @@ _NORM_EPS = 1e-12
 
 
 def _entry_offsets(space) -> Dict[str, Tuple[int, int]]:
-    """Смещения записей ParameterSpace в плоском векторе φ."""
+    """Смещения trainable-записей ParameterSpace в плоском векторе φ."""
     offsets: Dict[str, Tuple[int, int]] = {}
     start = 0
-    for name, entry in space.entries.items():
+    for name, entry in space.phi_entries.items():
         offsets[str(name)] = (start, entry.numel)
         start += entry.numel
     return offsets
@@ -103,10 +105,11 @@ def _entry_offsets(space) -> Dict[str, Tuple[int, int]]:
 
 def _flat_names(space, size: int) -> List[str]:
     """
-    Имена φ-координат: full_name для скалярных записей, 'name[i]' иначе.
+    Имена φ-координат: full_name для скалярных trainable-записей,
+    'name[i]' иначе (non-trainable записи реестра в φ не входят).
     """
     names: List[str] = []
-    for name, entry in space.entries.items():
+    for name, entry in space.phi_entries.items():
         if entry.numel == 1:
             names.append(str(name))
         else:
@@ -746,7 +749,9 @@ def _likelihood_profile(
     Args:
         problem: CalibrationProblem (или duck-typed аналог с
             parameter_space/pack/bounds_phi/counters).
-        name: full_name скалярной записи ParameterSpace (numel == 1 в P1).
+        name: full_name скалярной trainable-записи ParameterSpace
+            (numel == 1 в P1; non-trainable запись реестра отклоняется
+            ValueError — профиль по координате вне вектора φ невозможен).
         phi: стартовый вектор φ — точка отсчёта профиля: cold start для
             свободных координат (при warm_start=False) и значения
             непрофилируемых координат в phi_path. None — problem.pack()
@@ -789,6 +794,12 @@ def _likelihood_profile(
         raise ValueError(
             f"likelihood_profile: неизвестная запись '{name}'; доступны "
             f"{sorted(entries)}."
+        )
+    if name not in space.phi_entries:
+        raise ValueError(
+            f"likelihood_profile: запись '{name}' trainable=False и не входит "
+            "в оптимизируемый вектор φ — профиль строится только по "
+            "trainable-именам ParameterSpace."
         )
     entry = entries[name]
     if entry.numel != 1:
@@ -833,7 +844,7 @@ def _likelihood_profile(
 
     dtype = neuraltide.config.get_dtype()
     offsets = _entry_offsets(space)
-    free_names = [n for n in entries if n != name]
+    free_names = [n for n in space.trainable_names if n != name]
     free_index = _free_index(offsets, free_names)
     fix_slice = offsets[name][0]
 
@@ -979,8 +990,10 @@ class SubsetResult(_JsonDTO):
     Результат выбора подмножества параметров с совместной доводкой.
 
     Атрибуты:
-        kept_names: доводимые записи (full_name);
-        fixed_names: замороженные записи;
+        kept_names: доводимые записи (full_name, trainable);
+        fixed_names: замороженные записи (trainable-записи вне keep;
+            non-trainable реестровые записи в φ не входят и здесь не
+            фигурируют);
         refit_result: результат minimize_lbfgsb над FrozenProblem (None при
             refit=False или при отказе оптимизатора до возврата результата);
         loss_before: потеря в точке якобиана (jac.loss);
@@ -1130,7 +1143,9 @@ def select_subset(
             parameter_space/pack/simulate/validate/counters).
         jac: JacobianResult в исходной точке (phi/loss/J); phi задаёт точку,
             относительно которой измеряется смещение.
-        keep: полные имена доводимых записей ParameterSpace (непусто).
+        keep: полные имена доводимых trainable-записей ParameterSpace
+            (непусто; non-trainable имя отклоняется ValueError — запись вне
+            оптимизируемого вектора φ).
         refit: выполнять доводку; False — только разбиение kept/fixed, поля
             смещения None с пояснением в notes.
 
@@ -1155,7 +1170,14 @@ def select_subset(
         raise ValueError(
             f"select_subset: неизвестные записи {unknown}; доступны {sorted(entries)}."
         )
-    fixed_names = [n for n in entries if n not in kept]
+    non_trainable = [k for k in kept if k not in space.phi_entries]
+    if non_trainable:
+        raise ValueError(
+            f"select_subset: keep содержит non-trainable записи вне вектора "
+            f"φ: {non_trainable} — доводить можно только trainable-имена "
+            "ParameterSpace."
+        )
+    fixed_names = [n for n in space.trainable_names if n not in kept]
 
     phi_jac = np.asarray(jac.phi, dtype=np.float64).reshape(-1)
     if phi_jac.size != space.size:
@@ -1165,7 +1187,7 @@ def select_subset(
         )
     loss_before = float(jac.loss)
     theta_jac = {
-        n: np.asarray(space.unpack(phi_jac)[n], dtype=np.float64) for n in entries
+        n: np.asarray(v, dtype=np.float64) for n, v in space.unpack(phi_jac).items()
     }
 
     if not refit:
@@ -1207,7 +1229,8 @@ def select_subset(
         ).reshape(-1)
         loss_after = float(refit_result.base.loss_best)
         theta_after = {
-            n: np.asarray(space.unpack(phi_full)[n], dtype=np.float64) for n in entries
+            n: np.asarray(v, dtype=np.float64)
+            for n, v in space.unpack(phi_full).items()
         }
         theta_delta_kept = {n: theta_after[n] - theta_jac[n] for n in kept}
         theta_delta_fixed = {n: theta_after[n] - theta_jac[n] for n in fixed_names}

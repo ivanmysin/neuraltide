@@ -2,10 +2,12 @@
 Глобальные и гибридные стратегии калибровки (этап P1, ранг 6 дорожной карты).
 
 - sample_phi0s — детерминированная (по seed) выборка начальных точек φ
-  методами Sobol / Latin Hypercube / random поверх ParameterSpace:
-  ограниченные записи семплируются равномерно (или лог-равномерно) в
-  физических границах с последующим transform.inverse, неограниченные —
-  гауссово вокруг текущего phi с предупреждением;
+  методами Sobol / Latin Hypercube / random поверх ParameterSpace
+  (координаты φ — только trainable-записи; ограниченные записи
+  семплируются равномерно (или лог-равномерно) в физических границах с
+  последующим transform.inverse, неограниченные — гауссово вокруг
+  текущего phi с предупреждением; non-trainable имена в log_uniform и
+  subset_continuation отклоняются ValueError);
 - multistart — screening всех стартов (screen_evals оценок, по умолчанию
   один evaluate на старт) с опциональным коротким screen-refine
   (screen_refine_steps итераций screen_local от того же phi0, только
@@ -119,9 +121,10 @@ def _unit_cube(n: int, size: int, method: str, seed: Optional[int]) -> np.ndarra
 
 
 def _entry_offsets(space: ParameterSpace) -> Dict[str, Tuple[int, int]]:
+    """Смещения trainable-записей ParameterSpace в плоском векторе φ."""
     offsets: Dict[str, Tuple[int, int]] = {}
     start = 0
-    for name, entry in space.entries.items():
+    for name, entry in space.phi_entries.items():
         offsets[name] = (start, entry.numel)
         start += entry.numel
     return offsets
@@ -130,10 +133,11 @@ def _entry_offsets(space: ParameterSpace) -> Dict[str, Tuple[int, int]]:
 def _current_phi(space: ParameterSpace) -> np.ndarray:
     """
     Текущий phi ParameterSpace: переменные модели, где они есть, и нули
-    для записей без переменной (тензорные/ручные записи).
+    для записей без переменной (тензорные/ручные записи). Только
+    trainable-записи — non-trainable реестровые константы в φ не входят.
     """
     values = {}
-    for name, entry in space.entries.items():
+    for name, entry in space.phi_entries.items():
         if entry.variable is not None:
             values[name] = entry.variable
         else:
@@ -167,7 +171,9 @@ def sample_phi0s(
     Детерминированная (по seed) выборка n начальных векторов phi размера
     space.size.
 
-    Семантика по записям ParameterSpace:
+    Координаты φ — только trainable-записи ParameterSpace (свойство
+    ``phi_entries``): ручные non-trainable записи реестра (``entries``)
+    размерность φ не меняют и никак не семплируются. Семантика по записям:
 
     - ограниченные записи (min и max заданы): равномерный сэмплинг theta в
       физических границах, затем transform.inverse -> phi. Записи из
@@ -178,14 +184,15 @@ def sample_phi0s(
       с предупреждением UserWarning, перечисляющим такие записи.
 
     Args:
-        space: ParameterSpace (порядок координат — порядок записей).
+        space: ParameterSpace (порядок координат — порядок trainable-записей).
         n: число начальных точек (>= 1).
         method: 'sobol' | 'lhs' | 'random' — scipy.stats.qmc Sobol/LHS со
             scramble=True (низкорасхожденные дизайны) или numpy RNG.
         seed: seed воспроизводимости (None — недетерминированно).
-        log_uniform: опциональный список full_names для лог-равномерного
-            сэмплирования; неизвестные имена -> ValueError, неположительные
-            или неограниченные границы -> ValueError.
+        log_uniform: опциональный список full_names trainable-записей для
+            лог-равномерного сэмплирования; неизвестные имена ->
+            ValueError, non-trainable имена (вне вектора φ) -> ValueError,
+            неположительные или неограниченные границы -> ValueError.
         clip_to_bounds: применить space.project к каждой точке (физические
             theta гарантированно в [min, max]).
 
@@ -210,6 +217,13 @@ def sample_phi0s(
         raise ValueError(
             f"sample_phi0s: log_uniform содержит неизвестные имена {unknown}."
         )
+    non_trainable = sorted(log_set - set(space.phi_entries))
+    if non_trainable:
+        raise ValueError(
+            f"sample_phi0s: log_uniform содержит non-trainable записи вне "
+            f"вектора φ: {non_trainable} — семплировать можно только "
+            "trainable-имена."
+        )
 
     size = int(space.size)
     if size == 0:
@@ -221,7 +235,7 @@ def sample_phi0s(
 
     phi = np.empty((n, size), dtype=np.float64)
     unbounded_names: List[str] = []
-    for name, entry in space.entries.items():
+    for name, entry in space.phi_entries.items():
         start, numel = offsets[name]
         sl = slice(start, start + numel)
         u = np.clip(unit[:, sl], _UNIT_EPS, 1.0 - _UNIT_EPS)
@@ -895,13 +909,16 @@ def subset_continuation(
     Continuation «reduced parameter subset -> joint refinement».
 
     Каждая стадия — FrozenProblem над той же базовой задачей со своим
-    набором свободных записей. Если последний переданный набор не
-    покрывает все записи ParameterSpace, автоматически добавляется
-    финальная совместная доводка по всем записям. Точка переносится между
-    стадиями явно: phi_best стадии применяется к модели через
-    frozen.evaluate(phi_best) (полный вектор, замороженные координаты —
-    на снимке конструирования FrozenProblem), далее pack() следующего
-    FrozenProblem берёт свободные координаты текущего состояния модели.
+    набором свободных записей. Имена стадий проверяются: неизвестное имя
+    или non-trainable запись реестра (вне вектора φ) отклоняются ValueError.
+    Если последний переданный набор не покрывает все trainable-записи
+    ParameterSpace, автоматически добавляется финальная совместная доводка
+    по всем trainable-записям (non-trainable записи в φ не входят и стадий
+    не добавляют). Точка переносится между стадиями явно: phi_best стадии
+    применяется к модели через frozen.evaluate(phi_best) (полный вектор,
+    замороженные координаты — на снимке конструирования FrozenProblem),
+    далее pack() следующего FrozenProblem берёт свободные координаты
+    текущего состояния модели.
 
     Args:
         problem: базовая CalibrationProblem (CalibrationProblem/
@@ -920,6 +937,7 @@ def subset_continuation(
         raise ValueError("subset_continuation: непустой stages_free_names обязателен.")
     space = problem.parameter_space
     known = set(space.entries)
+    trainable = set(space.trainable_names)
     for stage_id, names in enumerate(stages):
         unknown = sorted(set(names) - known)
         if unknown:
@@ -927,7 +945,15 @@ def subset_continuation(
                 f"subset_continuation: неизвестные имена на стадии "
                 f"{stage_id}: {unknown}."
             )
-    all_names = list(space.entries.keys())
+        non_trainable = sorted(set(names) - trainable)
+        if non_trainable:
+            raise ValueError(
+                f"subset_continuation: non-trainable имена на стадии "
+                f"{stage_id}: {non_trainable} — свободными могут быть "
+                "только trainable-записи ParameterSpace (non-trainable "
+                "записи реестра вне вектора φ)."
+            )
+    all_names = list(space.trainable_names)
     if set(stages[-1]) != set(all_names):
         stages = stages + [all_names]
 

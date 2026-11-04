@@ -6,7 +6,13 @@
 - minimize_lbfgsb — scipy.optimize.minimize(method='L-BFGS-B', jac=True)
   поверх problem.value_and_gradient: скалярная потеря и градиент одним
   прогоном; bounds берутся из problem.bounds_phi() (None, если ни одна
-  координата не ограничена);
+  координата не ограничена); ftol=None — dtype-aware auto
+  (float64 → 2.2e-9 — прежнее поведение; float32 → ≈eps32, 1.19e-7),
+  явный ftol/options['ftol'] всегда чтится (options['ftol']=None — как
+  «не задано»), resolved ftol зафиксирован в config['options']['ftol'],
+  None-значения options в scipy не передаются; float32-φ с эффективным
+  ftol < 1e-7 — одноразовый UserWarning (риск
+  ABNORMAL_TERMINATION_IN_LNSRCH), значение не переопределяем;
 - least_squares — scipy.optimize.least_squares поверх problem.residual:
   'trf' как основной метод (поддерживает bounds), 'lm' только без bounds
   (при конечных границах честный ValueError с советом перейти на 'trf');
@@ -30,7 +36,9 @@
   maxiter и max_nfev отклоняется ValueError.
   callback(intermediate_result) — пользовательский callback итераций
   (поддержка scipy >= 1.16; на 1.15 не передаётся в scipy, история тогда
-  стартовая + финальная; у method='lm' не поддержан scipy — UserWarning).
+  стартовая + финальная; у method='lm' не поддержан scipy — UserWarning);
+  scipy-defaults ftol/xtol/gtol не меняем, но явный kwargs['ftol'] с
+  float32-φ < 1e-7 — одноразовый UserWarning (как у minimize_lbfgsb).
 
 Оба адаптера:
 
@@ -73,6 +81,69 @@ __all__ = ["minimize_lbfgsb", "least_squares"]
 _BOUNDS_RTOL = 1e-6
 _BOUNDS_ATOL = 1e-8
 
+# Дефолты dtype-aware ftol для minimize_lbfgsb (ftol=None — auto):
+# float64 — прежнее поведение scipy (2.2e-9), float32 — ~eps32: жёстче
+# порога float32-потеря не сходится, L-BFGS-B уходит в
+# ABNORMAL_TERMINATION_IN_LNSRCH.
+_FTOL_AUTO_FLOAT64 = 2.2e-9
+_FTOL_AUTO_FLOAT32 = float(np.finfo(np.float32).eps)  # ≈ 1.19e-7
+# Эффективный ftol ниже порога при float32-φ — повод для одноразового
+# UserWarning (значение не переопределяем).
+_FTOL_FLOAT32_WARN_BELOW = 1e-7
+
+
+def _phi_dtype_is_float32(phi_dtype) -> bool:
+    """True, если dtype φ-тензора — float32 (tf.DType/np.dtype/str)."""
+    return str(phi_dtype) == "float32"
+
+
+def _warn_ftol_float32(phi_dtype, ftol, *, where: str, stacklevel: int = 3) -> None:
+    """
+    Одноразовый UserWarning: эффективный ftol < 1e-7 при float32-координатах φ.
+
+    Из-за точности float32 потеря не способна сойтись до такого порога:
+    L-BFGS-B рискует завершиться ABNORMAL_TERMINATION_IN_LNSRCH, а TRF/LM
+    будут итероваться впустую. Явный ftol чтится — значение НЕ
+    переопределяем, только предупреждаем.
+    """
+    if not _phi_dtype_is_float32(phi_dtype):
+        return
+    if float(ftol) >= _FTOL_FLOAT32_WARN_BELOW:
+        return
+    warnings.warn(
+        f"{where}: эффективный ftol={float(ftol):g} ниже порога "
+        f"{_FTOL_FLOAT32_WARN_BELOW:g} при float32-координатах φ: потеря не "
+        "сойдётся до такого ftol из-за точности float32 — L-BFGS-B рискует "
+        "завершиться ABNORMAL_TERMINATION_IN_LNSRCH (TRF/LM будут "
+        "итероваться впустую). Значение ftol оставлено без изменений; "
+        "рекомендуется ftol >= 1e-7 для float32 или dtype float64.",
+        UserWarning,
+        stacklevel=stacklevel,
+    )
+
+
+def _resolve_lbfgsb_ftol(ftol, options, phi_dtype) -> float:
+    """
+    Эффективный ftol L-BFGS-B.
+
+    Приоритет: options['ftol'] > явный ftol > dtype-aware auto
+    (float64 → 2.2e-9 — прежнее поведение; float32 → ≈eps32 1.19e-7).
+    Ключ options['ftol']=None трактуется как «не задано» — fallback на
+    явный ftol/auto. Значение фиксируется в config['options']['ftol'];
+    при float32 со значением < 1e-7 — одноразовый UserWarning (см.
+    _warn_ftol_float32).
+    """
+    if options and options.get("ftol") is not None:
+        effective = float(options["ftol"])
+    elif ftol is not None:
+        effective = float(ftol)
+    elif _phi_dtype_is_float32(phi_dtype):
+        effective = _FTOL_AUTO_FLOAT32
+    else:
+        effective = _FTOL_AUTO_FLOAT64
+    _warn_ftol_float32(phi_dtype, effective, where="minimize_lbfgsb")
+    return effective
+
 
 def _jsonable(value: Any) -> Any:
     """Рекурсивное приведение config к JSON-сериализуемому виду."""
@@ -96,12 +167,19 @@ def _counters(problem) -> Tuple[int, int]:
     )
 
 
-def _initial_phi(problem, phi0) -> np.ndarray:
-    if phi0 is None:
-        phi_t = problem.pack()
-    else:
-        phi_t = problem.pack(phi0)
-    return np.asarray(phi_t, dtype=np.float64).reshape(-1)
+def _initial_phi(problem, phi0) -> Tuple[np.ndarray, Any]:
+    """
+    Стартовый вектор φ; pack() вызывается ровно один раз.
+
+    Returns:
+        (phi_np, phi_dtype): numpy-float64 вектор и dtype исходного
+        φ-тензора (нужен для dtype-aware дефолтов ftol, см.
+        _resolve_lbfgsb_ftol).
+    """
+    phi_t = problem.pack() if phi0 is None else problem.pack(phi0)
+    phi_arr = np.asarray(phi_t)
+    phi_np = np.asarray(phi_arr, dtype=np.float64).reshape(-1)
+    return phi_np, phi_arr.dtype
 
 
 def _problem_bounds(problem, size: int) -> Optional[Tuple[np.ndarray, np.ndarray]]:
@@ -124,9 +202,15 @@ def _problem_bounds(problem, size: int) -> Optional[Tuple[np.ndarray, np.ndarray
 
 def _prepare_start(
     problem, phi0, size: int
-) -> Tuple[np.ndarray, Optional[Tuple[np.ndarray, np.ndarray]]]:
-    """Стартовый вектор φ + bounds; нефинитный старт отклоняется ValueError."""
-    x0 = _initial_phi(problem, phi0)
+) -> Tuple[np.ndarray, Optional[Tuple[np.ndarray, np.ndarray]], Any]:
+    """
+    Стартовый вектор φ + bounds + dtype φ.
+
+    Нефинитный старт отклоняется ValueError. Bounds приводятся к
+    trainable-only размерности задачи: non-trainable записи ParameterSpace
+    вне φ не должны ломать адаптеры.
+    """
+    x0, phi_dtype = _initial_phi(problem, phi0)
     if not np.all(np.isfinite(x0)):
         raise ValueError(
             "local: стартовый phi0 содержит нефинитные значения (NaN/inf); "
@@ -137,11 +221,16 @@ def _prepare_start(
         # Проекция недопустимой стартовой точки в допустимую область
         # (L-BFGS-B делает это внутри себя, TRF честно падает).
         x0 = np.clip(x0, bounds[0], bounds[1])
-    return x0, bounds
+    return x0, bounds, phi_dtype
 
 
 def _coordinate_names(problem, size: int) -> List[str]:
-    """Имена координат φ: имена записей ParameterSpace (для bounds_active)."""
+    """
+    Имена координат φ: trainable-имена ParameterSpace (для bounds_active).
+
+    Имена строятся по ``space.trainable_names`` (координаты φ) — non-trainable
+    записи реестра в вектор φ не входят и bounds/history не ломают.
+    """
     space = getattr(problem, "parameter_space", None)
     if space is None:
         return [f"phi[{i}]" for i in range(size)]
@@ -156,7 +245,10 @@ def _coordinate_names(problem, size: int) -> List[str]:
                 expanded.extend(f"{name}[{i}]" for i in range(entry.numel))
         return expanded
 
-    names = _entry_names(list(space.entries.keys()))
+    trainable = getattr(space, "trainable_names", None)
+    if trainable is None:
+        trainable = list(space.entries.keys())
+    names = _entry_names(list(trainable))
     if len(names) != size:
         # Reduced φ (FrozenProblem): координаты — свободные записи
         # в их порядке.
@@ -453,7 +545,7 @@ def minimize_lbfgsb(
     *,
     maxiter: int = 200,
     gtol: float = 1e-6,
-    ftol: float = 2.2e-9,
+    ftol: Optional[float] = None,
     validate: bool = True,
     options: Optional[Mapping[str, Any]] = None,
 ) -> LocalOptimizerResult:
@@ -465,16 +557,27 @@ def minimize_lbfgsb(
             value_and_gradient/pack/bounds_phi/counters);
         phi0: стартовый вектор φ; None — текущее значение параметров
             модели (problem.pack());
-        maxiter / gtol / ftol: критерии остановки L-BFGS-B (передаются
-            в options решателя);
+        maxiter / gtol: критерии остановки L-BFGS-B (передаются в options
+            решателя);
+        ftol: критерий остановки L-BFGS-B; None — dtype-aware auto
+            (float64 → 2.2e-9 — прежнее поведение; float32 → ≈eps32,
+            1.19e-7). Явный ftol или options['ftol'] всегда чтится
+            (приоритет у options; options['ftol']=None трактуется как
+            «не задано» — fallback на явный ftol/auto). Если dtype φ
+            float32 и эффективный ftol < 1e-7 — одноразовый UserWarning
+            о риске ABNORMAL_TERMINATION_IN_LNSRCH; значение не
+            переопределяем;
         validate: вызывать problem.validate(phi_best) для held-out
             протоколов (результат — в validation; без held_out — {});
         options: дополнительные ключи options scipy (переопределяют
-            maxiter/gtol/ftol при совпадении).
+            maxiter/gtol/ftol при совпадении). Ключи со значением None
+            игнорируются как «не задано» (options={'ftol': None} — то же,
+            что отсутствие ключа: resolved-значение сохраняется).
 
     Returns:
         LocalOptimizerResult с base=OptimizationResult
-        (seed=None, dtype — текущий глобальный).
+        (seed=None, dtype — текущий глобальный); resolved ftol зафиксирован
+        в config['options']['ftol'].
 
     Raises:
         ValueError: нефинитный стартовый phi0/loss/градиент или
@@ -484,7 +587,7 @@ def minimize_lbfgsb(
     t_start = time.perf_counter()
     start_counters = _counters(problem)
     size = int(problem.size)
-    x0, bounds = _prepare_start(problem, phi0, size)
+    x0, bounds, phi_dtype = _prepare_start(problem, phi0, size)
 
     fun = _LossGradientFn(problem)
     eval0, grad0_t = problem.value_and_gradient(x0)
@@ -518,10 +621,15 @@ def minimize_lbfgsb(
     scipy_options: Dict[str, Any] = {
         "maxiter": int(maxiter),
         "gtol": float(gtol),
-        "ftol": float(ftol),
+        "ftol": _resolve_lbfgsb_ftol(ftol, options, phi_dtype),
     }
     if options:
-        scipy_options.update(dict(options))
+        # Ключи options со значением None трактуем как «не задано»
+        # (например, options={'ftol': None}): resolved-значения не
+        # перезатираем и None в scipy не передаём (scipy падает с
+        # TypeError при float(None)).
+        user_options = {k: v for k, v in dict(options).items() if v is not None}
+        scipy_options.update(user_options)
     bounds_arg = None if bounds is None else list(zip(bounds[0], bounds[1]))
     result = sp_optimize.minimize(
         fun,
@@ -616,7 +724,10 @@ def least_squares(
         validate: вызывать problem.validate(phi_best) для held-out
             протоколов (результат — в validation; без held_out — {});
         **kwargs: прочие параметры scipy.optimize.least_squares
-            (ftol/xtol/gtol, tr_solver, diff_step, ...).
+            (ftol/xtol/gtol, tr_solver, diff_step, ...). scipy-defaults не
+            меняем; если kwargs содержит ftol и dtype φ float32 со
+            значением < 1e-7 — одноразовый UserWarning (риск итераций
+            впустую), значение не переопределяем.
 
     Returns:
         LocalOptimizerResult с base=OptimizationResult (seed=None,
@@ -656,7 +767,7 @@ def least_squares(
                 "бюджет неоднозначен. Укажите только один из двух "
                 "(maxiter маппируется в max_nfev, см. документацию)."
             )
-    x0, bounds = _prepare_start(problem, phi0, size)
+    x0, bounds, phi_dtype = _prepare_start(problem, phi0, size)
     if method_key == "lm" and bounds is not None:
         raise ValueError(
             "least_squares: method='lm' не поддерживает bounds (у задачи "
@@ -748,6 +859,14 @@ def least_squares(
                 UserWarning,
                 stacklevel=2,
             )
+    if kwargs.get("ftol") is not None:
+        # Явный ftol чтим (scipy-defaults не меняем); при float32-φ со
+        # значением < 1e-7 — тот же одноразовый warning, что и в
+        # minimize_lbfgsb (риск бесконечных итераций впустую). Порядок
+        # важен: warning идёт после всех ранних валидаций (method/bounds,
+        # старт/невязка, jacobian), чтобы не всплывал там, где запуск
+        # всё равно завершится ValueError.
+        _warn_ftol_float32(phi_dtype, kwargs["ftol"], where="least_squares")
     result = sp_optimize.least_squares(
         fun,
         x0,

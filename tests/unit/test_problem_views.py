@@ -20,7 +20,9 @@ from neuraltide.optimization import (
     Experiment,
     FrozenProblem,
     ObservationSpec,
+    ParameterEntry,
     ResidualLoss,
+    StateLocator,
     taylor_test,
 )
 
@@ -334,3 +336,111 @@ class TestFrozenProblem:
             FrozenProblem(problem, fixed={"nope/param": 1.0})
         with pytest.raises(ValueError, match="both free and fixed"):
             FrozenProblem(problem, free_names=["exc/tau"], fixed={"exc/tau": 8.0})
+
+
+class TestNonTrainableEntries:
+    """C8: non-trainable записи ParameterSpace вне φ — materialize/FrozenProblem."""
+
+    @staticmethod
+    def _manual_entry():
+        return ParameterEntry(
+            full_name="manual/const",
+            shape=tf.TensorShape([1]),
+            trainable=False,
+            variable=None,
+            group="population",
+        )
+
+    def _build_with_const(self, l0_factory):
+        neuraltide.config.set_dtype(tf.float64)
+        network, space, t_seq, inputs, loss = l0_factory()
+        space.add_entry(self._manual_entry())
+        problem = CalibrationProblem(
+            network, space, t_seq, inputs=inputs, objective=loss
+        )
+        return problem
+
+    # -- FrozenProblem -------------------------------------------------
+    def test_frozen_default_free_names_are_trainable_only(self, l0_factory):
+        problem = self._build_with_const(l0_factory)
+        frozen = FrozenProblem(problem)
+        assert frozen.free_names == ["exc/tau", "exc/I_ext", "in->exc/gsyn_max"]
+        assert frozen.size == 3
+        phi0 = np.asarray(frozen.pack(), dtype=np.float64)
+        ev, grad = frozen.value_and_gradient(phi0)
+        assert np.asarray(grad).shape == (frozen.size,)
+        lo, hi = frozen.bounds_phi()
+        assert lo.shape == hi.shape == (frozen.size,)
+
+    def test_frozen_nontrainable_free_raises(self, l0_factory):
+        problem = self._build_with_const(l0_factory)
+        with pytest.raises(ValueError, match="оптимизируем"):
+            FrozenProblem(problem, free_names=["manual/const"])
+
+    def test_frozen_nontrainable_fixed_raises(self, l0_factory):
+        problem = self._build_with_const(l0_factory)
+        with pytest.raises(ValueError, match="оптимизируем"):
+            FrozenProblem(problem, fixed={"manual/const": 0.1})
+
+    def test_frozen_unknown_names_still_raise(self, l0_factory):
+        problem = self._build_with_const(l0_factory)
+        with pytest.raises(ValueError, match="unknown free"):
+            FrozenProblem(problem, free_names=["nope/param"])
+        with pytest.raises(ValueError, match="unknown fixed"):
+            FrozenProblem(problem, fixed={"nope/param": 1.0})
+
+    # -- _materialize_initial_state ------------------------------------
+    def test_nontrainable_x0_entry_skipped_uses_base_state(self, l0_factory):
+        neuraltide.config.set_dtype(tf.float64)
+        network, space, t_seq, inputs, loss = l0_factory()
+        space.add_initial_state_entries(network)
+        entry = space.entries["x0/exc/0"]
+        entry.trainable = False
+        # Сломанный locator: trainable-only materialize не валидирует
+        # non-trainable записи.
+        entry.locator = StateLocator(population="nope", slot=99)
+
+        pop0, syn0 = network.get_initial_state()
+        base = (
+            [tf.constant([[0.7]], dtype=tf.float64)] + list(pop0[1:]),
+            list(syn0),
+        )
+        problem = CalibrationProblem(
+            network,
+            space,
+            t_seq,
+            inputs=inputs,
+            objective=loss,
+            initial_state=base,
+            grad_mode="chain",
+        )
+        # x0-запись вне φ: только model_var-записи
+        assert problem.size == space.size == 3
+        # прогон использует base initial state (не значение x0-записи)
+        out = problem.simulate()
+        ref = network(t_seq, inputs=inputs, initial_state=base)
+        np.testing.assert_allclose(
+            out.firing_rates["exc"], ref.firing_rates["exc"], rtol=1e-10
+        )
+        # sanity: trainable-запись со значением 0.3 дала бы иную траекторию
+        values = {n: 0.3 for n in space.trainable_names}
+        out_x0 = problem.simulate(np.asarray(space.pack(values), dtype=np.float64))
+        assert not np.allclose(out_x0.firing_rates["exc"], ref.firing_rates["exc"])
+
+    def test_trainable_x0_bad_locator_still_validated(self, l0_factory):
+        neuraltide.config.set_dtype(tf.float64)
+        network, space, t_seq, inputs, loss = l0_factory()
+        space.add_initial_state_entries(network)
+        space.entries["x0/exc/0"].locator = StateLocator(population="nope", slot=0)
+        problem = CalibrationProblem(
+            network,
+            space,
+            t_seq,
+            inputs=inputs,
+            objective=loss,
+            grad_mode="chain",
+        )
+        values = {n: 0.3 for n in space.trainable_names}
+        phi = np.asarray(space.pack(values), dtype=np.float64)
+        with pytest.raises(ValueError, match="locator"):
+            problem.evaluate(phi)

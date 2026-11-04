@@ -20,6 +20,12 @@ StateLocator(population, slot) в плоском списке начальных
 заданного transform используется identity — старый params-формат
 продолжает работать без изменений.
 
+Вектор φ строится только по записям с ``trainable=True``. Записи с
+``trainable=False`` (например ручные ``add_entry(..., trainable=False)``)
+— реестровые константы: они видны в ``entries``/``names`` (интроспекция,
+duplicate-check), но исключены из ``size``, ``pack``, ``unpack``,
+``project`` и ``apply_to_model``.
+
 Ограничения P0/P1:
   * автоматически охватываются только trainable-параметры популяций
     и синапсов графа. Параметры генераторов входов и readout-слои в
@@ -117,7 +123,10 @@ class ParameterEntry:
         min/max: физические границы (None — не ограничен);
         group: 'population' | 'synapse' | 'initial_state' |
             пользовательская группа;
-        trainable: признак оптимизируемости;
+        trainable: признак оптимизируемости; False — реестровая константа:
+            запись остаётся в реестре (entries/names, duplicate-check), но
+            не входит в вектор φ и игнорируется size/pack/unpack/project/
+            apply_to_model;
         kind: 'model_var' — параметр модели (переменная или ручная
             запись), 'initial_state'/'shooting_state' — тензорная
             компонента начального состояния, не привязанная к
@@ -166,6 +175,13 @@ class ParameterEntry:
 class ParameterSpace:
     """
     Плоский вектор φ оптимизатора над trainable-параметрами сети.
+
+    φ строится только по записям с ``trainable=True`` (свойства
+    ``trainable_names`` / ``phi_entries`` — ordered trainable-only view).
+    Записи с ``trainable=False`` — реестровые константы: ``entries`` и
+    ``names`` по-прежнему содержат их (интроспекция, duplicate-check по
+    всем записям), но размерность φ и все операции с ним (size, pack,
+    unpack, project, apply_to_model) их игнорируют.
 
     Все методы (pack/unpack/apply_to_model/project) используют один и тот
     же вектор φ, что исключает рассинхронизацию между адаптерами
@@ -394,6 +410,23 @@ class ParameterSpace:
         return list(self._entries.keys())
 
     @property
+    def trainable_names(self) -> List[str]:
+        """Имена trainable-записей в порядке регистрации — координаты φ."""
+        return [n for n, e in self._entries.items() if e.trainable]
+
+    @property
+    def phi_entries(self) -> Mapping[str, ParameterEntry]:
+        """
+        Ordered trainable-only view реестра: full_name → ParameterEntry.
+
+        Порядок — порядок регистрации; значения — те же объекты записей,
+        что и в ``entries``. Именно это подмножество определяет вектор φ:
+        его длина равна ``size``, а pack/unpack/project/apply_to_model
+        работают только с этими записями.
+        """
+        return {n: e for n, e in self._entries.items() if e.trainable}
+
+    @property
     def model_entry_names(self) -> List[str]:
         """Имена записей параметров модели (kind == 'model_var')."""
         return [n for n, e in self._entries.items() if e.kind == "model_var"]
@@ -405,7 +438,8 @@ class ParameterSpace:
 
     @property
     def size(self) -> int:
-        return int(sum(e.numel for e in self._entries.values()))
+        """Длина вектора φ: суммарное число элементов trainable-записей."""
+        return int(sum(e.numel for e in self.phi_entries.values()))
 
     def shape(self, name: str) -> tf.TensorShape:
         return self._entries[name].shape
@@ -419,7 +453,7 @@ class ParameterSpace:
     def _offsets(self) -> Dict[str, tuple]:
         offsets = {}
         start = 0
-        for name, entry in self._entries.items():
+        for name, entry in self.phi_entries.items():
             offsets[name] = (start, entry.numel)
             start += entry.numel
         return offsets
@@ -450,18 +484,21 @@ class ParameterSpace:
 
     def pack(self, values: Optional[Mapping[str, object]] = None) -> tf.Tensor:
         """
-        Физические θ → плоский вектор φ = inverse(θ) всех записей.
+        Физические θ → плоский вектор φ = inverse(θ) trainable-записей.
 
         Args:
             values: словарь {full_name: θ}; ключи — полные имена.
-                None — текущие значения переменных модели (записи без
-                переменной в этом режиме вызывают ValueError).
+                Требуются только trainable-записи; неизвестные и
+                non-trainable ключи молча игнорируются. None — текущие
+                значения переменных модели trainable-записей (trainable-
+                запись без переменной в этом режиме вызывает ValueError).
 
         Returns:
-            tf.Tensor формы [size] в neuraltide.config.get_dtype().
+            tf.Tensor формы [size] в neuraltide.config.get_dtype(); для
+            пустого trainable-множества — tf.zeros([0], dtype).
         """
         pieces = []
-        for name, entry in self._entries.items():
+        for name, entry in self.phi_entries.items():
             if values is None:
                 if entry.variable is None:
                     raise ValueError(
@@ -482,9 +519,10 @@ class ParameterSpace:
 
     def unpack(self, phi) -> Dict[str, tf.Tensor]:
         """
-        Плоский вектор φ → физические θ = forward(φ) по именам.
+        Плоский вектор φ → физические θ = forward(φ) по trainable-именам.
 
-        Дифференцируемо по phi (GradientTape-совместимо).
+        Дифференцируемо по phi (GradientTape-совместимо). Non-trainable
+        записи в результат не включаются.
 
         Raises:
             ValueError: при несовпадении размера phi с self.size.
@@ -501,7 +539,7 @@ class ParameterSpace:
         )
         offsets = self._offsets()
         result: Dict[str, tf.Tensor] = {}
-        for name, entry in self._entries.items():
+        for name, entry in self.phi_entries.items():
             start, numel = offsets[name]
             piece = tf.reshape(phi[start : start + numel], entry.shape)
             result[name] = entry.transform.forward(piece)
@@ -514,10 +552,13 @@ class ParameterSpace:
         """
         Записывает физические θ из theta_dict в переменные модели.
 
-        Записи без привязанной переменной (add_entry) пропускаются.
-        Формы и dtype приводятся к переменной автоматически.
+        Обрабатываются только trainable-записи: non-trainable записи
+        пропускаются даже с привязанной variable (это реестровые константы,
+        которые оптимизатор не меняет). Записи без привязанной переменной
+        (add_entry) пропускаются. Формы и dtype приводятся к переменной
+        автоматически.
         """
-        for name, entry in self._entries.items():
+        for name, entry in self.phi_entries.items():
             if entry.variable is None:
                 continue
             if name not in theta_dict:
@@ -541,6 +582,9 @@ class ParameterSpace:
         Для неограниченных записей с сильно выросшим φ (например exp-
         переполнение у log) вызывающий код обязан ограничивать шаг
         оптимизатора — project() не имеет оснований для клиппинга.
+
+        Работает только с trainable-записями: non-trainable записи и их
+        границы на результат не влияют.
         """
         phi = cast_if_needed(tf.convert_to_tensor(phi), neuraltide.config.get_dtype())
         phi = tf.reshape(phi, [-1])
@@ -551,7 +595,7 @@ class ParameterSpace:
             )
         offsets = self._offsets()
         pieces = []
-        for name, entry in self._entries.items():
+        for name, entry in self.phi_entries.items():
             start, numel = offsets[name]
             piece = tf.reshape(phi[start : start + numel], entry.shape)
             theta = entry.transform.forward(piece)
