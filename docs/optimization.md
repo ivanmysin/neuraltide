@@ -142,7 +142,23 @@ print(res.base.loss_best, res.n_forward, res.bounds_active)
   `'trf'` с bounds как основной метод, `'lm'` только без bounds (честный
   `ValueError` с подсказкой перейти на `'trf'`); `jacobian` —
   `None | '2-point' | '3-point' | callable` (callable режим лениво
-  связывается с `sensitivities.residual_jacobian`);
+  связывается с `sensitivities.residual_jacobian`). Дефолт (`jacobian=None`):
+  forward-якобиан через `sensitivities.residual_jacobian` (1 оценка невязок
+  + n JVP-прогонов) при `problem.size <= jacobian_max_params` (по умолчанию
+  200) и полном контракте `CalibrationProblem`; иначе (превышение порога,
+  недоступность sensitivities, view/duck-typed задача типа `FrozenProblem`)
+  — честный fallback на `'2-point'`. Фактический режим фиксируется в
+  `config["jacobian"]` (`'forward' | '2-point' | '3-point' | 'callable'`);
+  `callback(intermediate_result)` — пользовательский callback итераций
+  (поддержка scipy >= 1.16; на 1.15 не передаётся в scipy с `UserWarning`,
+  у `method='lm'` не поддержан scipy — тоже `UserWarning`; история тогда
+  стартовая + финальная). `maxiter` — унифицированный бюджет итераций как у
+  `minimize_lbfgsb`: scipy у `least_squares` его не поддерживает, поэтому
+  при `max_nfev=None` бюджет маппируется как
+  `max_nfev = maxiter * (problem.size + 2)` (~n+1 оценка невязок на
+  итерацию: n на конечно-разностный якобиан + пробные шаги; эффективное
+  значение — в `config["max_nfev"]`); одновременная передача `maxiter` и
+  `max_nfev` отклоняется `ValueError`.
 - оба проверяют финитность стартовой точки/потери/невязок до запуска
   (`ValueError` вместо безмолвных больших штрафов), пишут validation-метрики
   при непустом `held_out`, счётчики — дельта счётчиков задачи за запуск.
@@ -151,13 +167,22 @@ print(res.base.loss_best, res.n_forward, res.bounds_active)
 (`ResidualLoss`), такой что `0.5·||r||² == loss`; иначе `TypeError` с
 направлением на L-BFGS-B.
 
+Ограничение forward-режима (`jacobian=None` по умолчанию): TF forward-AD
+(`residual_jacobian`) несовместим с предшествующими gradient-прогонами в
+пределах одного `NetworkRNN`; если задача уже использовалась для
+BPTT-градиентов (`problem.n_gradient > 0` — L-BFGS-B, shooting, truncated
+BPTT, градиентный screen-refine в `multistart`), адаптер сам переключается
+на `'2-point'` с `UserWarning` (фактический режим — в
+`config["jacobian"]`); для forward-режима передайте `jacobian=None` на
+свежем экземпляре задачи или явный `jacobian='2-point'`/`'3-point'`.
+
 ## Мультистарт и continuation (`strategies`, P1)
 
 ```python
 from neuraltide.optimization import multistart, sample_phi0s, dt_continuation
 
 ms = multistart(problem, n_starts=16, method="sobol", refine_top_k=4,
-                local="least_squares", seed=7)
+                local="least_squares", seed=7, screen_refine_steps=2)
 print(ms.base.loss_best, ms.clustering["n_clusters"], ms.solutions)
 
 result = dt_continuation(build_problem, dts=[2.0, 1.0, 0.5],
@@ -168,11 +193,29 @@ result = dt_continuation(build_problem, dts=[2.0, 1.0, 0.5],
   детерминированная выборка начальных φ: ограниченные записи равномерно (или
   лог-равномерно через `log_uniform=[names]`) в физических границах,
   неограниченные — гауссово вокруг текущего φ с `UserWarning`;
-- `multistart` — дизайн -> screening (`screen_evals` оценок на старт) ->
-  локальная доводка top-k; все старты сохраняются со статусами
+- `multistart` — дизайн -> screening (по умолчанию один `evaluate` на
+  старт; `screen_evals` > 1 — среднее по прогонам) -> опциональный
+  screen-refine (`screen_refine_steps` > 0: короткий прогон `screen_local`
+  от того же phi0 с `maxiter=screen_refine_steps`, `validate=False`; улучшает
+  только оценку старта — `screened_loss = min(screened, refined)`, полная
+  доводка по-прежнему стартует из исходного phi0) -> локальная доводка
+  top-k; все старты сохраняются со статусами
   ('ok' / 'screen_rejected' / 'failed'), удачные кластеризуются greedy по
   близости φ (`dedup_rtol`); checkpoint/resume через `checkpoint_path` +
-  `resume=True` (seed и конфигурация сверяются с чекпоинтом);
+  `resume=True` (seed и конфигурация — включая `screen_refine_steps` и
+  `screen_local` — сверяются с чекпоинтом, старты с `screen_refined=True`
+  повторно screen-refine не проходят). Чекпоинты старого формата, записанные
+  до появления screen-refine (без `screen_refine_steps`/`screen_local` в
+  конфигурации), не resume-ятся: сверка конфигурации честно отклонит их с
+  `ValueError` — это by design, прогон надо начать заново;
+- замечание по совместимости режимов: градиентный screen-refine
+  (`screen_local='lbfgsb'` или gradient-based callable) делает
+  `problem.n_gradient > 0`, после чего default forward-якобиан полной
+  доводки `local='least_squares'` (`jacobian=None`) на том же экземпляре
+  `problem` несовместим с `NetworkRNN` — адаптер честно переключится на
+  `'2-point'` с `UserWarning`. Для forward-режима используйте свежий
+  экземпляр задачи или явный `jacobian='2-point'`; screen-refine через
+  `screen_local='least_squares'` градиентов не трогает и с этим совместим;
 - `dt_continuation(build_problem, dts, ...)` — «coarse dt -> fine dt»:
   перенос θ между ParameterSpace соседних задач через unpack/pack;
 - `subset_continuation(problem, stages_free_names, ...)` — цепочка
@@ -196,8 +239,10 @@ print(tb.free_run_loss)   # обязательный полный прогон �
 - `residual_jvp(problem, phi, v)` — одна forward-mode JVP-оценка `J·v`
   через `tf.autodiff.ForwardAccumulator` (primals — переменные модели и φ);
 - `residual_jacobian(problem, phi, force=False, max_params=200)` — полный
-  якобиан невязок по столбцам через n unit-JVP; при `n > max_params` без
-  `force` — `ValueError` с честной оценкой стоимости и альтернативами;
+  якобиан невязок по столбцам через n unit-JVP; невязки считаются один раз
+  и переиспользуются для всех столбцов, поэтому стоимость — n+1 прямых
+  прогонов (а не 2n); при `n > max_params` без `force` — `ValueError` с
+  честной оценкой стоимости и альтернативами;
 - `value_and_gradient_checkpointed` — сегментный прогон с переносом
   final_state и checkpointing (`tf.recompute_grad` при подтверждённом probe,
   иначе ручной `tf.custom_gradient` fallback); градиент совпадает с plain BPTT
@@ -358,17 +403,28 @@ print(bt.base.loss_best, bt.weight_history[-1], bt.baseline["best_loss"])
   (w ∝ loss^(-exponent)), `GradNormWeights` (выравнивание норм градиентов).
   Это детерминированные суррогаты: веса пересчитываются аналитически из
   наблюдённых losses/градиентов шага, а не обучаются совместно с моделью;
-- `balanced_gradient(problem, phi, weights, projector=None)` — один прогон
-  с per-component GradientTape: (losses, взвешенный градиент);
+- `balanced_gradient(problem, phi, weights, projector=None,
+  projector_kwargs=None)` — один прогон с per-component GradientTape:
+  (losses, взвешенный градиент); `projector_kwargs` — keyword-only mapping
+  дополнительных аргументов проектора (напр. `{'seed': 0}` для PCGrad),
+  без `projector` не допускается;
 - `balanced_train(...)` — шаги Keras-оптимизатора с обновлением стратегии
-  и логированием весов (`'w:<имя>'` в history); обязательный baseline
-  `FixedWeights(1.0)` из той же phi0 с тем же числом шагов — адаптивные
-  веса не гарантируют улучшения, сравнивайте `best_loss`;
-- `pcgrad_project` / `cagrad_project(grads, c=0.5)` — проекции
-  конфликтующих градиентов (Yu et al. 2020 / Liu et al. 2021) по карте
-  {имя: grad} или списку градиентов; CAGrad решает
-  `max_d min_i <g_i, d>` в шаре `||d − g0|| <= c||g0||`, поэтому худшая
-  задача убывает не медленнее, чем при простом усреднении;
+  и логированием весов (`'w:<имя>'` в history); принимает те же `projector`/
+  `projector_kwargs` — baseline-прогон использует их же, значение
+  сохраняется в `base.config['projector_kwargs']` и упоминается в notes;
+  обязательный baseline `FixedWeights(1.0)` из той же phi0 с тем же числом
+  шагов — адаптивные веса не гарантируют улучшения, сравнивайте `best_loss`;
+- `pcgrad_project(grads, *, seed=None)` / `cagrad_project(grads, c=0.5)` —
+  проекции конфликтующих градиентов (Yu et al. 2020 / Liu et al. 2021) по
+  карте {имя: grad} или списку градиентов. Обе модификации `pcgrad_project`
+  проецируют против ИСХОДНЫХ `g_j` (как в оригинале), различие — порядок пар:
+  `seed=None` (умолчание) — детерминированная batch-модификация
+  (фиксированный порядок j=0..n-1); `seed=int` — оригинальный
+  случайно-упорядоченный PCGrad статьи: порядок задач j случаен через
+  `np.random.default_rng(seed)`, затем среднее; одинаковый seed
+  воспроизводит результат, разные seed допустимо дают разные результаты.
+  CAGrad решает `max_d min_i <g_i, d>` в шаре `||d − g0|| <= c||g0||`,
+  поэтому худшая задача убывает не медленнее, чем при простом усреднении;
 - `adaptive_window_sampler(problem, window_size, focus, boost)` — выбор
   временного окна с большим остатком и focused view задачи
   (`with_objective`, маска усилена в окне; исходные spec не мутируются);

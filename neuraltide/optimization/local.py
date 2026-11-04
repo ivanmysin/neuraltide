@@ -11,10 +11,26 @@
   'trf' как основной метод (поддерживает bounds), 'lm' только без bounds
   (при конечных границах честный ValueError с советом перейти на 'trf');
   jacobian: None | '2-point' | '3-point' | callable(x) -> [m, n].
-  Callable-режим лениво связывается с
-  neuraltide.optimization.sensitivities.residual_jacobian (модуль
-  появляется параллельно; его отсутствие не мешает остальным режимам,
-  а пользовательский callable используется как есть).
+  При jacobian=None по умолчанию используется forward-якобиан через
+  neuraltide.optimization.sensitivities.residual_jacobian, если
+  problem.size <= jacobian_max_params (по умолчанию 200) и задача
+  реализует его приватный контракт (полный CalibrationProblem); иначе, а
+  также при недоступности sensitivities, — честный fallback на '2-point'.
+  Forward-режим несовместим с предшествующими gradient-прогонами в
+  пределах одного NetworkRNN (TF forward-AD state): если
+  problem.n_gradient > 0, поднимается UserWarning и выполняется честный
+  fallback на '2-point' (фактический режим — в config['jacobian']).
+  Пользовательский callable лениво связывается с
+  sensitivities.residual_jacobian; фактический режим фиксируется в
+  config['jacobian'] ('forward' | '2-point' | '3-point' | 'callable').
+  maxiter — унифицированный бюджет итераций (как у minimize_lbfgsb):
+  при заданном maxiter и max_nfev=None бюджет оценок невязок маппируется
+  как max_nfev = maxiter * (problem.size + 2) (~n+1 оценка невязок на
+  итерацию: n на 2-point якобиан + пробные шаги); одновременная передача
+  maxiter и max_nfev отклоняется ValueError.
+  callback(intermediate_result) — пользовательский callback итераций
+  (поддержка scipy >= 1.16; на 1.15 не передаётся в scipy, история тогда
+  стартовая + финальная; у method='lm' не поддержан scipy — UserWarning).
 
 Оба адаптера:
 
@@ -38,9 +54,11 @@
 """
 
 import time
+import warnings
 from typing import Any, Dict, List, Mapping, Optional, Tuple
 
 import numpy as np
+import scipy
 from scipy import optimize as sp_optimize
 
 import neuraltide.config
@@ -207,6 +225,15 @@ class _ResidualFn:
         return residuals
 
 
+def _sensitivities_residual_jacobian():
+    """Ленивый доступ к sensitivities.residual_jacobian; None при недоступности."""
+    try:
+        from neuraltide.optimization import sensitivities
+    except ImportError:
+        return None
+    return getattr(sensitivities, "residual_jacobian", None)
+
+
 def _callable_jacobian(problem, jacobian):
     """
     scipy-обёртка для callable jacobian.
@@ -215,13 +242,7 @@ def _callable_jacobian(problem, jacobian):
     лениво), он связывается с problem: jac(x) = rj(problem, x). Иначе
     пользовательский callable используется как есть: jac(x) -> [m, n].
     """
-    try:
-        from neuraltide.optimization import sensitivities
-    except ImportError:
-        sensitivities = None
-    residual_jacobian = None
-    if sensitivities is not None:
-        residual_jacobian = getattr(sensitivities, "residual_jacobian", None)
+    residual_jacobian = _sensitivities_residual_jacobian()
 
     def _user_jac(x) -> np.ndarray:
         return np.asarray(jacobian(np.asarray(x, dtype=np.float64)), dtype=np.float64)
@@ -240,22 +261,124 @@ def _callable_jacobian(problem, jacobian):
     return _sens_jac
 
 
-def _resolve_jacobian(problem, jacobian):
+def _default_forward_jacobian(problem, residual_jacobian, max_params: int):
+    """Связка sensitivities.residual_jacobian с problem для default-режима."""
+
+    def _jac(x) -> np.ndarray:
+        return np.asarray(
+            residual_jacobian(
+                problem, np.asarray(x, dtype=np.float64), max_params=max_params
+            ).J,
+            dtype=np.float64,
+        )
+
+    return _jac
+
+
+# Атрибуты полного CalibrationProblem, без которых sensitivities.
+# residual_jacobian/_forward_jvp_only работать не могут (приватный контракт
+# модуля sensitivities; view/duck-typed задачи его не реализуют).
+_FORWARD_JACOBIAN_REQUIRED_ATTRS = (
+    "_counters",
+    "parameter_space",
+    "network",
+    "t_sequence",
+    "inputs",
+    "objective",
+    "pack",
+    "residual",
+    "n_forward",
+)
+
+
+def _supports_forward_jacobian(problem) -> bool:
+    """
+    True, если problem совместима с sensitivities.residual_jacobian.
+
+    Требуется (а) набор атрибутов полного CalibrationProblem и (б) честный
+    residual-контракт CalibrationProblem: sensitivities дифференцируют
+    objective.residual(problem.network(...)), что совпадает с якобианом
+    problem.residual только для самого CalibrationProblem — обёртки
+    (ConstrainedProblem с блоками ограничений, FrozenProblem и пр.)
+    дополняют/редуцируют невязки, forward-якобиан для них несогласован.
+    """
+    if not all(hasattr(problem, attr) for attr in _FORWARD_JACOBIAN_REQUIRED_ATTRS):
+        return False
+    try:
+        from neuraltide.optimization.problem import CalibrationProblem
+    except ImportError:
+        return False
+    return getattr(type(problem), "residual", None) is CalibrationProblem.residual
+
+
+def _resolve_jacobian(problem, jacobian, jacobian_max_params: int):
+    """
+    Выбор фактического jacobian для scipy и строки режима для config.
+
+    Возвращает (jac, mode), где mode — 'forward' | '2-point' | '3-point' |
+    'callable'. jacobian=None при size <= jacobian_max_params лениво
+    связывается с sensitivities.residual_jacobian (режим 'forward'), если
+    problem реализует его приватный контракт (полный CalibrationProblem);
+    иначе (превышение порога, недоступность sensitivities, view/duck-typed
+    задача без _counters/objective/network/...) — честный fallback на
+    '2-point'. Дополнительный fallback на '2-point' с UserWarning —
+    при problem.n_gradient > 0 (forward-AD несовместим с предшествующими
+    gradient-прогонами на том же NetworkRNN). Пользовательские строки
+    '2-point'/'3-point' и callable сохраняют приоритет и поведение.
+    """
     if jacobian is None:
-        return None
+        size = int(getattr(problem, "size", 0) or 0)
+        if size <= int(jacobian_max_params) and _supports_forward_jacobian(problem):
+            residual_jacobian = _sensitivities_residual_jacobian()
+            if residual_jacobian is not None:
+                if int(getattr(problem, "n_gradient", 0) or 0) > 0:
+                    # TF forward-AD несовместим с предшествующими
+                    # gradient-прогонами (BPTT) в пределах одного NetworkRNN:
+                    # JVP-прогон падал бы с загадочной ошибкой — честный
+                    # fallback на конечные разности с понятным предупреждением.
+                    warnings.warn(
+                        "least_squares: default forward-якобиан несовместим "
+                        "с предшествующими gradient-прогонами на этом "
+                        "экземпляре problem (TF forward-AD state одного "
+                        "NetworkRNN); используется fallback на '2-point'. "
+                        "Для forward-режима передайте jacobian=None на свежем "
+                        "экземпляре problem. Фактический режим зафиксирован "
+                        "в config['jacobian'].",
+                        UserWarning,
+                        stacklevel=3,
+                    )
+                    return "2-point", "2-point"
+                return (
+                    _default_forward_jacobian(
+                        problem, residual_jacobian, int(jacobian_max_params)
+                    ),
+                    "forward",
+                )
+        return "2-point", "2-point"
     if isinstance(jacobian, str):
         if jacobian in ("2-point", "3-point"):
-            return jacobian
+            return jacobian, jacobian
         raise ValueError(
             "least_squares: jacobian строка должна быть '2-point' или "
             f"'3-point', получена {jacobian!r}."
         )
     if callable(jacobian):
-        return _callable_jacobian(problem, jacobian)
+        return _callable_jacobian(problem, jacobian), "callable"
     raise TypeError(
         "least_squares: jacobian должен быть None, '2-point', '3-point' "
         f"или callable(x) -> [m, n]; получен {type(jacobian).__name__}."
     )
+
+
+def _least_squares_callback_supported() -> bool:
+    """scipy >= 1.16 поддерживает callback у optimize.least_squares."""
+    try:
+        major, minor = scipy.__version__.split(".")[:2]
+        return (int(major), int(minor)) >= (1, 16)
+    except (AttributeError, TypeError, ValueError):
+        # Неизвестный формат версии: безопасный путь — не передавать
+        # callback (scipy без поддержки упал бы с TypeError).
+        return False
 
 
 def _build_result(
@@ -446,8 +569,11 @@ def least_squares(
     *,
     method: str = "trf",
     jacobian=None,
+    jacobian_max_params: int = 200,
+    callback=None,
     x_scale="jac",
     max_nfev: Optional[int] = None,
+    maxiter: Optional[int] = None,
     validate: bool = True,
     **kwargs,
 ) -> LocalOptimizerResult:
@@ -467,11 +593,26 @@ def least_squares(
             без bounds; при конечных границах — ValueError с советом
             перейти на 'trf');
         jacobian: None | '2-point' | '3-point' | callable(x) -> [m, n].
-            Callable-режим лениво связывается с
+            None (по умолчанию) — forward-якобиан через
+            sensitivities.residual_jacobian при problem.size <=
+            jacobian_max_params и полном контракте CalibrationProblem
+            (иначе, как и при недоступности sensitivities, — честный
+            fallback на '2-point'). Callable-режим лениво связывается с
             sensitivities.residual_jacobian (см. _callable_jacobian);
+        jacobian_max_params: порог размерности для default forward-режима;
+        callback: None | callable(intermediate_result) — пользовательский
+            callback итераций (поддержка scipy >= 1.16; на 1.15 не
+            передаётся в scipy, история тогда стартовая + финальная);
         x_scale: масштаб координат (по умолчанию 'jac'; для 'lm'
             игнорируется scipy);
         max_nfev: бюджет оценок невязок (None — без ограничения);
+        maxiter: унифицированный бюджет итераций (как у minimize_lbfgsb;
+            keyword-only). При заданном maxiter и max_nfev=None бюджет
+            оценок невязок маппируется как
+            max_nfev = maxiter * (problem.size + 2) (~n+1 оценка невязок
+            на итерацию: n на конечно-разностный якобиан + пробные шаги;
+            scipy у least_squares maxiter не поддерживает). maxiter и
+            max_nfev одновременно не принимаются (ValueError);
         validate: вызывать problem.validate(phi_best) для held-out
             протоколов (результат — в validation; без held_out — {});
         **kwargs: прочие параметры scipy.optimize.least_squares
@@ -479,12 +620,21 @@ def least_squares(
 
     Returns:
         LocalOptimizerResult с base=OptimizationResult (seed=None,
-        dtype — текущий глобальный); loss_best == 0.5*||r*||^2.
+        dtype — текущий глобальный); loss_best == 0.5*||r*||^2;
+        config['jacobian'] фиксирует фактически использованный режим
+        ('forward' | '2-point' | '3-point' | 'callable'), config['maxiter']
+        и config['max_nfev'] — запрошенный/эффективный бюджеты.
 
     Raises:
         TypeError: problem не предоставляет residual(phi);
-        ValueError: нефинитный стартовый phi0/невязка, 'lm' с bounds
-            или неподдержанные method/jacobian.
+        ValueError: нефинитный стартовый phi0/невязка, 'lm' с bounds,
+            одновременно заданные maxiter/max_nfev, maxiter < 1 или
+            неподдержанные method/jacobian.
+
+    Предупреждения (UserWarning): forward-режим после gradient-прогонов
+    на том же экземпляре problem (problem.n_gradient > 0) — честный
+    fallback на '2-point'; callback на scipy < 1.16 или с method='lm' —
+    callback не передаётся в scipy.
     """
     t_start = time.perf_counter()
     start_counters = _counters(problem)
@@ -494,6 +644,18 @@ def least_squares(
         raise ValueError(
             f"least_squares: неподдержанный method={method!r}; доступны 'trf' и 'lm'."
         )
+    if maxiter is not None:
+        maxiter = int(maxiter)
+        if maxiter < 1:
+            raise ValueError(
+                f"least_squares: maxiter должен быть >= 1, получен {maxiter}."
+            )
+        if max_nfev is not None:
+            raise ValueError(
+                "least_squares: maxiter и max_nfev заданы одновременно — "
+                "бюджет неоднозначен. Укажите только один из двух "
+                "(maxiter маппируется в max_nfev, см. документацию)."
+            )
     x0, bounds = _prepare_start(problem, phi0, size)
     if method_key == "lm" and bounds is not None:
         raise ValueError(
@@ -525,7 +687,7 @@ def least_squares(
             f"(residual norm={float(np.linalg.norm(r0))}); "
             "запуск решателя отклонён."
         )
-    jac = _resolve_jacobian(problem, jacobian)
+    jac, jac_mode = _resolve_jacobian(problem, jacobian, jacobian_max_params)
     history: List[Dict[str, Any]] = [
         {
             "loss": float(0.5 * np.dot(r0, r0)),
@@ -533,30 +695,76 @@ def least_squares(
         }
     ]
 
-    def _callback(arg) -> None:
-        del arg  # scipy передаёт x; loss берём из последнего вызова fun
-        r = fun.last_residuals
+    def _history_callback(intermediate_result) -> None:
+        # Имя параметра значимо: scipy >= 1.16 передаёт OptimizeResult
+        # только при сигнатуре callback(intermediate_result); иначе — x.
+        r = getattr(intermediate_result, "fun", None)
+        if r is None:
+            r = fun.last_residuals
         if r is not None:
+            r_np = np.asarray(r, dtype=np.float64)
             history.append(
                 {
-                    "loss": float(0.5 * np.dot(r, r)),
-                    "residual_norm": float(np.linalg.norm(r)),
+                    "loss": float(0.5 * np.dot(r_np, r_np)),
+                    "residual_norm": float(np.linalg.norm(r_np)),
                 }
             )
+        if callback is not None:
+            callback(intermediate_result)
 
     call_kwargs: Dict[str, Any] = dict(kwargs)
     call_kwargs["x_scale"] = x_scale
-    if max_nfev is not None:
-        call_kwargs["max_nfev"] = int(max_nfev)
+    # maxiter — унифицированный контракт бюджета (strategies передаёт его
+    # screen_local оптимизаторам наравне с minimize_lbfgsb); scipy у
+    # least_squares maxiter не поддерживает, маппируем в max_nfev.
+    max_nfev_effective = max_nfev
+    if maxiter is not None:
+        max_nfev_effective = int(maxiter) * (size + 2)
+    if max_nfev_effective is not None:
+        call_kwargs["max_nfev"] = int(max_nfev_effective)
     if bounds is not None:
         call_kwargs["bounds"] = (bounds[0], bounds[1])
+    # callback у scipy.optimize.least_squares появился в 1.16; у 'lm' он
+    # по-прежнему не поддержан (scipy сам предупреждает и игнорирует) —
+    # предупреждаем явно, чтобы молчаливая потеря callback не была сюрпризом.
+    callback_supported = _least_squares_callback_supported()
+    if callback_supported and method_key == "trf":
+        call_kwargs["callback"] = _history_callback
+    elif callback is not None:
+        if not callback_supported:
+            warnings.warn(
+                "least_squares: callback требует scipy>=1.16 "
+                f"(текущая версия {scipy.__version__}); callback игнорируется, "
+                "история будет содержать стартовую и финальную записи.",
+                UserWarning,
+                stacklevel=2,
+            )
+        else:
+            warnings.warn(
+                "least_squares: callback не поддержан методом 'lm' "
+                "(scipy.optimize.least_squares не вызывает callback у lm); "
+                "callback пропущен, история будет содержать стартовую и "
+                "финальную записи. Используйте method='trf' для callback.",
+                UserWarning,
+                stacklevel=2,
+            )
     result = sp_optimize.least_squares(
         fun,
         x0,
-        jac="2-point" if jac is None else jac,
+        jac=jac,
         method=method_key,
         **call_kwargs,
     )
+    if len(history) == 1:
+        # Per-iteration callback недоступен (scipy < 1.16 или method='lm'):
+        # дописываем финальную точку, чтобы история не вырождалась в старт.
+        r_fin = np.asarray(result.fun, dtype=np.float64)
+        history.append(
+            {
+                "loss": float(result.cost),
+                "residual_norm": float(np.linalg.norm(r_fin)),
+            }
+        )
 
     phi_best = np.asarray(result.x, dtype=np.float64).reshape(-1)
     loss_best = float(result.cost)  # 0.5 * ||r*||^2 == loss по контракту
@@ -569,9 +777,12 @@ def least_squares(
     grad_norm = float(np.linalg.norm(grad)) if grad.size == size else 0.0
     config = {
         "method": method_key,
-        "jacobian": "callable" if callable(jacobian) else str(jacobian),
+        "jacobian": jac_mode,
+        "jacobian_max_params": int(jacobian_max_params),
+        "callback": callback is not None,
         "x_scale": _jsonable(x_scale),
-        "max_nfev": None if max_nfev is None else int(max_nfev),
+        "maxiter": None if maxiter is None else int(maxiter),
+        "max_nfev": (None if max_nfev_effective is None else int(max_nfev_effective)),
         "kwargs": _jsonable(kwargs),
     }
     return _build_result(

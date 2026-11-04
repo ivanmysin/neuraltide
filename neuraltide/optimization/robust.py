@@ -587,34 +587,67 @@ class GradNormWeights(WeightStrategy):
 # ---------------------------------------------------------------------------
 
 
-def pcgrad_project(grads: GradMap) -> np.ndarray:
+def pcgrad_project(grads: GradMap, *, seed: Optional[int] = None) -> np.ndarray:
     """
     PCGrad (Yu et al., 2020): проекция каждого градиента на нормальное
     пространство каждого конфликтующего (g_i·g_j < 0) градиента, усреднение.
 
-    Для каждой пары i≠j с g_i·g_j < 0:
+    Две модификации (обе проецируют против ИСХОДНЫХ g_j, как в оригинале):
+    - seed=None (умолчание): детерминированная batch-модификация — для
+      каждого i проекции против ИСХОДНЫХ g_j в фиксированном порядке
+      j=0..n-1 (исходное поведение модуля);
+    - seed=int: оригинальный случайно-упорядоченный PCGrad статьи —
+      np.random.default_rng(seed); для каждого i остальные задачи
+      перебираются в случайном порядке, текущий (уже частично
+      спроецированный) g_i проецируется против ИСХОДНЫХ g_j, затем среднее.
+      Одинаковый seed воспроизводит результат; разные seed допустимо дают
+      разные результаты.
+
+    Для каждой обрабатываемой пары с g_i·g_j < 0:
         g_i := g_i - (g_i·g_j) / ||g_j||^2 * g_j.
     Возвращает mean_i g_i (numpy float64, та же форма, что входы).
 
     Args:
         grads: Mapping {имя: grad} или Sequence градиентов (одной формы).
+        seed: None (детерминированная batch-модификация) или
+            неотрицательное целое (оригинальный случайно-упорядоченный
+            PCGrad Yu et al., 2020).
 
     Границы: стоимость O(n^2) пар; градиенты обязаны быть конечными.
     Только для BPTT-режима (через balanced_gradient/balanced_train).
     """
+    if seed is not None and not isinstance(seed, (int, np.integer)):
+        raise TypeError(
+            f"pcgrad_project: seed must be None or an int, got {type(seed).__name__}."
+        )
     gs = _grad_list(grads)
     n = len(gs)
     shapes = gs[0].shape
     projected = [g.copy() for g in gs]
-    for i in range(n):
-        for j in range(n):
-            if i == j:
-                continue
-            dot = float(np.dot(gs[i], gs[j]))
-            if dot < 0.0:
-                norm_sq = float(np.dot(gs[j], gs[j]))
-                if norm_sq > 0.0:
-                    projected[i] = projected[i] - (dot / norm_sq) * gs[j]
+    if seed is None:
+        for i in range(n):
+            for j in range(n):
+                if i == j:
+                    continue
+                dot = float(np.dot(gs[i], gs[j]))
+                if dot < 0.0:
+                    norm_sq = float(np.dot(gs[j], gs[j]))
+                    if norm_sq > 0.0:
+                        projected[i] = projected[i] - (dot / norm_sq) * gs[j]
+    else:
+        # Оригинальный PCGrad (Yu et al., 2020, Alg. 1): случайный порядок
+        # задач j для каждого i, но проекция текущего g_i всегда против
+        # ИСХОДНОГО g_j (не против уже спроецированных).
+        rng = np.random.default_rng(seed)
+        for i in range(n):
+            for j in rng.permutation(n):
+                if j == i:
+                    continue
+                dot = float(np.dot(projected[i], gs[j]))
+                if dot < 0.0:
+                    norm_sq = float(np.dot(gs[j], gs[j]))
+                    if norm_sq > 0.0:
+                        projected[i] = projected[i] - (dot / norm_sq) * gs[j]
     out = np.mean(projected, axis=0)
     return out.reshape(shapes)
 
@@ -737,15 +770,31 @@ def _balanced_gradient_full(
     phi: Any,
     weights: Union[Mapping[str, float], Sequence[float], np.ndarray],
     projector: Any = None,
+    projector_kwargs: Optional[Mapping] = None,
 ) -> _GradientBreakdown:
     """
     Один прямой прогон: per-component losses и градиенты, взвешенный суммарный
     градиент (или проекция projector по per-component градиентам).
 
+    projector_kwargs — опциональный Mapping дополнительных keyword-аргументов
+    проектора (напр. {'seed': 0} для pcgrad_project); при None проектор
+    вызывается прежним способом projector(grads).
+
     Использует приватные хелперы problem.py (прецедент sensitivities):
     _materialize_initial_state и _chain_gradient (model_var-записи через
     переменные × jacobian, tensor-backed x0 — через подставленные тензоры).
     """
+    if projector_kwargs is not None:
+        if not isinstance(projector_kwargs, Mapping):
+            raise TypeError(
+                "robust: projector_kwargs must be a Mapping or None, got "
+                f"{type(projector_kwargs).__name__}."
+            )
+        if projector is None:
+            raise ValueError(
+                "robust: projector_kwargs требует projector != None "
+                "(нечему передавать дополнительные аргументы)."
+            )
     _require_bptt_problem(problem, projector)
     problem._require_objective()
     components_fn = getattr(problem.objective, "components", None)
@@ -795,7 +844,12 @@ def _balanced_gradient_full(
         combined += w[names.index(name)] * g
     del tape
     if projector is not None:
-        combined = np.asarray(projector(grads), dtype=np.float64).reshape(-1)
+        if projector_kwargs is None:
+            combined = np.asarray(projector(grads), dtype=np.float64).reshape(-1)
+        else:
+            combined = np.asarray(
+                projector(grads, **projector_kwargs), dtype=np.float64
+            ).reshape(-1)
     problem._counters["n_forward"] += 1
     problem._counters["n_gradient"] += 1
     problem._counters["wall_time"] += time.perf_counter() - t0
@@ -815,6 +869,8 @@ def balanced_gradient(
     phi: Any,
     weights: Union[Mapping[str, float], Sequence[float], np.ndarray],
     projector: Any = None,
+    *,
+    projector_kwargs: Optional[Mapping] = None,
 ) -> Tuple[Dict[str, float], np.ndarray]:
     """
     Один прямой прогон сети с per-component GradientTape.
@@ -826,13 +882,16 @@ def balanced_gradient(
         projector: опционально callable(grads_map) -> объединённый градиент
             (например pcgrad_project / cagrad_project); при None — взвешенная
             сумма Σ w_i g_i.
+        projector_kwargs: keyword-only Mapping дополнительных аргументов
+            проектора (напр. {'seed': 0} для pcgrad_project); при None —
+            вызов projector(grads) без аргументов. Требует projector != None.
 
     Returns:
         (losses, weighted_grad): dict {имя: float} и numpy float64 [size].
 
     Счётчики: +1 n_forward, +1 n_gradient, wall_time дополняется.
     """
-    full = _balanced_gradient_full(problem, phi, weights, projector)
+    full = _balanced_gradient_full(problem, phi, weights, projector, projector_kwargs)
     return full.losses, full.weighted_grad
 
 
@@ -1108,6 +1167,7 @@ def _loop(
     optimizer: Any,
     max_steps: int,
     projector: Any,
+    projector_kwargs: Optional[Mapping],
     strategy: Optional[WeightStrategy],
     history_path: Optional[PathLike],
 ) -> Tuple[List[Dict[str, Any]], np.ndarray, float, np.ndarray]:
@@ -1124,7 +1184,7 @@ def _loop(
     best_phi = np.asarray(phi_var, dtype=np.float64).reshape(-1)
     grad_norm = 0.0
     for step in range(int(max_steps)):
-        full = _balanced_gradient_full(problem, phi_var, w, projector)
+        full = _balanced_gradient_full(problem, phi_var, w, projector, projector_kwargs)
         if full.weighted_total < best_loss:
             best_loss = full.weighted_total
             best_phi = phi_var.numpy().copy().reshape(-1)
@@ -1158,6 +1218,7 @@ def balanced_train(
     optimizer: Any = None,
     max_steps: int,
     projector: Any = None,
+    projector_kwargs: Optional[Mapping] = None,
     seed: Optional[int] = None,
     history_path: Optional[PathLike] = None,
 ) -> BalancedResult:
@@ -1181,6 +1242,11 @@ def balanced_train(
         max_steps: число шагов обучения (>= 1).
         projector: опционально pcgrad_project / cagrad_project /
             callable(grads_map) -> grad (только BPTT).
+        projector_kwargs: keyword-only Mapping дополнительных аргументов
+            проектора (напр. {'seed': 0} для pcgrad_project); одно и то же
+            значение используется в основном и baseline-прогонах и
+            сохраняется в base.config['projector_kwargs']. Требует
+            projector != None.
         seed: записывается в результат; текущие стратегии детерминированы.
         history_path: опциональный JSON-файл; история перезаписывается
             после каждого шага (файл всегда актуален).
@@ -1221,11 +1287,13 @@ def balanced_train(
         opt,
         max_steps,
         projector,
+        projector_kwargs,
         strategy,
         history_path,
     )
 
-    # Baseline: фиксированные единичные веса, та же phi0/число шагов.
+    # Baseline: фиксированные единичные веса, та же phi0/число шагов и те же
+    # projector_kwargs — сравнение основного прогона и baseline честное.
     base_opt = _clone_optimizer(opt)
     base_strategy = FixedWeights(np.ones(len(names)))
     base_w0 = base_strategy.initial_weights(names)
@@ -1237,6 +1305,7 @@ def balanced_train(
         base_opt,
         max_steps,
         projector,
+        projector_kwargs,
         None,
         None,
     )
@@ -1261,6 +1330,9 @@ def balanced_train(
         "max_steps": int(max_steps),
         "optimizer": type(opt).__name__,
         "projector": projector_name,
+        "projector_kwargs": (
+            None if projector_kwargs is None else _json_safe(dict(projector_kwargs))
+        ),
         "strategy": type(strategy).__name__,
         "component_names": list(names),
         "initial_weights": {n: float(w0[i]) for i, n in enumerate(names)},
@@ -1277,11 +1349,17 @@ def balanced_train(
         config=config,
         dtype=str(neuraltide.config.get_dtype().name),
     )
+    projector_kwargs_note = (
+        ""
+        if not projector_kwargs
+        else f" (kwargs: {_json_safe(dict(projector_kwargs))})"
+    )
     notes = (
         f"Стратегия: {type(strategy).__name__} — детерминированный суррогат "
         "(веса пересчитываются из наблюдённых losses/grads, а не обучаются "
         "совместно с моделью; см. neuraltide.optimization.robust). "
         f"Проектор: {projector_name or 'нет (взвешенная сумма)'}"
+        f"{projector_kwargs_note}"
         + (
             " — PCGrad/CAGrad применяются к per-component градиентам BPTT; "
             "adjoint-режим не поддерживается."

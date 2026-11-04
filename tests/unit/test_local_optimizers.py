@@ -16,6 +16,7 @@ import json
 
 import numpy as np
 import pytest
+import scipy
 import tensorflow as tf
 
 import neuraltide.config
@@ -33,6 +34,14 @@ from neuraltide.optimization.sensitivities import residual_jacobian
 # Robust tolerances: float64 + гладкая L0-задача, восстановление θ*.
 RTOL_THETA = 2e-2
 ATOL_THETA = 2e-2
+
+
+def _scipy_at_least(major: int, minor: int) -> bool:
+    parts = scipy.__version__.split(".")
+    try:
+        return (int(parts[0]), int(parts[1])) >= (major, minor)
+    except (IndexError, ValueError):
+        return False
 
 
 def _problem64(l0_factory) -> CalibrationProblem:
@@ -204,6 +213,8 @@ class TestLeastSquares:
         res = least_squares(frozen, np.array([0.5]), method="lm")
         assert res.method == "LM"
         assert res.success
+        # FrozenProblem без контракта sensitivities → честный FD-fallback.
+        assert res.base.config["jacobian"] == "2-point"
         np.testing.assert_allclose(
             res.base.theta_best["exc/I_ext"], [0.8], atol=ATOL_THETA
         )
@@ -299,6 +310,177 @@ class TestLeastSquares:
             least_squares(problem, phi0, method="dogbox")
         with pytest.raises(ValueError, match="jacobian"):
             least_squares(problem, phi0, jacobian="cs")
+
+    def test_default_small_problem_uses_forward_jacobian(self, l0_factory):
+        """Дефолт (jacobian=None, size <= 200): forward через sensitivities."""
+        problem = _problem64(l0_factory)
+        res = least_squares(problem, _shifted_start(problem))
+
+        assert res.base.config["jacobian"] == "forward"
+        assert res.base.config["jacobian_max_params"] == 200
+        # Forward-якобиан — JVP-прогоны без analytic gradient.
+        assert res.n_gradient == 0
+        assert res.njev > 0
+        assert res.success
+        np.testing.assert_allclose(
+            res.base.theta_best["exc/tau"], [8.0], rtol=RTOL_THETA
+        )
+        np.testing.assert_allclose(
+            res.base.theta_best["exc/I_ext"], [0.8], atol=ATOL_THETA
+        )
+
+    def test_default_jacobian_falls_back_to_2point_over_cap(self, l0_factory):
+        """size > jacobian_max_params: default честно переключается на FD."""
+        problem = _problem64(l0_factory)
+        res = least_squares(problem, _shifted_start(problem), jacobian_max_params=1)
+
+        assert res.base.config["jacobian"] == "2-point"
+        assert res.n_gradient == 0
+        assert res.success
+        np.testing.assert_allclose(
+            res.base.theta_best["exc/tau"], [8.0], rtol=RTOL_THETA
+        )
+
+    def test_user_jacobian_modes_recorded_in_config(self, l0_factory):
+        """Пользовательские строки/callable сохраняют приоритет; режим в config."""
+        problem = _problem64(l0_factory)
+        phi0 = _shifted_start(problem)
+
+        r_str = least_squares(problem, phi0.copy(), jacobian="3-point")
+        assert r_str.base.config["jacobian"] == "3-point"
+        assert r_str.success
+
+        r_call = least_squares(problem, phi0.copy(), jacobian=residual_jacobian)
+        assert r_call.base.config["jacobian"] == "callable"
+        assert r_call.success
+
+    @pytest.mark.skipif(
+        not _scipy_at_least(1, 16),
+        reason="callback у least_squares поддержан только в scipy >= 1.16",
+    )
+    def test_callback_and_per_iteration_history_on_modern_scipy(self, l0_factory):
+        problem = _problem64(l0_factory)
+        calls = []
+
+        def cb(intermediate_result):
+            calls.append(intermediate_result)
+
+        res = least_squares(problem, _shifted_start(problem), callback=cb)
+
+        assert len(calls) > 0
+        assert all(hasattr(ir, "cost") for ir in calls)
+        assert len(res.base.history) > 1
+        # История дополняется по итерациям; финальная запись — потеря решения.
+        assert res.base.history[-1]["loss"] == pytest.approx(
+            res.base.loss_best, rel=1e-12
+        )
+
+    def test_callback_safe_path_on_legacy_scipy(self, l0_factory, monkeypatch):
+        """Симуляция scipy 1.15: callback не передаётся, оптимизация не падает."""
+        monkeypatch.setattr(scipy, "__version__", "1.15.0")
+        problem = _problem64(l0_factory)
+        calls = []
+
+        with pytest.warns(UserWarning, match="callback"):
+            res = least_squares(
+                problem,
+                _shifted_start(problem),
+                callback=lambda intermediate_result: calls.append(intermediate_result),
+            )
+
+        assert res.success
+        assert calls == []  # callback не вызван
+        # История без per-iteration callback: стартовая + финальная записи.
+        assert len(res.base.history) == 2
+        assert res.base.history[-1]["loss"] == pytest.approx(
+            res.base.loss_best, rel=1e-12
+        )
+
+    @pytest.mark.skipif(
+        not _scipy_at_least(1, 16),
+        reason="callback у least_squares поддержан только в scipy >= 1.16",
+    )
+    def test_callback_with_lm_warns_and_is_ignored(self, l0_factory):
+        """C3 (мелко): на scipy >= 1.16 callback с method='lm' молча не
+        передавался бы в scipy — адаптер обязан предупредить UserWarning."""
+        problem = _problem64(l0_factory)
+        frozen = FrozenProblem(problem, free_names=["exc/I_ext"])
+        calls = []
+
+        with pytest.warns(UserWarning, match="callback"):
+            res = least_squares(
+                frozen,
+                np.array([0.5]),
+                method="lm",
+                callback=lambda intermediate_result: calls.append(intermediate_result),
+            )
+
+        assert res.method == "LM"
+        assert res.success
+        assert calls == []  # callback не вызван (lm его не поддерживает)
+        # История без per-iteration callback: стартовая + финальная записи.
+        assert len(res.base.history) == 2
+        assert res.base.history[-1]["loss"] == pytest.approx(
+            res.base.loss_best, rel=1e-12
+        )
+
+    # -- maxiter: унифицированный бюджет итераций (C2) --------------------
+
+    def test_maxiter_maps_to_max_nfev_budget(self, l0_factory):
+        """maxiter без max_nfev: бюджет маппируется max_nfev=maxiter*(n+2)."""
+        problem = _problem64(l0_factory)
+        res = least_squares(problem, _shifted_start(problem), maxiter=10)
+
+        size = int(problem.size)
+        assert res.base.config["maxiter"] == 10
+        assert res.base.config["max_nfev"] == 10 * (size + 2)
+        # Записанный бюджет — эффективный; scipy получил ровно его.
+        assert res.nfev <= 10 * (size + 2)
+        assert res.success
+        np.testing.assert_allclose(
+            res.base.theta_best["exc/tau"], [8.0], rtol=RTOL_THETA
+        )
+
+    def test_maxiter_and_max_nfev_mutually_exclusive(self, l0_factory):
+        problem = _problem64(l0_factory)
+        with pytest.raises(ValueError, match="maxiter"):
+            least_squares(problem, _shifted_start(problem), maxiter=5, max_nfev=100)
+
+    def test_maxiter_must_be_positive(self, l0_factory):
+        problem = _problem64(l0_factory)
+        with pytest.raises(ValueError, match="maxiter"):
+            least_squares(problem, _shifted_start(problem), maxiter=0)
+
+    def test_maxiter_none_keeps_legacy_unlimited_budget(self, l0_factory):
+        # Совместимость: без maxiter бюджет по-прежнему без ограничения.
+        problem = _problem64(l0_factory)
+        res = least_squares(problem, _shifted_start(problem))
+        assert res.base.config["maxiter"] is None
+        assert res.base.config["max_nfev"] is None
+        assert res.success
+
+    # -- fallback forward -> '2-point' после gradient-прогонов (C3) -------
+
+    def test_default_jacobian_falls_back_after_gradient_runs(self, l0_factory):
+        """value_and_gradient -> least_squares(jacobian=None) на том же
+        NetworkRNN: forward-AD несовместим — честный fallback на '2-point'
+        с UserWarning, фактический режим зафиксирован в config."""
+        problem = _problem64(l0_factory)
+        phi0 = _shifted_start(problem)
+        problem.value_and_gradient(phi0)  # BPTT-прогон на этом NetworkRNN
+        assert problem.n_gradient > 0
+
+        with pytest.warns(UserWarning, match="forward"):
+            res = least_squares(problem, phi0)
+
+        assert res.base.config["jacobian"] == "2-point"
+        assert res.success
+        np.testing.assert_allclose(
+            res.base.theta_best["exc/tau"], [8.0], rtol=RTOL_THETA
+        )
+        np.testing.assert_allclose(
+            res.base.theta_best["exc/I_ext"], [0.8], atol=ATOL_THETA
+        )
 
 
 class TestBoundsActive:

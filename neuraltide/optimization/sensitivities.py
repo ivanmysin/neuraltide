@@ -9,7 +9,8 @@
     tensor-backed записи ('initial_state'/'shooting_state') материализуются
     внутри аккумулятора из φ, поэтому их касательная распространяется сама;
 - residual_jacobian(problem, phi, *, force, max_params) — полный якобиан
-    невязок по столбцам через n unit-JVP (DTO JacobianResult);
+    невязок по столбцам через 1 общую оценку невязок и n JVP-прогонов
+    без повторного счёта невязок (DTO JacobianResult, n+1 прямых прогонов);
 - value_and_gradient_checkpointed(problem, phi, segment_length) — сегментный
     прогон с переносом final_state и gradient checkpointing: сначала
     пробуется tf.recompute_grad, при недоступности/некорректном градиенте
@@ -211,6 +212,76 @@ def _segment_loss(
 # ---------------------------------------------------------------------------
 
 
+def _forward_jvp_only(
+    problem: CalibrationProblem,
+    phi_t: tf.Tensor,
+    v_t: tf.Tensor,
+) -> np.ndarray:
+    """
+    Forward-mode JVP J·v для уже упакованного φ (без оценки невязок).
+
+    Тело forward-JVP из residual_jvp без вызова problem.residual: один
+    прогон под tf.autodiff.ForwardAccumulator, где primals — trainable-
+    переменные записей kind 'model_var' и сам вектор φ (ожидается, что
+    переменные модели уже переведены в θ = unpack(phi_t) вызывающей
+    стороной, как это делает problem.residual). Сиды переменных =
+    dθ/dφ · v (поэлементный transform.jacobian), касательная φ равна v,
+    поэтому tensor-backed записи ('initial_state'/'shooting_state')
+    получают свою касательную автоматически при материализации из φ.
+
+    Args:
+        problem: CalibrationProblem с objective, предоставляющим
+            residual(predictions); иначе TypeError (от problem.residual).
+        phi_t: упакованный вектор φ (problem.pack), глобальный dtype.
+        v_t: направление той же размерности и dtype, что и phi_t.
+
+    Returns:
+        J·v — numpy float64 массив формы [n_residuals].
+
+    Счётчики: n_forward увеличивается на 1 (JVP-прогон); wall_time
+        дополняется длительностью прогона.
+    """
+    residual_fn = getattr(problem.objective, "residual", None)
+    if residual_fn is None:
+        # Отражаем контракт problem.residual до любого прогона/мутации.
+        problem.residual(None)  # noqa: B018 — вызов ради понятной ошибки
+
+    space = problem.parameter_space
+    offsets = _entry_offsets(space)
+    var_primals: List[tf.Tensor] = []
+    var_tangents: List[tf.Tensor] = []
+    for name, entry in space.entries.items():
+        if entry.kind != "model_var" or entry.variable is None:
+            continue
+        start, numel = offsets[name]
+        piece = tf.reshape(phi_t[start : start + numel], entry.shape)
+        v_piece = tf.reshape(v_t[start : start + numel], entry.shape)
+        jac = entry.transform.jacobian(piece)
+        seed = tf.reshape(jac * v_piece, entry.variable.shape)
+        var_primals.append(_tf_variable(entry.variable))
+        var_tangents.append(cast_if_needed(seed, entry.variable.dtype))
+
+    t0 = time.perf_counter()
+    with tf.autodiff.ForwardAccumulator(
+        var_primals + [phi_t], var_tangents + [v_t]
+    ) as acc:
+        theta = space.unpack(phi_t)
+        initial_state, _ = _materialize_initial_state(
+            problem.network, space, theta, problem.initial_state
+        )
+        output = problem.network(
+            problem.t_sequence,
+            inputs=problem.inputs,
+            initial_state=initial_state,
+        )
+        r_t = residual_fn(output)
+    jv_t = acc.jvp(r_t)
+
+    problem._counters["n_forward"] += 1
+    problem._counters["wall_time"] += time.perf_counter() - t0
+    return np.asarray(jv_t, dtype=np.float64)
+
+
 def residual_jvp(
     problem: CalibrationProblem,
     phi: Optional[Any],
@@ -220,11 +291,12 @@ def residual_jvp(
     Невязки и forward-mode JVP J·v в точке φ.
 
     r = problem.residual(phi); J — якобиан невязок по φ. J·v вычисляется
-    одним прямым прогоном под tf.autodiff.ForwardAccumulator:
-    primals — trainable-переменные записей kind 'model_var' и сам вектор φ;
-    сиды переменных = dθ/dφ · v (поэлементный transform.jacobian), касательная
-    φ равна v, поэтому tensor-backed записи ('initial_state'/'shooting_state')
-    получают свою касательную автоматически при материализации из φ.
+    одним прямым прогоном под tf.autodiff.ForwardAccumulator (см.
+    _forward_jvp_only): primals — trainable-переменные записей kind
+    'model_var' и сам вектор φ; сиды переменных = dθ/dφ · v (поэлементный
+    transform.jacobian), касательная φ равна v, поэтому tensor-backed
+    записи ('initial_state'/'shooting_state') получают свою касательную
+    автоматически при материализации из φ.
 
     Args:
         problem: CalibrationProblem с objective, предоставляющим
@@ -256,45 +328,14 @@ def residual_jvp(
         tf.size(v_t), problem.size, message="residual_jvp: bad v size"
     )
 
-    t0 = time.perf_counter()
     # Невязки в точке (при phi != None переводит модель в θ = unpack(phi)).
+    t0 = time.perf_counter()
     r = np.asarray(problem.residual(phi), dtype=np.float64)
+    problem._counters["wall_time"] += time.perf_counter() - t0
     phi_t = problem.pack(phi)
 
-    space = problem.parameter_space
-    offsets = _entry_offsets(space)
-    var_primals: List[tf.Tensor] = []
-    var_tangents: List[tf.Tensor] = []
-    for name, entry in space.entries.items():
-        if entry.kind != "model_var" or entry.variable is None:
-            continue
-        start, numel = offsets[name]
-        piece = tf.reshape(phi_t[start : start + numel], entry.shape)
-        v_piece = tf.reshape(v_t[start : start + numel], entry.shape)
-        jac = entry.transform.jacobian(piece)
-        seed = tf.reshape(jac * v_piece, entry.variable.shape)
-        var_primals.append(_tf_variable(entry.variable))
-        var_tangents.append(cast_if_needed(seed, entry.variable.dtype))
-
-    with tf.autodiff.ForwardAccumulator(
-        var_primals + [phi_t], var_tangents + [v_t]
-    ) as acc:
-        theta = space.unpack(phi_t)
-        initial_state, _ = _materialize_initial_state(
-            problem.network, space, theta, problem.initial_state
-        )
-        output = problem.network(
-            problem.t_sequence,
-            inputs=problem.inputs,
-            initial_state=initial_state,
-        )
-        r_t = residual_fn(output)
-    jv_t = acc.jvp(r_t)
-
-    elapsed = time.perf_counter() - t0
-    problem._counters["n_forward"] += 1
-    problem._counters["wall_time"] += elapsed
-    return r, np.asarray(jv_t, dtype=np.float64)
+    jv = _forward_jvp_only(problem, phi_t, v_t)
+    return r, jv
 
 
 def residual_jacobian(
@@ -307,10 +348,12 @@ def residual_jacobian(
     """
     Полный якобиан невязок J = ∂r/∂φ по столбцам через n unit-JVP.
 
-    Столбец J[:, i] = residual_jvp(problem, phi, e_i)[1]. Требует n
-    forward-JVP прогонов (плюс оценка невязок в каждом вызове), что для
-    большого n невыгодно: при n > max_params и не force поднимается ValueError
-    с честной оценкой стоимости и альтернативами.
+    Столбец J[:, i] = residual_jvp(problem, phi, e_i)[1]. Невязки r в точке
+    оцениваются один раз и переиспользуются для всех столбцов, поэтому
+    требуется 1 оценка невязок + n JVP-прогонов (n+1 прямых прогонов
+    сети). Для большого n это всё равно невыгодно: при n > max_params и не
+    force поднимается ValueError с честной оценкой стоимости и
+    альтернативами.
 
     Args:
         problem: CalibrationProblem с residual-objective.
@@ -329,31 +372,34 @@ def residual_jacobian(
     if n > max_params and not force:
         raise ValueError(
             f"residual_jacobian: n={n} параметров превышает "
-            f"max_params={max_params}. Построение требует {n} forward-JVP "
-            f"прогонов (≈{2 * n} прямых прогонов сети вместе с оценкой "
-            f"невязок), т.е. ~O({n}) стоимости одного прогона горизонта T. "
+            f"max_params={max_params}. Построение требует 1 оценку невязок "
+            f"плюс {n} JVP-прогонов (≈{n + 1} прямых прогонов сети), "
+            f"т.е. ~O({n}) стоимости одного прогона горизонта T. "
             "Альтернативы: конечно-разностный якобиан ('2-point' в "
             "scipy.optimize.least_squares, ≈2n прогонов без forwardprop), "
             "adjoint-градиент для скалярной потери, или force=True для "
             "явного запуска."
         )
 
+    dtype = neuraltide.config.get_dtype()
     phi_np = np.asarray(problem.pack(phi), dtype=np.float64)
     t0 = time.perf_counter()
     n_forward0 = problem.n_forward
 
-    r: Optional[np.ndarray] = None
-    J: Optional[np.ndarray] = None
+    # Невязки в точке — один общий прогон для всех столбцов (+1 n_forward;
+    # при phi != None переводит модель в θ = unpack(phi)).
+    t_r = time.perf_counter()
+    r = np.asarray(problem.residual(phi), dtype=np.float64)
+    problem._counters["wall_time"] += time.perf_counter() - t_r
+    phi_t = problem.pack(phi)
+
+    J = np.zeros((r.shape[0], n), dtype=np.float64)
     for i in range(n):
         e = np.zeros(n, dtype=np.float64)
         e[i] = 1.0
-        r_i, jv_i = residual_jvp(problem, phi, e)
-        if r is None:
-            r = r_i
-            J = np.zeros((r_i.shape[0], n), dtype=np.float64)
-        J[:, i] = jv_i
+        v_t = cast_if_needed(tf.convert_to_tensor(e), dtype)
+        J[:, i] = _forward_jvp_only(problem, phi_t, v_t)
 
-    assert r is not None and J is not None
     elapsed = time.perf_counter() - t0
     loss = 0.5 * float(r @ r)
     scale = likelihood_row_scale(problem)

@@ -9,7 +9,9 @@ ConstantRate; 3 trainable-параметра). Все проверки чувс�
 Покрываются:
 - JVP против центральных конечных разностей (rel < 1e-3);
 - J.T @ r == grad из value_and_gradient (allclose, float64);
-- residual_jacobian: DTO, shape, счётчики; guard max_params;
+- residual_jacobian: DTO, shape, счётчики (n+1 прогонов — экономия
+  относительно прежних 2n), эквивалентность построению по столбцам через
+  публичный residual_jvp, guard max_params;
 - residual_jvp: TypeError при objective без residual-интерфейса;
 - tensor-backed запись начального состояния (x0) в JVP/якобиане;
 - checkpointed grad == plain BPTT (allclose 1e-6), число сегментов,
@@ -154,13 +156,32 @@ class TestResidualJacobian:
         assert np.allclose(result.phi, phi, atol=1e-12)
         assert result.method == "forward"
         assert result.wall_time >= 0.0
-        # Каждый unit-JVP: 1 оценка невязок + 1 JVP-прогон.
+        # 1 общая оценка невязок + n JVP-прогонов (без повторного счёта r).
         assert result.n_forward == problem_f64.n_forward - n_forward0
-        assert result.n_forward == 2 * n
+        assert result.n_forward == n + 1
+        # Экономия относительно прежней схемы (2n прогонов) ровно n - 1.
+        assert 2 * n - result.n_forward == n - 1
         # Сериализация DTO.
         restored = JacobianResult.from_dict(result.to_dict())
         assert restored.J.shape == result.J.shape
         assert np.allclose(restored.J, result.J, atol=1e-15)
+
+    def test_jacobian_matches_columnwise_jvp(self, problem_f64):
+        """J, r, loss идентичны построению по столбцам через residual_jvp."""
+        phi = _perturbed_phi(problem_f64, seed=11)
+        result = residual_jacobian(problem_f64, phi)
+        n = problem_f64.size
+        J_ref = np.zeros_like(result.J)
+        r_ref = None
+        for i in range(n):
+            e = np.zeros(n, dtype=np.float64)
+            e[i] = 1.0
+            r_i, jv_i = residual_jvp(problem_f64, phi, e)
+            r_ref = r_i
+            J_ref[:, i] = jv_i
+        assert np.allclose(result.J, J_ref, rtol=1e-10, atol=1e-12)
+        assert np.allclose(result.r, r_ref, atol=1e-12)
+        assert result.loss == pytest.approx(0.5 * float(r_ref @ r_ref), rel=1e-12)
 
     def test_max_params_guard(self, problem_f64):
         phi = _perturbed_phi(problem_f64)

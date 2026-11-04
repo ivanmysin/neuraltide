@@ -6,18 +6,25 @@
   reconstruction 0.5*||r||^2 == loss, per-step/full эквивалентность с масками
   (включая float64);
 - ObservationSpec.weight как 0-d Tensor/Variable (и валидация);
-- PCGrad: антагонистические градиенты дают известную проекцию;
+- PCGrad: антагонистические градиенты дают известную проекцию; seed-вариант
+  (оригинальный случайно-упорядоченный PCGrad Yu et al. 2020): тип seed,
+  воспроизводимость, конфликтующая пара без направлений роста, сверка на
+  3+ задачах с ручной эталонной реализацией схемы статьи и отличие от
+  детерминированной batch-модификации; проброс projector_kwargs через
+  balanced_gradient/balanced_train (включая baseline-прогон) и сохранение
+  kwargs в config;
 - CAGrad: точное решение на двух градиентах, контроль прогресса через c;
 - стратегии весов: UncertaintyWeighting реагирует на шум потерь, GradNorm
   выравнивает взвешенные нормы, FixedWeights/SelfAdaptiveWeights, JSON
   state_dict/load_state_dict;
 - balanced_gradient: losses == evaluate().components, взвешенная сумма
   градиентов против value_and_gradient, guard adjoint/Trainer, ошибки
-  некомпонентного objective;
+  некомпонентного objective, валидация projector_kwargs;
 - adaptive_window_sampler: выбор окна с большим остатком, изменение маски
   focused view, неприкосновенность исходных спецификаций;
 - balanced_train на малой L0-задаче: сходимость, непустая weight_history,
-  baseline в notes/result, history_path, сериализация BalancedResult.
+  baseline в notes/result, history_path, сериализация BalancedResult,
+  projector_kwargs пробрасывается в основной и baseline-прогоны.
 
 Сетевые тесты используют L0-фикстуру conftest (WilsonCowan 1 юнит +
 StaticSynapse от ConstantRate) в float64; синтетика (проекторы, стратегии)
@@ -327,6 +334,98 @@ class TestPCGrad:
         with pytest.raises(ValueError, match="at least one"):
             pcgrad_project([])
 
+    def test_seed_type_validation(self):
+        with pytest.raises(TypeError, match="seed"):
+            pcgrad_project([np.ones(2)], seed="abc")
+        # numpy-целые допустимы
+        out = pcgrad_project([np.ones(2)], seed=np.int64(0))
+        assert out.shape == (2,)
+
+    def test_seeded_reproducible(self):
+        rng = np.random.default_rng(3)
+        gs = [rng.standard_normal(5) for _ in range(4)]
+        first = pcgrad_project(gs, seed=0)
+        # глобальное состояние np.random не должно влиять: seed полностью
+        # определяет последовательность перестановок
+        np.random.seed(123)
+        np.random.standard_normal(11)
+        second = pcgrad_project(gs, seed=0)
+        np.testing.assert_allclose(first, second, rtol=1e-14, atol=1e-14)
+
+    def test_seeded_conflicting_pair_nonnegative(self):
+        # g1·g2 < 0; для пары задач результат seed-версии не зависит от
+        # случайного порядка j (внутри каждого i остальная одна задача),
+        # поэтому свойство проверяем при seed=0.
+        g1 = np.array([1.0, 0.0])
+        g2 = np.array([-0.5, 1.0])
+        assert float(g1 @ g2) < 0.0
+        out = pcgrad_project([g1, g2], seed=0)
+        # объединённый градиент не является направлением роста ни одной
+        # из двух задач
+        assert float(g1 @ out) >= -1e-12
+        assert float(g2 @ out) >= -1e-12
+        np.testing.assert_allclose(
+            out, pcgrad_project([g1, g2], seed=0), rtol=1e-14, atol=1e-14
+        )
+
+    def test_sequential_differs_from_batch_and_matches_reference(self):
+        # Три задачи с конфликтами всех пар (попарные скалярные произведения
+        # < 0): порядок перебора j меняет результат, поэтому случайно-
+        # упорядоченный вариант статьи отличен от детерминированного
+        # batch-варианта, а разные seed дают разные перестановки.
+        root3_2 = np.sqrt(3.0) / 2.0
+        gs = [
+            np.array([1.0, 0.0]),
+            np.array([-0.5, root3_2]),
+            np.array([-0.5, -root3_2]),
+        ]
+        assert all(
+            float(gs[i] @ gs[j]) < 0.0 for i in range(3) for j in range(i + 1, 3)
+        )
+        out_seq = pcgrad_project(gs, seed=0)
+        # эталон: независимая ручная реализация оригинальной схемы статьи
+        ref = _pcgrad_paper_reference(gs, seed=0)
+        np.testing.assert_allclose(out_seq, ref, rtol=1e-12, atol=1e-12)
+        # seed-вариант отличается от batch (фиксированный порядок j=0..n-1)
+        assert np.linalg.norm(out_seq - pcgrad_project(gs)) > 1e-9
+        # разные seed дают разные результаты (порядок пар имеет значение)
+        assert np.linalg.norm(out_seq - pcgrad_project(gs, seed=1)) > 1e-9
+
+    @pytest.mark.parametrize("data_seed", [5, 6, 7])
+    @pytest.mark.parametrize("n_tasks", [3, 4, 5])
+    def test_seeded_matches_paper_reference_on_multiple_tasks(self, data_seed, n_tasks):
+        # Контроль C5 на 3+ задачах: seed-вариант — оригинальная схема
+        # Yu et al. 2020 (случайный порядок j при проекциях против
+        # ИСХОДНЫХ g_j); сверка с независимой ручной реализацией той же схемы.
+        rng = np.random.default_rng(data_seed)
+        gs = [rng.standard_normal(6) for _ in range(n_tasks)]
+        out = pcgrad_project(gs, seed=0)
+        ref = _pcgrad_paper_reference(gs, seed=0)
+        np.testing.assert_allclose(out, ref, rtol=1e-12, atol=1e-12)
+
+
+def _pcgrad_paper_reference(gs, seed):
+    """
+    Ручная эталонная реализация оригинального PCGrad (Yu et al., 2020,
+    Alg. 1): для каждого i остальные задачи перебираются в случайном
+    порядке (np.random.default_rng(seed)); текущий g_i проецируется против
+    ИСХОДНЫХ g_j (не против уже спроецированных); в конце — среднее.
+    """
+    rng = np.random.default_rng(seed)
+    originals = [np.asarray(g, dtype=np.float64).reshape(-1) for g in gs]
+    projected = [g.copy() for g in originals]
+    n = len(originals)
+    for i in range(n):
+        for j in rng.permutation(n):
+            if j == i:
+                continue
+            dot = float(projected[i] @ originals[j])
+            if dot < 0.0:
+                norm_sq = float(originals[j] @ originals[j])
+                if norm_sq > 0.0:
+                    projected[i] = projected[i] - (dot / norm_sq) * originals[j]
+    return np.mean(projected, axis=0)
+
 
 def _cagrad_dual_reference(gs, c):
     """
@@ -539,6 +638,57 @@ class TestBalancedGradient:
         )
         assert np.allclose(grad_plain, grad_pc, atol=1e-12)
 
+    def test_projector_kwargs_forwarded(self, l0_factory):
+        problem = _build_f64(l0_factory)
+        phi = np.asarray(problem.pack(), dtype=np.float64) + 0.05
+        calls = []
+
+        def spy(grads, **kwargs):
+            calls.append(dict(kwargs))
+            return pcgrad_project(grads, **kwargs)
+
+        balanced_gradient(
+            problem,
+            phi,
+            {"obs": 1.0},
+            projector=spy,
+            projector_kwargs={"seed": 2},
+        )
+        assert calls == [{"seed": 2}]
+
+    def test_pcgrad_kwargs_reproducible(self, l0_factory):
+        problem = _two_component_problem(_build_f64(l0_factory))
+        phi = np.asarray(problem.pack(), dtype=np.float64) + 0.05
+        _, g1 = balanced_gradient(
+            problem,
+            phi,
+            {"early": 1.0, "late": 1.0},
+            projector=pcgrad_project,
+            projector_kwargs={"seed": 1},
+        )
+        _, g2 = balanced_gradient(
+            problem,
+            phi,
+            {"early": 1.0, "late": 1.0},
+            projector=pcgrad_project,
+            projector_kwargs={"seed": 1},
+        )
+        np.testing.assert_allclose(g1, g2, rtol=1e-14, atol=1e-14)
+
+    def test_projector_kwargs_validated(self, l0_factory):
+        problem = _build_f64(l0_factory)
+        phi = np.asarray(problem.pack(), dtype=np.float64)
+        with pytest.raises(TypeError, match="projector_kwargs"):
+            balanced_gradient(
+                problem,
+                phi,
+                {"obs": 1.0},
+                projector=pcgrad_project,
+                projector_kwargs={"seed"},  # set, не Mapping
+            )
+        with pytest.raises(ValueError, match="projector_kwargs"):
+            balanced_gradient(problem, phi, {"obs": 1.0}, projector_kwargs={"seed": 1})
+
     def test_counters_incremented(self, l0_factory):
         problem = _build_f64(l0_factory)
         phi = np.asarray(problem.pack(), dtype=np.float64) + 0.05
@@ -717,6 +867,46 @@ class TestBalancedTrain:
         )
         assert "PCGrad" in result.notes
         assert len(result.weight_history) == 10
+
+    def test_projector_kwargs_same_in_main_and_baseline(self, l0_factory):
+        problem = _two_component_problem(_build_f64(l0_factory))
+        phi0 = np.asarray(problem.pack(), dtype=np.float64) + 0.1
+        calls = []
+
+        def spy(grads, **kwargs):
+            calls.append(dict(kwargs))
+            return pcgrad_project(grads, **kwargs)
+
+        result = balanced_train(
+            problem,
+            phi0,
+            FixedWeights(1.0),
+            optimizer="sgd",
+            max_steps=3,
+            projector=spy,
+            projector_kwargs={"seed": 1},
+        )
+        # основной прогон (3 шага) + baseline (3 шага) — одинаковые kwargs
+        assert calls == [{"seed": 1}] * 6
+        # kwargs сохранены в config и упомянуты в notes; сериализация валидна
+        assert result.base.config["projector_kwargs"] == {"seed": 1}
+        assert "seed" in result.notes
+        json.dumps(result.to_dict())
+
+    def test_pcgrad_seeded_train_reproducible(self, l0_factory):
+        problem = _two_component_problem(_build_f64(l0_factory))
+        phi0 = np.asarray(problem.pack(), dtype=np.float64) + 0.1
+        kwargs = dict(
+            optimizer="sgd",
+            max_steps=3,
+            projector=pcgrad_project,
+            projector_kwargs={"seed": 7},
+        )
+        first = balanced_train(problem, phi0, FixedWeights(1.0), **kwargs)
+        second = balanced_train(problem, phi0, FixedWeights(1.0), **kwargs)
+        assert first.weight_history == second.weight_history
+        assert np.allclose(first.base.phi_best, second.base.phi_best, atol=1e-15)
+        assert first.baseline["best_loss"] == second.baseline["best_loss"]
 
     def test_history_path_written(self, l0_factory, tmp_path):
         problem = _two_component_problem(_build_f64(l0_factory))

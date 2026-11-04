@@ -12,7 +12,10 @@
 Resume: прерывание симулируется KeyboardInterrupt из callable-локального
 оптимизатора (мультистарт ловит только Exception, BaseException
 пролетает); дозапуск с resume=True обязан воспроизводить непрерывный
-прогон для тех же (seed, n_starts).
+прогон для тех же (seed, n_starts). Screen-refine: короткая доводка
+стартов (screen_refine_steps > 0) улучшает screened_loss через тот же
+callable-механизм прерываний; прерывание в фазе screen-refine и после неё
+(в полной доводке) эквивалентны непрерывному прогону.
 """
 
 import json
@@ -99,6 +102,20 @@ class TwinWellProblem(TwoMinimaProblem):
         return np.array([-3.0]), np.array([3.0])
 
 
+class ResidualTwoMinimaProblem(TwoMinimaProblem):
+    """Та же f(x) = 0.05*(x-3)^2 + sin(pi x)^2, но через residual-интерфейс:
+
+    r = (sqrt(0.1)*(x-3), sqrt(2)*sin(pi x)), так что 0.5*||r||^2 == f.
+    Duck-задача без контракта sensitivities → least_squares честно
+    работает в '2-point' режиме.
+    """
+
+    def residual(self, phi):
+        self.n_forward += 1
+        x = float(np.asarray(phi, dtype=np.float64).reshape(-1)[0])
+        return np.array([np.sqrt(0.1) * (x - 3.0), np.sqrt(2.0) * np.sin(np.pi * x)])
+
+
 def _interrupting_local(limit):
     """Callable-оптимизатор: первые limit-1 вызовов делегируют L-BFGS-B,
     далее KeyboardInterrupt (симуляция прерывания прогона). __name__
@@ -114,6 +131,23 @@ def _interrupting_local(limit):
 
     local.__name__ = "lbfgsb"
     return local
+
+
+def _interrupting_screen_local(limit):
+    """Callable screen_local: первые limit-1 вызовов делегируют L-BFGS-B
+    (получая maxiter/validate как **kwargs), далее KeyboardInterrupt —
+    симуляция прерывания в фазе screen-refine. __name__ == 'lbfgsb',
+    чтобы конфиг чекпоинта соответствовал строковому адаптеру."""
+    calls = {"n": 0}
+
+    def screen_local(problem, phi0, **kwargs):
+        calls["n"] += 1
+        if calls["n"] >= limit:
+            raise KeyboardInterrupt("simulated interruption")
+        return minimize_lbfgsb(problem, phi0, **kwargs)
+
+    screen_local.__name__ = "lbfgsb"
+    return screen_local
 
 
 # ---------------------------------------------------------------------------
@@ -344,12 +378,16 @@ class TestMultistart:
             multistart(problem, n_starts=0)
         with pytest.raises(ValueError, match="screen_evals"):
             multistart(problem, screen_evals=0)
+        with pytest.raises(ValueError, match="screen_refine_steps"):
+            multistart(problem, screen_refine_steps=-1)
         with pytest.raises(ValueError, match="refine_top_k"):
             multistart(problem, refine_top_k=-1)
         with pytest.raises(ValueError, match="dedup_rtol"):
             multistart(problem, dedup_rtol=0.0)
         with pytest.raises(ValueError, match="оптимизатор"):
             multistart(problem, local="cmaes")
+        with pytest.raises(ValueError, match="оптимизатор"):
+            multistart(problem, screen_local="cmaes")
 
     def test_zero_refine_top_k(self):
         problem = TwoMinimaProblem()
@@ -358,6 +396,145 @@ class TestMultistart:
         assert res.best_index == -1  # некому доводить
         assert all(s.status == "screen_rejected" for s in res.solutions)
         assert res.base.loss_best == min(s.loss for s in res.solutions)
+
+
+# ---------------------------------------------------------------------------
+# screen-refine (screen_refine_steps / screen_local)
+# ---------------------------------------------------------------------------
+
+
+class TestScreenRefine:
+    def test_default_single_eval_per_start(self):
+        # По умолчанию screening — ровно один evaluate на старт.
+        problem = TwoMinimaProblem()
+        multistart(problem, n_starts=6, refine_top_k=0, seed=1)
+        assert problem.n_forward == 6
+
+    def test_screen_evals_averaging(self):
+        # Явно заданный screen_evals: среднее по прогонам, счётчик растёт.
+        problem = TwoMinimaProblem()
+        res = multistart(problem, n_starts=6, refine_top_k=0, seed=1, screen_evals=3)
+        assert problem.n_forward == 18
+        for s in res.solutions:
+            assert s.screened_loss == pytest.approx(problem._f(float(s.phi0[0])))
+            assert not s.screen_refined
+
+    def test_screen_refine_improves_screened_loss(self):
+        # Короткая доводка очевидно помогает: 3 итерации L-BFGS-B от
+        # далёких стартов заметно снижают screened_loss (min по формуле).
+        problem = TwoMinimaProblem()
+        res = multistart(
+            problem,
+            n_starts=8,
+            refine_top_k=0,
+            seed=3,
+            screen_refine_steps=3,
+        )
+        assert all(s.status == "screen_rejected" for s in res.solutions)
+        assert all(s.screen_refined for s in res.solutions)
+        improved = 0
+        for s in res.solutions:
+            raw = problem._f(float(s.phi0[0]))
+            assert s.screened_loss <= raw + 1e-12
+            improved += int(s.screened_loss < raw - 1e-12)
+        assert improved >= 4
+        # Полной доводки не было: phi и loss стартов не менялись.
+        assert all(
+            np.array_equal(s.phi, s.phi0) and s.loss == s.screened_loss
+            for s in res.solutions
+        )
+
+    def test_screen_refine_adds_evaluations(self):
+        problem = TwoMinimaProblem()
+        res = multistart(
+            problem,
+            n_starts=6,
+            refine_top_k=0,
+            seed=1,
+            screen_refine_steps=2,
+        )
+        assert problem.n_forward > 6  # screening + прогоны screen-refine
+        assert problem.n_gradient >= 6  # value_and_gradient на каждый старт
+        assert all(s.screen_refined for s in res.solutions)
+
+    @pytest.mark.parametrize("steps", [2, 3])
+    def test_screen_refine_with_least_squares_screen_local(self, steps):
+        # Регрессия C2/C3: strategies передаёт screen_local адаптеру
+        # maxiter (и validate) — least_squares обязан принимать их
+        # (maxiter маппируется в max_nfev), screen-refine реально
+        # улучшает screened_loss и не помечает старты failed.
+        problem = ResidualTwoMinimaProblem()
+        res = multistart(
+            problem,
+            n_starts=8,
+            refine_top_k=0,
+            seed=3,
+            screen_refine_steps=steps,
+            screen_local="least_squares",
+        )
+        assert res.base.config["screen_local"] == "least_squares"
+        assert res.n_failed == 0
+        assert all(s.status == "screen_rejected" for s in res.solutions)
+        assert all(s.screen_refined for s in res.solutions)
+        improved = 0
+        for s in res.solutions:
+            raw = problem._f(float(s.phi0[0]))
+            assert s.screened_loss <= raw + 1e-12
+            improved += int(s.screened_loss < raw - 1e-12)
+        assert improved >= 4
+        # Полной доводки не было: phi и loss стартов не менялись.
+        assert all(
+            np.array_equal(s.phi, s.phi0) and s.loss == s.screened_loss
+            for s in res.solutions
+        )
+
+    def test_screen_refine_failure_marks_start_failed(self):
+        problem = TwoMinimaProblem()
+
+        def flaky_screen(problem, phi0, **kwargs):
+            if abs(float(np.asarray(phi0).reshape(-1)[0]) - 3.0) < 0.6:
+                raise RuntimeError("boom near global minimum")
+            return minimize_lbfgsb(problem, phi0, **kwargs)
+
+        res = multistart(
+            problem,
+            n_starts=24,
+            refine_top_k=6,
+            seed=0,
+            screen_refine_steps=2,
+            screen_local=flaky_screen,
+        )
+        failed = [s for s in res.solutions if s.status == "failed"]
+        assert failed, "ожидался отказ screen-refine около x=3"
+        assert all("screen-refine" in s.message for s in failed)
+        assert all("boom" in s.message for s in failed)
+        # Статус/message как при failed screening: потеря inf, screening
+        # не засчитан, screen_refined не выставлен.
+        assert all(
+            np.isinf(s.loss) and s.screened_loss is None and not s.screen_refined
+            for s in failed
+        )
+        assert res.n_failed == len(failed)
+        # Провал исключает старт из доводки, прогон продолжается.
+        n_screened_ok = sum(1 for s in res.solutions if s.screened_loss is not None)
+        assert res.n_refined == min(6, n_screened_ok)
+        assert res.best_index >= 0
+        assert res.solutions[res.best_index].status == "ok"
+        assert res.clustering["n_clusters"] >= 1
+
+    def test_clustering_with_screen_refine(self):
+        problem = TwinWellProblem()
+        res = multistart(
+            problem,
+            n_starts=16,
+            refine_top_k=8,
+            seed=2,
+            screen_refine_steps=3,
+        )
+        assert res.n_failed == 0
+        assert all(s.screen_refined for s in res.solutions)
+        # Два равных минимума x=±1 -> два кластера, как без screen-refine.
+        assert res.clustering["n_clusters"] == 2
 
 
 # ---------------------------------------------------------------------------
@@ -472,6 +649,109 @@ class TestResume:
         ckpt = RunCheckpoint.load(path)
         assert len(ckpt.completed) == 12
         assert ckpt.best_index == res.best_index
+
+    def test_resume_old_checkpoint_without_screen_refined(self, tmp_path):
+        # Чекпоинт старого формата: записи StartResult без screen_refined.
+        path = tmp_path / "checkpoint.json"
+        multistart(TwoMinimaProblem(), checkpoint_path=path, **self.ARGS)
+        data = json.loads(path.read_text())
+        for entry in data["completed"]:
+            entry.pop("screen_refined", None)
+        data["completed"] = data["completed"][:4]
+        data["pending"] = [4, 5, 6, 7, 8, 9, 10, 11]
+        data["best_index"] = -1
+        path.write_text(json.dumps(data))
+
+        resumed = multistart(
+            TwoMinimaProblem(), checkpoint_path=path, resume=True, **self.ARGS
+        )
+        reference = multistart(TwoMinimaProblem(), **self.ARGS)
+        assert resumed.best_index == reference.best_index
+        assert resumed.base.loss_best == pytest.approx(
+            reference.base.loss_best, rel=1e-9, abs=1e-12
+        )
+        # Старые записи читаются с default screen_refined=False, дозапуск
+        # восстанавливает тот же результат, что и непрерывный прогон.
+        assert [s.screen_refined for s in resumed.solutions] == [
+            s.screen_refined for s in reference.solutions
+        ]
+        assert [s.status for s in resumed.solutions] == [
+            s.status for s in reference.solutions
+        ]
+
+
+# ---------------------------------------------------------------------------
+# checkpoint / resume с screen-refine
+# ---------------------------------------------------------------------------
+
+
+class TestScreenRefineResume:
+    ARGS = dict(n_starts=10, refine_top_k=3, seed=5, screen_refine_steps=2)
+
+    def _assert_matches_reference(self, resumed, reference):
+        assert resumed.best_index == reference.best_index
+        assert resumed.base.loss_best == pytest.approx(
+            reference.base.loss_best, rel=1e-9, abs=1e-12
+        )
+        np.testing.assert_allclose(
+            resumed.base.phi_best, reference.base.phi_best, atol=1e-8
+        )
+        assert [s.status for s in resumed.solutions] == [
+            s.status for s in reference.solutions
+        ]
+        assert [s.screen_refined for s in resumed.solutions] == [
+            s.screen_refined for s in reference.solutions
+        ]
+        assert resumed.n_refined == reference.n_refined
+
+    def test_resume_interrupted_during_screen_refine(self, tmp_path):
+        path = tmp_path / "checkpoint.json"
+        with pytest.raises(KeyboardInterrupt, match="simulated"):
+            multistart(
+                TwoMinimaProblem(),
+                screen_local=_interrupting_screen_local(limit=3),
+                checkpoint_path=path,
+                **self.ARGS,
+            )
+        ckpt = RunCheckpoint.load(path)
+        # Фаза 1 прервана на третьем старте: два старта завершены со
+        # screen-refine, конфиг чекпоинта содержит screen-поля.
+        assert len(ckpt.completed) == 2
+        assert all(c.get("screen_refined") for c in ckpt.completed)
+        assert ckpt.config["screen_refine_steps"] == 2
+        assert ckpt.config["screen_local"] == "lbfgsb"
+
+        resumed = multistart(
+            TwoMinimaProblem(), checkpoint_path=path, resume=True, **self.ARGS
+        )
+        reference = multistart(TwoMinimaProblem(), **self.ARGS)
+        self._assert_matches_reference(resumed, reference)
+        assert resumed.n_refined == 3
+        assert all(s.screen_refined for s in resumed.solutions)
+
+    def test_resume_interrupted_after_screen_refine(self, tmp_path):
+        # Прерывание в фазе полной доводки: screening и screen-refine всех
+        # стартов в чекпоинте, resume досчитывает только top-k.
+        path = tmp_path / "checkpoint.json"
+        with pytest.raises(KeyboardInterrupt, match="simulated"):
+            multistart(
+                TwoMinimaProblem(),
+                local=_interrupting_local(limit=2),
+                checkpoint_path=path,
+                **self.ARGS,
+            )
+        ckpt = RunCheckpoint.load(path)
+        assert len(ckpt.completed) == 10
+        assert all(c.get("screen_refined") for c in ckpt.completed)
+        refined = [c for c in ckpt.completed if c.get("refined")]
+        assert len(refined) == 1
+
+        resumed = multistart(
+            TwoMinimaProblem(), checkpoint_path=path, resume=True, **self.ARGS
+        )
+        reference = multistart(TwoMinimaProblem(), **self.ARGS)
+        self._assert_matches_reference(resumed, reference)
+        assert resumed.n_refined == 3
 
 
 # ---------------------------------------------------------------------------

@@ -6,8 +6,11 @@
   ограниченные записи семплируются равномерно (или лог-равномерно) в
   физических границах с последующим transform.inverse, неограниченные —
   гауссово вокруг текущего phi с предупреждением;
-- multistart — screening всех стартов одним problem.evaluate на старт,
-  полная локальная доводка top-k кандидатов через адаптеры local.py
+- multistart — screening всех стартов (screen_evals оценок, по умолчанию
+  один evaluate на старт) с опциональным коротким screen-refine
+  (screen_refine_steps итераций screen_local от того же phi0, только
+  улучшает screened_loss и ранжирование старта), полная локальная доводка
+  top-k кандидатов через адаптеры local.py
   (или пользовательский callable), сохранение всех стартов со статусами,
   greedy-кластеризация решений, checkpoint/resume через RunCheckpoint;
 - dt_continuation — цепочка «coarse dt → fine dt»: перенос theta между
@@ -310,6 +313,8 @@ def _multistart_config(
     n_starts: int,
     method: str,
     screen_evals: int,
+    screen_refine_steps: int,
+    screen_local_name: str,
     refine_top_k: int,
     local_name: str,
     dedup_rtol: float,
@@ -318,6 +323,8 @@ def _multistart_config(
         "n_starts": int(n_starts),
         "method": str(method),
         "screen_evals": int(screen_evals),
+        "screen_refine_steps": int(screen_refine_steps),
+        "screen_local": str(screen_local_name),
         "refine_top_k": int(refine_top_k),
         "local": str(local_name),
         "dedup_rtol": float(dedup_rtol),
@@ -419,6 +426,8 @@ def _run_multistart(
     n_starts: int,
     method: str,
     screen_evals: int,
+    screen_refine_steps: int,
+    screen_local,
     refine_top_k: int,
     local,
     seed: Optional[int],
@@ -428,8 +437,16 @@ def _run_multistart(
 ) -> MultistartResult:
     t_begin = time.perf_counter()
     local_fn, local_name = resolve_local_optimizer(local)
+    screen_fn, screen_name = resolve_local_optimizer(screen_local)
     config = _multistart_config(
-        n_starts, method, screen_evals, refine_top_k, local_name, dedup_rtol
+        n_starts,
+        method,
+        screen_evals,
+        screen_refine_steps,
+        screen_name,
+        refine_top_k,
+        local_name,
+        dedup_rtol,
     )
     config["n_starts_list"] = list(range(n_starts))
 
@@ -467,17 +484,31 @@ def _run_multistart(
             phi0=phi0.copy(),
             phi=phi0.copy(),
         )
+        screen_stage = "screening"
         try:
             screened = _screen(problem, phi0, screen_evals)
             if not np.isfinite(screened):
                 raise FloatingPointError("нефинитная потеря при screening")
+            if screen_refine_steps > 0 and not start.screen_refined:
+                # Короткая доводка от того же phi0: только улучшает
+                # оценку/ранжирование старта (screened_loss), полная
+                # доводка по-прежнему стартует из исходного phi0.
+                screen_stage = "screen-refine"
+                refine = screen_fn(
+                    problem, phi0, maxiter=screen_refine_steps, validate=False
+                )
+                refined_loss = float(refine.base.loss_best)
+                if not np.isfinite(refined_loss):
+                    raise FloatingPointError("нефинитная потеря после screen-refine")
+                screened = min(screened, refined_loss)
+                start.screen_refined = True
             start.screened_loss = screened
             start.loss = screened
             start.status = "screen_rejected"
             start.message = "отклонён на этапе screening"
         except Exception as exc:  # noqa: BLE001 - старт не должен ронять прогон
             start.status = "failed"
-            start.message = f"screening: {exc}"
+            start.message = f"{screen_stage}: {exc}"
             start.loss = float("inf")
         start.wall_time = time.perf_counter() - t0
         completed[i] = start
@@ -582,6 +613,8 @@ def multistart(
     n_starts: int = 20,
     method: str = "sobol",
     screen_evals: int = 1,
+    screen_refine_steps: int = 0,
+    screen_local="lbfgsb",
     refine_top_k: int = 5,
     local="lbfgsb",
     seed: Optional[int] = None,
@@ -595,24 +628,35 @@ def multistart(
     1. Генерируется детерминированный по (method, seed) дизайн из
        n_starts начальных phi (sample_phi0s для ParameterSpace проблемы,
        fallback по bounds_phi для duck-typed).
-    2. Screening: ровно screen_evals вызовов problem.evaluate на старт;
-       старты с нефинитной потерей/исключением получают status 'failed'.
-    3. Доводка: refine_top_k лучших по screened_loss стартов прогоняются
+    2. Screening: ровно screen_evals вызовов problem.evaluate на старт
+       (по умолчанию один на старт); старты с нефинитной потерей/
+       исключением получают status 'failed'.
+    3. Опциональный screen-refine (screen_refine_steps > 0): от того же
+       phi0 запускается короткий локальный прогон (maxiter=
+       screen_refine_steps, validate=False через resolve_local_optimizer
+       screen_local); screened_loss = min(screened, refined). Начальная
+       точка полной доводки не меняется — screen-refine только улучшает
+       оценку/ранжирование старта; успех помечается screen_refined.
+       Исключение screen-refine -> status 'failed' (как при failed
+       screening), прогон продолжается.
+    4. Доводка: refine_top_k лучших по screened_loss стартов прогоняются
        через локальный оптимизатор ('lbfgsb' | 'least_squares' — ленивый
        импорт адаптеров local.py, либо callable(problem, phi0)).
        Исключение адаптера для старта -> status 'failed' с message, прогон
        продолжается. Перед каждым стартом модель явно переводится в
        theta = unpack(phi0) (контракт CalibrationProblem), скрытое
        состояние между стартами не используется.
-    4. В solutions сохраняются ВСЕ старты со статусами 'ok' /
+    5. В solutions сохраняются ВСЕ старты со статусами 'ok' /
        'screen_rejected' / 'failed'; удачные старты кластеризуются greedy
        по (loss, близость phi с rtol=dedup_rtol).
 
     Checkpoint/resume: при checkpoint_path после каждого старта пишется
     RunCheckpoint (seed/config/completed/pending/best_index; без состояния
-    RNG). Повторный запуск с resume=True и теми же (seed, n_starts,
+    RNG). Конфигурация включает screen_refine_steps и screen_local.
+    Повторный запуск с resume=True и теми же (seed, n_starts,
     конфигурацией) досчитывает только недоделанные старты и даёт тот же
-    результат, что и непрерывный прогон.
+    результат, что и непрерывный прогон; старты с screen_refined=True
+    повторно screen-refine не проходят.
 
     Args:
         problem: CalibrationProblem (или duck-typed с evaluate/pack/
@@ -621,8 +665,24 @@ def multistart(
         method: 'sobol' | 'lhs' | 'random' — дизайн начальных точек.
         screen_evals: число evaluate на старт при screening (>= 1,
             среднее по прогонам).
+        screen_refine_steps: >= 0; при > 0 после screening каждый старт
+            коротко доводится screen_local (maxiter=screen_refine_steps,
+            validate=False) и screened_loss улучшается до min(screened,
+            refined).
+        screen_local: 'lbfgsb' | 'least_squares' | callable(problem, phi0,
+            **kwargs) — оптимизатор screen-refine; строковые адаптеры
+            получают maxiter=screen_refine_steps и validate=False,
+            callable — то же как kwargs и обязан их принимать.
         refine_top_k: сколько лучших стартов доводить локально.
         local: 'lbfgsb' | 'least_squares' | callable(problem, phi0).
+
+    Замечание (forward-AD): градиентный screen-refine (screen_local=
+    'lbfgsb' или другой gradient-based callable) делает problem.
+    n_gradient > 0, после чего default forward-якобиан local=
+    'least_squares' (jacobian=None) на том же экземпляре problem
+    несовместим с NetworkRNN: адаптер честно переключается на '2-point' с
+    UserWarning (фиксируется в config['jacobian']). Для forward-режима
+    используйте свежий экземпляр problem или явный jacobian='2-point'.
         seed: seed дизайна и чекпоинта.
         checkpoint_path: путь к JSON-чекпоинту (None — без чекпоинта).
         resume: дочитать существующий checkpoint_path.
@@ -633,11 +693,16 @@ def multistart(
     """
     n_starts = int(n_starts)
     screen_evals = int(screen_evals)
+    screen_refine_steps = int(screen_refine_steps)
     refine_top_k = int(refine_top_k)
     if n_starts < 1:
         raise ValueError(f"multistart: n_starts должен быть >= 1, {n_starts}.")
     if screen_evals < 1:
         raise ValueError(f"multistart: screen_evals должен быть >= 1, {screen_evals}.")
+    if screen_refine_steps < 0:
+        raise ValueError(
+            f"multistart: screen_refine_steps должен быть >= 0, {screen_refine_steps}."
+        )
     if refine_top_k < 0:
         raise ValueError(f"multistart: refine_top_k должен быть >= 0, {refine_top_k}.")
     if float(dedup_rtol) <= 0.0:
@@ -647,6 +712,8 @@ def multistart(
         n_starts=n_starts,
         method=str(method).lower(),
         screen_evals=screen_evals,
+        screen_refine_steps=screen_refine_steps,
+        screen_local=screen_local,
         refine_top_k=refine_top_k,
         local=local,
         seed=seed,

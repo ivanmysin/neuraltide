@@ -322,6 +322,9 @@ class StartResult(_JsonDTO):
         message: сообщение/причина отказа;
         screened_loss: потеря после короткого screening (или None);
         refined: была ли выполнена полная локальная доводка;
+        screen_refined: был ли выполнен короткий screen-refine при
+            screening (улучшение screened_loss; см. multistart
+            screen_refine_steps);
         local: результат локального оптимизатора (или None);
         wall_time: время старта, секунды.
     """
@@ -335,6 +338,7 @@ class StartResult(_JsonDTO):
     message: str = ""
     screened_loss: Optional[float] = None
     refined: bool = False
+    screen_refined: bool = False
     local: Optional[LocalOptimizerResult] = None
     wall_time: float = 0.0
 
@@ -355,6 +359,7 @@ class StartResult(_JsonDTO):
                 None if self.screened_loss is None else float(self.screened_loss)
             ),
             "refined": bool(self.refined),
+            "screen_refined": bool(self.screen_refined),
             "local": None if self.local is None else self.local.to_dict(),
             "wall_time": float(self.wall_time),
         }
@@ -373,6 +378,7 @@ class StartResult(_JsonDTO):
             message=str(data.get("message", "")),
             screened_loss=None if screened is None else float(screened),
             refined=bool(data.get("refined", False)),
+            screen_refined=bool(data.get("screen_refined", False)),
             local=None if local is None else LocalOptimizerResult.from_dict(local),
             wall_time=float(data.get("wall_time", 0.0)),
         )

@@ -1035,6 +1035,7 @@ class StartResult:            # один старт мультистарта
     message: str = ""
     screened_loss: Optional[float] = None
     refined: bool = False
+    screen_refined: bool = False     # короткий screen-refine выполнен
     local: Optional[LocalOptimizerResult] = None
     wall_time: float = 0.0
 
@@ -1105,13 +1106,26 @@ def minimize_lbfgsb(problem, phi0=None, *, maxiter=200, gtol=1e-6,
                     ftol=2.2e-9, validate=True, options=None
                     ) -> LocalOptimizerResult
 def least_squares(problem, phi0=None, *, method="trf", jacobian=None,
-                  x_scale="jac", max_nfev=None, validate=True, **kwargs
+                  jacobian_max_params=200, callback=None, x_scale="jac",
+                  max_nfev=None, maxiter=None, validate=True, **kwargs
                   ) -> LocalOptimizerResult
 ```
 
 `least_squares`: `method` — `'trf'` (bounds) | `'lm'` (только без bounds);
 `jacobian` — `None | '2-point' | '3-point' | callable(x) -> [m, n]`
-(callable лениво связывается с `sensitivities.residual_jacobian`). Нефинитный
+(callable лениво связывается с `sensitivities.residual_jacobian`); при
+`None` по умолчанию — forward-якобиан sensitivities при
+`size <= jacobian_max_params` (200) и полном контракте `CalibrationProblem`,
+иначе `'2-point'`; фактический режим —
+в `config["jacobian"]`. Forward-режим несовместим с предшествующими
+gradient-прогонами на том же экземпляре (`problem.n_gradient > 0`, TF
+forward-AD state одного `NetworkRNN`): честный fallback на `'2-point'` с
+`UserWarning`. `callback(intermediate_result)` — callback итераций
+(scipy >= 1.16; на 1.15 игнорируется с предупреждением; у `'lm'` не
+поддержан scipy — `UserWarning`). `maxiter` — унифицированный бюджет
+итераций (как у `minimize_lbfgsb`): при `max_nfev=None` маппируется как
+`max_nfev = maxiter * (problem.size + 2)`; одновременная передача `maxiter`
+и `max_nfev` — `ValueError`. Нефинитный
 старт/невязки отклоняются `ValueError` до запуска решателя.
 
 ### Чувствительности (P1)
@@ -1178,6 +1192,7 @@ Residual-раскладка `r = [r_data; √w·gap_k]`, `0.5·‖r‖² == loss
 def sample_phi0s(space, n, *, method="sobol", seed=None,
                  log_uniform=None, clip_to_bounds=True) -> np.ndarray
 def multistart(problem, *, n_starts=20, method="sobol", screen_evals=1,
+               screen_refine_steps=0, screen_local="lbfgsb",
                refine_top_k=5, local="lbfgsb", seed=None,
                checkpoint_path=None, resume=False, dedup_rtol=1e-4
                ) -> MultistartResult
@@ -1371,9 +1386,13 @@ class GradNormWeights(WeightStrategy):
     def __init__(self, alpha=1.0, step_size=1.0, eps=1e-8,
                  min_weight=1e-3, max_weight=1e3): ...
 
-def pcgrad_project(grads) -> np.ndarray        # Mapping|Sequence -> mean proj
+def pcgrad_project(grads, *, seed=None) -> np.ndarray
+    # Mapping|Sequence -> mean proj; seed=None — детерминированная
+    # batch-модификация (порядок j фиксирован), seed=int — оригинальный
+    # случайно-упорядоченный PCGrad Yu et al. 2020 (np.random.default_rng)
 def cagrad_project(grads, c: float = 0.5) -> np.ndarray
-def balanced_gradient(problem, phi, weights, projector=None
+def balanced_gradient(problem, phi, weights, projector=None, *,
+                      projector_kwargs=None
                       ) -> Tuple[Dict[str, float], np.ndarray]
 def adaptive_window_sampler(problem, window_size, focus="large_residual",
                             boost=3.0) -> AdaptiveWindowFocus
@@ -1386,13 +1405,15 @@ class BalancedResult:
     baseline: Dict[str, Any] = {}         # {'method','best_loss','final_loss',...}
 
 def balanced_train(problem, phi0, strategy, *, optimizer=None, max_steps,
-                   projector=None, seed=None, history_path=None
-                   ) -> BalancedResult
+                   projector=None, projector_kwargs=None, seed=None,
+                   history_path=None) -> BalancedResult
 ```
 
 Все стратегии — детерминированные суррогаты (пересчёт по наблюдённым
 losses/grads, не совместное обучение); только BPTT-режим. `balanced_train`
-всегда прогоняет baseline FixedWeights(1.0) из той же phi0.
+всегда прогоняет baseline FixedWeights(1.0) из той же phi0; общие
+`projector`/`projector_kwargs` применяются и в основном, и в baseline-
+прогонах (kwargs сохраняются в `base.config['projector_kwargs']`).
 
 ### Ограничения на прогнозы (P2)
 
