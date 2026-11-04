@@ -10,7 +10,9 @@ initialize_from_single_shooting даёт нулевые разрывы; град
 честный NotImplementedError для BrunelFokkerPlanck; восстановление
 свободного прогона через to_single_shooting_problem; include_syn_states
 на сети с TsodyksMarkramSynapse; scalar-only objective (evaluate без
-residual-интерфейса); общие счётчики и bounds расширенного пространства.
+residual-интерфейса); общие счётчики и bounds расширенного пространства;
+fix_first_segment=True (layout φ, эквивалентность base, инициализация,
+finalize, FD-градиент, сохранение общих x0-записей сегмента 0).
 """
 
 import numpy as np
@@ -36,7 +38,13 @@ from neuraltide.populations import BrunelFokkerPlanck, WilsonCowan
 from neuraltide.synapses import TsodyksMarkramSynapse
 
 
-def _build_ms(l0_factory, nodes, continuity_weight=1.0, include_syn_states=False):
+def _build_ms(
+    l0_factory,
+    nodes,
+    continuity_weight=1.0,
+    include_syn_states=False,
+    fix_first_segment=False,
+):
     """L0-сеть в float64 + MultipleShootingProblem (base, ms)."""
     neuraltide.config.set_dtype(tf.float64)
     network, space, t_seq, inputs, loss = l0_factory()
@@ -46,6 +54,7 @@ def _build_ms(l0_factory, nodes, continuity_weight=1.0, include_syn_states=False
         ShootingConfig(nodes),
         continuity_weight=continuity_weight,
         include_syn_states=include_syn_states,
+        fix_first_segment=fix_first_segment,
     )
     return problem, ms
 
@@ -470,3 +479,130 @@ class TestMixedSpaceBase:
         assert phi.shape == (ms.size,)
         ev = ms.evaluate(phi)
         assert np.isfinite(ev.loss)
+
+
+class TestFixFirstSegment:
+    """fix_first_segment=True: сегмент 0 фиксирован за base_state."""
+
+    def test_single_segment_equivalent_to_base(self, l0_factory):
+        """nodes=1 + fix: size == base.size, pack(None), loss/grad совпадают."""
+        neuraltide.config.set_dtype(tf.float64)
+        network, space, t_seq, inputs, loss = l0_factory()
+        base = CalibrationProblem(network, space, t_seq, inputs=inputs, objective=loss)
+        ms = MultipleShootingProblem(base, ShootingConfig(1), fix_first_segment=True)
+        assert ms.fix_first_segment
+        assert ms.n_segments == 1
+        assert ms.size == base.size
+        # shooting-записей нет вообще — pack(None) по переменным модели
+        phi = np.asarray(ms.pack(None), dtype=np.float64)
+        assert phi.shape == (base.size,)
+
+        ev_ms, grad_ms = ms.value_and_gradient(phi)
+        ev_base, grad_base = base.value_and_gradient(phi)
+        assert ev_ms.loss == pytest.approx(ev_base.loss, rel=1e-10)
+        np.testing.assert_allclose(
+            np.asarray(grad_ms), np.asarray(grad_base), rtol=1e-9, atol=1e-11
+        )
+
+    def test_three_segments_layout(self, l0_factory):
+        """size == base + (K-1) слотов; x0s/0 отсутствует, x0s/1,2 есть."""
+        problem, ms = _build_ms(l0_factory, 3, fix_first_segment=True)
+        # L0: 1 pop-слот на сегмент → 3 сегмента дают 2 shooting-слота
+        assert ms.size == problem.size + 2
+        names = ms.parameter_space.names
+        assert "x0s/0/exc/0" not in names
+        assert "x0s/1/exc/0" in names
+        assert "x0s/2/exc/0" in names
+
+        lo, hi = ms.bounds_phi()
+        assert lo.shape == hi.shape == (ms.size,)
+        lo_b, hi_b = problem.bounds_phi()
+        np.testing.assert_allclose(lo[: problem.size], lo_b)
+        np.testing.assert_allclose(hi[: problem.size], hi_b)
+        assert np.all(np.isinf(lo[problem.size :]))
+        assert np.all(np.isinf(hi[problem.size :]))
+
+        with pytest.raises(ValueError, match="elements"):
+            ms.pack(np.zeros(ms.size + 1))
+
+    def test_initialize_gaps_zero_and_counters(self, l0_factory):
+        problem, ms = _build_ms(l0_factory, 3, fix_first_segment=True)
+        phi = np.array(ms.initialize_from_single_shooting(), dtype=np.float64)
+        assert phi.shape == (ms.size,)
+        # цепочка по-прежнему выполняет K-1 = 2 прогона (сегменты 0 и 1)
+        assert ms.n_forward == 2
+        gaps = ms.continuity_gaps(phi)
+        assert ms.n_forward == 2 + 3  # + K прогонов на разрывы
+        assert gaps["max"] == pytest.approx(0.0, abs=1e-9)
+        assert gaps["mean"] == pytest.approx(0.0, abs=1e-9)
+        assert gaps["finite"]
+        assert set(gaps["joints"]) == {"0->1", "1->2"}
+        # стыкованная траектория == непрерывный прогон base problem
+        assert ms.evaluate(phi).loss == pytest.approx(
+            problem.evaluate(phi[: problem.size]).loss, rel=1e-10
+        )
+
+    def test_finalize_consistent(self, l0_factory):
+        problem, ms = _build_ms(l0_factory, [0, 20, 60], fix_first_segment=True)
+        phi = np.array(ms.initialize_from_single_shooting(), dtype=np.float64)
+        check = ms.finalize(phi, gap_tol=1e-9)
+        assert check.consistent
+        assert check.loss_ms == pytest.approx(check.loss_single, rel=1e-8)
+        # single shooting стартует из base_state: совпадает с base problem
+        assert check.loss_single == pytest.approx(
+            problem.evaluate(phi[: problem.size]).loss, rel=1e-8
+        )
+
+    def test_gradient_matches_finite_differences(self, l0_factory):
+        problem, ms = _build_ms(l0_factory, [0, 12, 30, 60], fix_first_segment=True)
+        phi = np.array(ms.initialize_from_single_shooting(), dtype=np.float64)
+        phi[problem.size] += 0.25  # активный разрыв на стыке 0->1
+        _, grad = ms.value_and_gradient(phi)
+        h = 1e-5
+        fd = np.zeros_like(phi)
+        for i in range(phi.shape[0]):
+            step = np.zeros_like(phi)
+            step[i] = h
+            fp = ms.evaluate(phi + step).loss
+            fm = ms.evaluate(phi - step).loss
+            fd[i] = (fp - fm) / (2.0 * h)
+        np.testing.assert_allclose(np.asarray(grad), fd, rtol=1e-5, atol=1e-7)
+
+    def test_segment_zero_keeps_base_x0_entries(self, l0_factory):
+        """fix: общие x0-записи базового пространства действуют на сегмент 0."""
+        neuraltide.config.set_dtype(tf.float64)
+        network, space, t_seq, inputs, loss = l0_factory()
+        space.add_initial_state_entries(network)
+        base = CalibrationProblem(network, space, t_seq, inputs=inputs, objective=loss)
+        ms = MultipleShootingProblem(base, ShootingConfig(2), fix_first_segment=True)
+        values = {
+            name: (
+                entry.variable.numpy()
+                if entry.variable is not None
+                else np.full(entry.shape, 0.35, dtype=np.float64)
+            )
+            for name, entry in space.entries.items()
+        }
+        phi_base = np.asarray(space.pack(values), dtype=np.float64)
+        # сегмент 1 свободен — дополняем φ произвольным shooting-значением
+        phi = np.concatenate([phi_base, np.array([0.35], dtype=np.float64)])
+        assert phi.shape == (ms.size,)
+
+        # сегмент 0 стартует из base_state (включая x0-запись 0.35), не из s_0
+        seg0 = ms.simulate_segment(phi, 0)
+        free = base.simulate(phi[: base.size])
+        np.testing.assert_allclose(
+            np.asarray(seg0.firing_rates["exc"]),
+            np.asarray(free.firing_rates["exc"])[:, :30],  # ShootingConfig(2): [0, 30)
+            rtol=1e-9,
+            atol=1e-11,
+        )
+        single = ms.to_single_shooting_problem(phi)
+        # base space содержит tensor-запись x0 — phi=None невозможен
+        out_single = single.simulate(phi_base)
+        np.testing.assert_allclose(
+            np.asarray(out_single.firing_rates["exc"]),
+            np.asarray(free.firing_rates["exc"]),
+            rtol=1e-9,
+            atol=1e-11,
+        )

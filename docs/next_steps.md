@@ -10,8 +10,8 @@
 
 | Порядок | Задача | Тип | Статус |
 |---:|---|---|---|
-| 1 | `fix_first_segment` в multiple shooting | Локальное API-расширение | Запланировано |
-| 2 | Свой начальный вектор `x0` для каждого эксперимента | Расширение `MultiExperimentProblem` | Запланировано |
+| 1 | `fix_first_segment` в multiple shooting | Локальное API-расширение | Реализовано (ожидает ревью) |
+| 2 | Свой начальный вектор `x0` для каждого эксперимента | Расширение `MultiExperimentProblem` | Реализовано (ожидает ревью) |
 | 3 | Интегрирование связанной сети целиком | Архитектурный этап | Запланировано |
 
 Остальные открытые вопросы пока не трогаем.
@@ -19,6 +19,10 @@
 ---
 
 ## 1. `fix_first_segment` в multiple shooting
+
+> **Статус: реализовано (ожидает ревью).** Реализация — в
+> `neuraltide/optimization/shooting.py` (параметр `fix_first_segment`),
+> тесты — `tests/unit/test_shooting.py` (`fix_first_segment=True`).
 
 **Цель:** дать пользователю возможность закрепить начальное состояние
 первого сегмента за начальным состоянием исходной задачи вместо введения
@@ -51,6 +55,15 @@
 ---
 
 ## 2. Свой `x0` для каждого эксперимента
+
+> **Статус: реализовано (ожидает ревью).** Реализация — в
+> `neuraltide/optimization/parameters.py` (`StateLocator.experiment`,
+> `ParameterSpace.add_experiment_initial_state_entries`) и
+> `neuraltide/optimization/problem.py` (двухпроходная
+> `_materialize_initial_state` с приоритетом exp → common → default;
+> orphan-warning в `MultiExperimentProblem`), тесты —
+> `tests/unit/test_parameter_space.py` и
+> `tests/unit/test_multi_experiment_problem.py`.
 
 **Цель:** поддержать в `MultiExperimentProblem` отдельные оптимизируемые
 начальные состояния для каждого эксперимента, а не только общий `x0`.

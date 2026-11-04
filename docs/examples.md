@@ -850,3 +850,44 @@ tensor candidate-batch вне P2, несовместимость TF forward-AD �
 GradientTape в пределах одного NetworkRNN,
 балансировка — BPTT-only) см. в
 [`docs/optimization.md`](optimization.md). Бенчмарки L0–L3 — в `benchmarks/`.
+
+---
+
+## Пример 14: Общий и эксперимент-специфичный начальный вектор x0
+
+Полный пример: [`examples/example_10_multiexperiment_x0.py`](../examples/example_10_multiexperiment_x0.py)
+
+Демонстрирует `MultiExperimentProblem` с двумя экспериментами на одной сети
+(WilsonCowan + StaticSynapse от SinusoidalGenerator, одинаковые входы и
+динамика, разные начальные состояния):
+
+1. **Регистрация начального состояния**: общие записи
+   `x0/<pop>/<slot>` через `add_initial_state_entries` (участвуют во всех
+   экспериментах) и эксперимент-специфичные `x0/<experiment>/<pop>/<slot>`
+   через `add_experiment_initial_state_entries` (только у эксперимента с
+   совпадающим именем, с приоритетом над общими);
+2. **Различие траекторий**: при одном и том же phi прогоны `simulate(...,
+   experiment="control")` и `simulate(..., experiment="stim")` стартуют из
+   разных начальных состояний — exp-запись перезаписывает общий слот;
+3. **Разложение градиентов**: градиент по общему `x0` — сумма вкладов
+   экспериментов (вклад перезаписанного эксперимента равен нулю), градиент
+   по exp-specific `x0` идёт только через свой эксперимент — проверяется
+   сравнением с одноэкспериментными задачами.
+
+```python
+import neuraltide.config
+from neuraltide.optimization import (Experiment, MultiExperimentProblem,
+                                     ParameterSpace)
+
+space = ParameterSpace.from_network(network)
+space.add_initial_state_entries(network)                    # общий x0
+space.add_experiment_initial_state_entries(network, "stim")  # exp-specific x0
+
+problem = MultiExperimentProblem(network, space,
+                                 experiments=[exp_control, exp_stim])
+ev, grad = problem.value_and_gradient(phi0)
+```
+
+Подробности семантики (приоритет exp → common → default, warning'и для
+orphan-записей и внеэкспериментного контекста, ограничения sensitivities/UQ
+и shooting) см. в [`docs/optimization.md`](optimization.md).

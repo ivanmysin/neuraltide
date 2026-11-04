@@ -26,7 +26,12 @@ locator=StateLocator, shape [1, n_units] слота состояния, transfor
 вектора φ) не копируются. Сегмент k стартует из s_k: записи подставляются в
 начальное состояние сегмента (дополняя/переопределяя начальное состояние
 протокола и x0-записи базового пространства — shooting-записи имеют
-приоритет на своём сегменте).
+приоритет на своём сегменте). При ``fix_first_segment=True`` s_0 не
+вводится: записи ``x0s/0/...`` отсутствуют, сегмент 0 стартует из
+начального состояния базовой задачи (base initial state с общими
+x0-записями базового пространства), стыки 0->1, 1->2, ... сохраняются
+и φ = [φ_base; vec(s_1); ...; vec(s_{K-1})]. Параметр обратно совместим:
+по умолчанию False и прежнее поведение бит-в-бит.
 
 Duck-type API повторяет CalibrationProblem: size / pack / unpack /
 bounds_phi / evaluate / value_and_gradient / residual / validate
@@ -249,6 +254,13 @@ class MultipleShootingProblem:
             TsodyksMarkram — R = 1, U = 0, A = 0), склейка не совпадает со
             свободным прогоном, и при синапсах с состоянием выдаётся
             предупреждение.
+        fix_first_segment: фиксировать начальное состояние сегмента 0 за
+            начальным состоянием базовой задачи вместо свободной
+            shooting-переменной s_0 (по умолчанию False). При True записи
+            ``x0s/0/...`` не создаются, размерность φ уменьшается ровно на
+            число слотов первого сегмента, стыки 0->1, 1->2, ... и
+            finalize/to_single_shooting_problem не меняются (single
+            shooting стартует из base_state/общих x0 базовой задачи).
 
     Duck-type API совместим с CalibrationProblem; градиент всегда
     chain-режимом (см. модульную документацию).
@@ -261,6 +273,7 @@ class MultipleShootingProblem:
         *,
         continuity_weight: float = 1.0,
         include_syn_states: bool = True,
+        fix_first_segment: bool = False,
     ):
         if not isinstance(config, ShootingConfig):
             config = ShootingConfig(config)
@@ -273,6 +286,7 @@ class MultipleShootingProblem:
         self.config = config
         self.continuity_weight = float(continuity_weight)
         self.include_syn_states = bool(include_syn_states)
+        self.fix_first_segment = bool(fix_first_segment)
         self.network = problem.network
         if not self.include_syn_states:
             stateful = [
@@ -353,51 +367,52 @@ class MultipleShootingProblem:
         for k in range(self.n_segments):
             entries_k: List[Tuple[str, ParameterEntry]] = []
             subst_k: List[Tuple[str, ParameterEntry, bool, int]] = []
-            for pop_name in graph.dynamic_population_names:
-                pop = graph._populations[pop_name]
-                start, count = pop_offsets[pop_name]
-                for slot in range(count):
-                    shape = tf.TensorShape(pop.state_size[slot])
-                    if shape.num_elements() == 0:
-                        continue
-                    name = f"x0s/{k}/{pop_name}/{slot}"
-                    entry = ParameterEntry(
-                        full_name=name,
-                        shape=shape,
-                        transform=IdentityTransform(),
-                        group="shooting_state",
-                        trainable=True,
-                        variable=None,
-                        kind="shooting_state",
-                        locator=StateLocator(population=pop_name, slot=slot),
-                    )
-                    entries_k.append((name, entry))
-                    subst_k.append((name, entry, False, start + slot))
-            for syn_name, (start, count) in syn_offsets.items():
-                if syn_name in graph._populations:
-                    raise ValueError(
-                        "MultipleShootingProblem: имя синапса "
-                        f"'{syn_name}' совпадает с именем популяции — "
-                        "имена shooting-записей неоднозначны."
-                    )
-                model = graph._synapses[syn_name].model
-                for slot in range(count):
-                    shape = tf.TensorShape(model.state_size[slot])
-                    if shape.num_elements() == 0:
-                        continue
-                    name = f"x0s/{k}/{syn_name}/{slot}"
-                    entry = ParameterEntry(
-                        full_name=name,
-                        shape=shape,
-                        transform=IdentityTransform(),
-                        group="shooting_state",
-                        trainable=True,
-                        variable=None,
-                        kind="shooting_state",
-                        locator=StateLocator(population=syn_name, slot=slot),
-                    )
-                    entries_k.append((name, entry))
-                    subst_k.append((name, entry, True, start + slot))
+            if not (self.fix_first_segment and k == 0):
+                for pop_name in graph.dynamic_population_names:
+                    pop = graph._populations[pop_name]
+                    start, count = pop_offsets[pop_name]
+                    for slot in range(count):
+                        shape = tf.TensorShape(pop.state_size[slot])
+                        if shape.num_elements() == 0:
+                            continue
+                        name = f"x0s/{k}/{pop_name}/{slot}"
+                        entry = ParameterEntry(
+                            full_name=name,
+                            shape=shape,
+                            transform=IdentityTransform(),
+                            group="shooting_state",
+                            trainable=True,
+                            variable=None,
+                            kind="shooting_state",
+                            locator=StateLocator(population=pop_name, slot=slot),
+                        )
+                        entries_k.append((name, entry))
+                        subst_k.append((name, entry, False, start + slot))
+                for syn_name, (start, count) in syn_offsets.items():
+                    if syn_name in graph._populations:
+                        raise ValueError(
+                            "MultipleShootingProblem: имя синапса "
+                            f"'{syn_name}' совпадает с именем популяции — "
+                            "имена shooting-записей неоднозначны."
+                        )
+                    model = graph._synapses[syn_name].model
+                    for slot in range(count):
+                        shape = tf.TensorShape(model.state_size[slot])
+                        if shape.num_elements() == 0:
+                            continue
+                        name = f"x0s/{k}/{syn_name}/{slot}"
+                        entry = ParameterEntry(
+                            full_name=name,
+                            shape=shape,
+                            transform=IdentityTransform(),
+                            group="shooting_state",
+                            trainable=True,
+                            variable=None,
+                            kind="shooting_state",
+                            locator=StateLocator(population=syn_name, slot=slot),
+                        )
+                        entries_k.append((name, entry))
+                        subst_k.append((name, entry, True, start + slot))
             for name, entry in entries_k:
                 self._space.add_entry(entry)
                 self._phi_index[name] = (pos, entry.numel)
@@ -542,6 +557,8 @@ class MultipleShootingProblem:
         """
         Начальное состояние сегмента k: base_state с подставленными
         shooting-значениями s_k как дифференцируемыми функциями от φ.
+        Для фиксированного сегмента 0 (fix_first_segment=True) subst-пусто:
+        возвращается base_state без подстановок.
         """
         dtype = neuraltide.config.get_dtype()
         init_pop = list(base_state[0])
@@ -777,6 +794,9 @@ class MultipleShootingProblem:
         Инициализация shooting-состояний цепочкой сегментных прогонов
         (carry final_state → начало следующего сегмента) при параметрах
         базовой задачи. Возвращает готовый вектор φ (gaps ≈ 0).
+        Переменные для фиксированного сегмента 0
+        (fix_first_segment=True) не создаются, цепочка прогонов
+        сохраняется.
 
         Args:
             phi_base: вектор φ базового пространства; None — текущие
@@ -821,9 +841,12 @@ class MultipleShootingProblem:
     def to_single_shooting_problem(self, phi: Any) -> CalibrationProblem:
         """
         Задача single shooting на полном горизонте: base problem с
-        начальным состоянием x0 = s_0(φ) (константы). Модель не
-        изменяется: оценивайте результат при phi=None после evaluate(phi)
-        или передайте phi_base явно.
+        начальным состоянием x0 = s_0(φ) (константы); при
+        fix_first_segment=True s_0 не существует и начальным состоянием
+        остаётся base_state (начальное состояние базовой задачи с общими
+        x0-записями базового пространства). Модель не изменяется:
+        оценивайте результат при phi=None после evaluate(phi) или
+        передайте phi_base явно.
         """
         spawn = getattr(self._problem, "_spawn", None)
         if not callable(spawn):

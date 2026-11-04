@@ -874,6 +874,23 @@ class ParameterEntry:
 `names` (интроспекция, duplicate-check), но не входит в `size`, `pack`,
 `unpack`, `project`, `apply_to_model` и любые φ-операции задач.
 
+### StateLocator
+
+```python
+@dataclass
+class StateLocator:
+    population: str                  # имя популяции в NetworkGraph
+    slot: int                        # индекс тензора в state_size популяции
+    experiment: Optional[str] = None # None — common 'x0/<pop>/<slot>';
+                                     # str — exp-specific
+                                     # 'x0/<experiment>/<pop>/<slot>'
+```
+
+Адрес компоненты начального состояния в плоском списке pop-состояний сети
+(`start + slot` по `network.pop_state_offsets[population]`, не зависит от
+experiment). Классификация common vs exp-specific определяется полем
+`experiment`, а не разбором имени записи.
+
 ### ParameterSpace
 
 ```python
@@ -889,6 +906,18 @@ class ParameterSpace:
   сборка из NetworkRNN; `transforms: {full_name: Transform}` (иначе identity)
 - `add_entry(entry: ParameterEntry) -> None` — ручная регистрация
   (например, nuisance-параметров без переменной модели)
+- `add_initial_state_entries(network, include=None, transforms=None,
+  bounds=None) -> List[str]` — общие компоненты начального состояния
+  `x0/<population>/<slot>` (kind='initial_state', locator с
+  `experiment=None`); `include` — полные имена и/или кортежи
+  `(population, slot)`; без него — все слоты всех динамических популяций
+- `add_experiment_initial_state_entries(network, experiment, include=None,
+  transforms=None, bounds=None) -> List[str]` — эксперимент-специфичные
+  компоненты `x0/<experiment>/<population>/<slot>` (locator с
+  `experiment=<experiment>`; `'/'` в имени эксперимента — `ValueError`);
+  `include` дополнительно принимает кортежи `(experiment, population,
+  slot)`. Общие и exp-записи могут сосуществовать в одном реестре;
+  дубли ловятся по полному имени
 
 **Методы**:
 - `pack(values=None) -> tf.Tensor` — физические θ → плоский φ = inverse(θ)
@@ -1106,6 +1135,11 @@ class MultiExperimentProblem:
                  grad_mode="assign", held_out=None): ...
     # duck parity с CalibrationProblem: size/pack/unpack/bounds_phi/
     # evaluate/value_and_gradient/residual/simulate/validate/counters
+    # начальные состояния: общие 'x0/<pop>/<slot>' — во всех экспериментах;
+    # exp-specific 'x0/<experiment>/<pop>/<slot>' (см.
+    # ParameterSpace.add_experiment_initial_state_entries) — только у
+    # эксперимента с совпадающим именем (включая held-out в validate),
+    # с приоритетом над общими; orphan/exp-вне-контекста — UserWarning
 
 class FrozenProblem:
     # подпространство φ: free_names свободны, fixed заморожены на явных θ,
@@ -1199,7 +1233,7 @@ class SingleShootingCheck:
 
 class MultipleShootingProblem:
     def __init__(self, problem, config, *, continuity_weight=1.0,
-                 include_syn_states=True): ...
+                 include_syn_states=True, fix_first_segment=False): ...
     # duck parity с CalibrationProblem + специфичные:
     def simulate_segment(self, phi, k) -> NetworkOutput: ...
     def continuity_gaps(self, phi=None) -> Dict[str, Any]: ...
@@ -1210,6 +1244,9 @@ class MultipleShootingProblem:
 ```
 
 Residual-раскладка `r = [r_data; √w·gap_k]`, `0.5·‖r‖² == loss_ms` точно.
+`fix_first_segment=True` закрепляет сегмент 0 за начальным состоянием
+базовой задачи: записей `x0s/0/...` нет, размерность φ меньше на число
+слотов первого сегмента, стыки и `finalize` сохраняются.
 `BrunelFokkerPlanck` не поддерживается (`NotImplementedError`).
 
 ### Стратегии и расписания (P1)

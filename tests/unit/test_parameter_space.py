@@ -19,6 +19,7 @@ import neuraltide.config
 from neuraltide.core.network import NetworkGraph, NetworkRNN
 from neuraltide.integrators import EulerIntegrator
 from neuraltide.optimization import (
+    IdentityTransform,
     LogTransform,
     LogitTransform,
     ParameterEntry,
@@ -408,6 +409,28 @@ class TestInitialStateEntries:
         space2.add_initial_state_entries(network, include={("exc", 0)})
         assert space2.tensor_entry_names == ["x0/exc/0"]
 
+    def test_include_partial_match_registers_matched(self, network):
+        """Частично совпавший include-набор регистрирует совпавшие имена."""
+        space = ParameterSpace.from_network(network)
+        registered = space.add_initial_state_entries(
+            network, include={"x0/inh/0", ("exc", 0)}
+        )
+        assert registered == ["x0/exc/0", "x0/inh/0"]
+
+    def test_include_unknown_name_raises(self, network):
+        """Полностью неизвестный include — честный отказ до регистрации."""
+        space = ParameterSpace.from_network(network)
+        with pytest.raises(ValueError, match="include"):
+            space.add_initial_state_entries(network, include={"x0/nope/0"})
+        # реестр не мутирован частичной регистрацией
+        assert space.tensor_entry_names == []
+
+    def test_include_mixed_known_and_unknown_raises(self, network):
+        space = ParameterSpace.from_network(network)
+        with pytest.raises(ValueError, match="x0/nope/0"):
+            space.add_initial_state_entries(network, include={"x0/exc/0", "x0/nope/0"})
+        assert space.tensor_entry_names == []
+
     def test_include_unknown_item_raises(self, network):
         space = ParameterSpace.from_network(network)
         with pytest.raises(ValueError, match="include"):
@@ -525,6 +548,211 @@ class TestInitialStateEntries:
             )
         with pytest.raises(ValueError, match="StateLocator"):
             ParameterEntry(full_name="x", shape=(1,), kind="shooting_state")
+
+
+class TestExperimentInitialStateEntries:
+    """Пункт 2 docs/next_steps.md: эксперимент-специфичные x0
+    'x0/<experiment>/<population>/<slot>' рядом с общими 'x0/<pop>/<slot>'."""
+
+    def test_creates_experiment_entries_with_locator(self, network):
+        space = ParameterSpace.from_network(network)
+        registered = space.add_experiment_initial_state_entries(network, "exp1")
+        assert registered == ["x0/exp1/exc/0", "x0/exp1/inh/0"]
+        assert space.names == EXPECTED_NAMES + ["x0/exp1/exc/0", "x0/exp1/inh/0"]
+        entry = space.entries["x0/exp1/exc/0"]
+        assert entry.kind == "initial_state"
+        assert entry.group == "initial_state"
+        assert entry.trainable is True
+        assert entry.variable is None
+        assert entry.shape == tf.TensorShape([1, 2])
+        assert entry.numel == 2
+        assert entry.locator == StateLocator(
+            population="exc", slot=0, experiment="exp1"
+        )
+        assert space.entries["x0/exp1/inh/0"].shape == tf.TensorShape([1, 1])
+
+    def test_common_locator_defaults_to_none_experiment(self, network):
+        """Классификация common vs exp — по полю locator.experiment."""
+        space = ParameterSpace.from_network(network)
+        space.add_initial_state_entries(network)
+        entry = space.entries["x0/exc/0"]
+        assert entry.locator == StateLocator("exc", 0)
+        assert entry.locator.experiment is None
+
+    def test_experiment_name_with_slash_raises(self, network):
+        space = ParameterSpace.from_network(network)
+        with pytest.raises(ValueError, match="must not contain"):
+            space.add_experiment_initial_state_entries(network, "exp/1")
+
+    def test_empty_experiment_name_raises(self, network):
+        space = ParameterSpace.from_network(network)
+        with pytest.raises(ValueError, match="non-empty"):
+            space.add_experiment_initial_state_entries(network, "")
+
+    @pytest.mark.parametrize("bad", [None, 42, ("exp1",)])
+    def test_non_string_experiment_name_raises(self, network, bad):
+        """None/нестроковый experiment — понятный TypeError до '/' in."""
+        space = ParameterSpace.from_network(network)
+        with pytest.raises(TypeError, match="must be a string"):
+            space.add_experiment_initial_state_entries(network, bad)
+
+    def test_include_full_exp_names(self, network):
+        space = ParameterSpace.from_network(network)
+        registered = space.add_experiment_initial_state_entries(
+            network, "exp1", include={"x0/exp1/inh/0"}
+        )
+        assert registered == ["x0/exp1/inh/0"]
+        assert space.tensor_entry_names == ["x0/exp1/inh/0"]
+
+    def test_include_population_slot_tuples(self, network):
+        space = ParameterSpace.from_network(network)
+        registered = space.add_experiment_initial_state_entries(
+            network, "exp1", include={("exc", 0)}
+        )
+        assert registered == ["x0/exp1/exc/0"]
+
+    def test_include_experiment_population_slot_tuples(self, network):
+        space = ParameterSpace.from_network(network)
+        registered = space.add_experiment_initial_state_entries(
+            network, "exp1", include={("exp1", "inh", 0)}
+        )
+        assert registered == ["x0/exp1/inh/0"]
+
+    def test_include_tuple_with_other_experiment_raises(self, network):
+        space = ParameterSpace.from_network(network)
+        with pytest.raises(ValueError, match="experiment"):
+            space.add_experiment_initial_state_entries(
+                network, "exp1", include={("exp2", "exc", 0)}
+            )
+
+    def test_include_unknown_item_raises(self, network):
+        space = ParameterSpace.from_network(network)
+        with pytest.raises(ValueError, match="include"):
+            space.add_experiment_initial_state_entries(network, "exp1", include={42})
+
+    def test_include_partial_match_registers_matched(self, network):
+        """Частично совпавший include-набор регистрирует совпавшие имена."""
+        space = ParameterSpace.from_network(network)
+        registered = space.add_experiment_initial_state_entries(
+            network, "exp1", include={("exc", 0), ("exp1", "inh", 0)}
+        )
+        assert registered == ["x0/exp1/exc/0", "x0/exp1/inh/0"]
+
+    def test_include_unknown_exp_name_raises(self, network):
+        """Полностью неизвестный include — честный отказ до регистрации."""
+        space = ParameterSpace.from_network(network)
+        with pytest.raises(ValueError, match="include"):
+            space.add_experiment_initial_state_entries(
+                network, "exp1", include={"x0/exp1/nope/0"}
+            )
+        assert space.tensor_entry_names == []
+
+    def test_include_mixed_known_and_unknown_raises(self, network):
+        space = ParameterSpace.from_network(network)
+        with pytest.raises(ValueError, match="x0/exp1/nope/0"):
+            space.add_experiment_initial_state_entries(
+                network, "exp1", include={("exc", 0), "x0/exp1/nope/0"}
+            )
+        assert space.tensor_entry_names == []
+
+    def test_common_and_experiment_entries_coexist(self, network):
+        space = ParameterSpace.from_network(network)
+        common = space.add_initial_state_entries(network)
+        exp = space.add_experiment_initial_state_entries(network, "exp1")
+        assert common == ["x0/exc/0", "x0/inh/0"]
+        assert exp == ["x0/exp1/exc/0", "x0/exp1/inh/0"]
+        assert space.names == EXPECTED_NAMES + common + exp
+        common_entry = space.entries["x0/exc/0"]
+        exp_entry = space.entries["x0/exp1/exc/0"]
+        assert common_entry.locator.experiment is None
+        assert exp_entry.locator.experiment == "exp1"
+        assert common_entry.locator.population == exp_entry.locator.population
+        assert common_entry.locator.slot == exp_entry.locator.slot
+
+    def test_two_experiments_coexist(self, network):
+        space = ParameterSpace.from_network(network)
+        space.add_experiment_initial_state_entries(network, "exp1")
+        space.add_experiment_initial_state_entries(network, "exp2")
+        assert space.tensor_entry_names == [
+            "x0/exp1/exc/0",
+            "x0/exp1/inh/0",
+            "x0/exp2/exc/0",
+            "x0/exp2/inh/0",
+        ]
+
+    def test_duplicate_experiment_registration_raises(self, network):
+        space = ParameterSpace.from_network(network)
+        space.add_experiment_initial_state_entries(network, "exp1")
+        with pytest.raises(ValueError, match="duplicate"):
+            space.add_experiment_initial_state_entries(network, "exp1")
+
+    def test_transforms_and_bounds_applied_by_exp_name(self, network):
+        space = ParameterSpace.from_network(network)
+        space.add_experiment_initial_state_entries(
+            network,
+            "exp1",
+            transforms={"x0/exp1/exc/0": LogTransform()},
+            bounds={"x0/exp1/exc/0": (0.01, 10.0)},
+        )
+        entry = space.entries["x0/exp1/exc/0"]
+        assert isinstance(entry.transform, LogTransform)
+        assert entry.min == pytest.approx(0.01)
+        assert entry.max == pytest.approx(10.0)
+        other = space.entries["x0/exp1/inh/0"]
+        assert isinstance(other.transform, IdentityTransform)
+        assert other.min is None and other.max is None
+
+    def test_pack_unpack_roundtrip_with_experiment_x0(self, network):
+        space = ParameterSpace.from_network(network)
+        space.add_experiment_initial_state_entries(network, "exp1")
+        values = {
+            name: (
+                entry.variable.numpy()
+                if entry.variable is not None
+                else np.full(entry.shape, 0.3)
+            )
+            for name, entry in space.entries.items()
+        }
+        phi = space.pack(values)
+        assert phi.shape == (space.size,)
+        theta = space.unpack(phi)
+        np.testing.assert_allclose(
+            theta["x0/exp1/exc/0"].numpy(), [[0.3, 0.3]], rtol=1e-6, atol=1e-8
+        )
+        np.testing.assert_allclose(
+            theta["x0/exp1/inh/0"].numpy(), [[0.3]], rtol=1e-6, atol=1e-8
+        )
+
+    def test_unknown_transforms_and_bounds_warn(self, network):
+        space = ParameterSpace.from_network(network)
+        with pytest.warns(UserWarning, match="unknown"):
+            space.add_experiment_initial_state_entries(
+                network, "exp1", transforms={"x0/exp1/nope/0": LogTransform()}
+            )
+        space2 = ParameterSpace.from_network(network)
+        with pytest.warns(UserWarning, match="unknown"):
+            space2.add_experiment_initial_state_entries(
+                network, "exp1", bounds={"x0/exp1/nope/0": (0.0, 1.0)}
+            )
+
+    def test_entries_are_trainable_and_counted_in_phi(self, network):
+        """C8: exp-записи trainable по умолчанию и входят в φ."""
+        space = ParameterSpace.from_network(network)
+        base_size = space.size
+        space.add_experiment_initial_state_entries(network, "exp1")
+        assert "x0/exp1/exc/0" in space.trainable_names
+        assert "x0/exp1/inh/0" in space.trainable_names
+        assert list(space.phi_entries)[-2:] == ["x0/exp1/exc/0", "x0/exp1/inh/0"]
+        assert space.size == base_size + 3  # exc [1, 2] + inh [1, 1]
+        values = {
+            name: np.full(space.shape(name), 0.4) for name in space.trainable_names
+        }
+        phi = space.pack(values)
+        assert phi.shape == (space.size,)
+        theta = space.unpack(phi)
+        np.testing.assert_allclose(
+            theta["x0/exp1/exc/0"].numpy(), [[0.4, 0.4]], atol=1e-6
+        )
 
 
 class TestTrainableExclusion:

@@ -21,8 +21,12 @@ Uncertainty quantification этапа P2 (дорожная карта, разд�
   Cholesky с нарастающим jitter и флагом pd; eigvals/std; маргинальные
   интервалы по именам ParameterSpace (в физических θ и в φ-координатах);
 - bootstrap_experiments — для MultiExperimentProblem: пары-bootstrap на
-  уровне экспериментов (подвыборка с повторением, counts весов в draw);
-  для одиночной CalibrationProblem: байесовский bootstrap случайных весов
+  уровне экспериментов (подвыборка с повторением, counts весов в draw;
+  копии draw получают уникальные служебные имена
+  'boot_{draw}_{position}_{original_name}', исходные Experiment не
+  мутируют; пространства с exp-specific x0-записями отклоняются — такие
+  записи на служебные имена не переносятся); для одиночной
+  CalibrationProblem: байесовский bootstrap случайных весов
   (w ~ Exp(1) на элементах невязок, loss_draw = 0.5·Σ wᵢ rᵢ²). Каждая draw
   стартует с явно захваченного phi_ref — мутация модели чужими рефитами
   не используется; evaluator — callable(problem, phi0) или строковое имя
@@ -52,7 +56,7 @@ ParameterSpace (``phi_entries``/``trainable_names``): ручные non-trainable
 
 import time
 import warnings
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple
 
 import numpy as np
@@ -1290,6 +1294,38 @@ def _collect_theta_samples(space, phi_samples: np.ndarray) -> Dict[str, np.ndarr
     return {name: np.stack(values, axis=0) for name, values in columns.items()}
 
 
+def _boot_experiment_name(draw: int, position: int, original: str) -> str:
+    """
+    Уникальное служебное имя bootstrap-копии Experiment.
+
+    Подвыборка с повторением обязана давать draw с разными именами —
+    иначе валидация MultiExperimentProblem отклонила бы такую draw
+    (эксперименты с одним именем делили бы exp-specific x0-записи этого
+    имени). '/' в исходном имени заменяется на '_': exp-specific
+    x0-записи кодируются как 'x0/<experiment>/<pop>/<slot>', слэш в имени
+    эксперимента ломал бы это соглашение.
+    """
+    return f"boot_{int(draw)}_{int(position)}_{str(original).replace('/', '_')}"
+
+
+def _exp_specific_x0_names(space) -> List[str]:
+    """
+    Полные имена exp-specific x0-записей ParameterSpace: trainable-записи
+    kind 'initial_state'/'shooting_state' с locator.experiment != None.
+    Пустой список — таких записей нет (или space недоступен).
+    """
+    if space is None:
+        return []
+    names = []
+    for name, entry in getattr(space, "phi_entries", {}).items():
+        if getattr(entry, "kind", None) not in ("initial_state", "shooting_state"):
+            continue
+        locator = getattr(entry, "locator", None)
+        if locator is not None and getattr(locator, "experiment", None) is not None:
+            names.append(str(name))
+    return sorted(names)
+
+
 def bootstrap_experiments(
     problem,
     *,
@@ -1304,9 +1340,15 @@ def bootstrap_experiments(
 
     - MultiExperimentProblem (атрибут experiments): пары-bootstrap на
       уровне экспериментов — каждая draw строит задачу над подвыборкой
-      experiments с повторением (counts подвыборки — в weights draw);
-      корректность покрытия опирается на приблизительную iid-ность
-      экспериментов;
+      experiments с повторением (counts подвыборки — в weights draw).
+      Копии в draw получают уникальные служебные имена
+      'boot_{draw}_{position}_{original_name}' ('/' в имени заменяется на
+      '_', чтобы не ломать соглашение 'x0/<experiment>/<pop>/<slot>');
+      исходные Experiment не мутируются (dataclasses.replace). Проблема
+      переноса имён: exp-specific x0-записи исходных имён на служебные
+      не переносятся, поэтому пространства с такими записями отклоняются
+      ValueError до цикла draw. Корректность покрытия опирается на
+      приблизительную iid-ность экспериментов;
     - иначе (одиночная CalibrationProblem): байесовский bootstrap
       случайных весов — w ~ Exp(1) на элементах невязок, потеря draw
       0.5·Σ wᵢ rᵢ² (через _WeightedObjective-представление поверх
@@ -1334,8 +1376,18 @@ def bootstrap_experiments(
             f"bootstrap_experiments: n_draws должен быть >= 1, got {n_draws}."
         )
     evaluator_fn, evaluator_name = _resolve_evaluator(evaluator)
-    phi0 = _pack_current(problem, "bootstrap_experiments")
     space = getattr(problem, "parameter_space", None)
+    exp_x0_names = _exp_specific_x0_names(space)
+    if exp_x0_names:
+        raise ValueError(
+            "bootstrap_experiments: эксперимент-специфичные x0-записи "
+            f"{exp_x0_names} не переносятся на bootstrap-копии экспериментов "
+            "(каждая draw получает уникальные служебные имена "
+            "'boot_{draw}_{position}_{original_name}'), поэтому bootstrap "
+            "для пространств с exp-specific x0 пока не поддержан — "
+            "используйте ParameterSpace без таких записей."
+        )
+    phi0 = _pack_current(problem, "bootstrap_experiments")
 
     experiments = getattr(problem, "experiments", None)
     scheme = "experiments" if experiments else "random-weights"
@@ -1370,10 +1422,19 @@ def bootstrap_experiments(
             from neuraltide.optimization.problem import MultiExperimentProblem
 
             idx = rng.integers(0, len(experiments), size=len(experiments))
+            # Подвыборка с повторением: копии с уникальными служебными
+            # именами (replace — исходные Experiment не мутируют).
+            boot_experiments = [
+                replace(
+                    experiments[int(j)],
+                    name=_boot_experiment_name(i, k, experiments[int(j)].name),
+                )
+                for k, j in enumerate(idx)
+            ]
             boot = MultiExperimentProblem(
                 problem.network,
                 problem.parameter_space,
-                [experiments[int(j)] for j in idx],
+                boot_experiments,
                 grad_mode=getattr(problem, "grad_mode", "assign"),
             )
             weights.append(

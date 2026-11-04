@@ -8,8 +8,12 @@
 0.5·||r||² == loss; компоненты с префиксом '{exp}/'; held-out не входят
 в evaluate и доступны только через validate; simulate(phi, experiment);
 счётчики n_forward/n_gradient; тот же duck-type API (size/pack/unpack/
-bounds_phi).
+bounds_phi); эксперимент-специфичные x0-записи 'x0/<experiment>/<pop>/
+<slot>': приоритет над common, изоляция градиентов, transforms/bounds,
+FrozenProblem, held-out, осиротевшие эксперименты, non-trainable записи.
 """
+
+import warnings
 
 import numpy as np
 import pytest
@@ -19,11 +23,15 @@ import neuraltide.config
 from neuraltide.optimization import (
     CalibrationProblem,
     Experiment,
+    FrozenProblem,
     MultiExperimentProblem,
     ObservationSpec,
+    OptimizationResult,
     ParameterEntry,
     ResidualLoss,
+    ScaledSigmoidTransform,
 )
+from neuraltide.optimization import problem as problem_module
 
 
 def _loss(target, sigma=2.0):
@@ -124,6 +132,36 @@ class TestDuckApi:
         with pytest.raises(ValueError, match="objective"):
             MultiExperimentProblem(
                 problem.network, problem.parameter_space, [exp1, bad]
+            )
+
+    def test_duplicate_experiment_names_raise(self, multi):
+        """Два одинаковых имени делили бы exp-specific x0 молча — отказ."""
+        problem, _, experiments = multi
+        exp1 = experiments[0]
+        with pytest.raises(ValueError, match="duplicate"):
+            MultiExperimentProblem(
+                problem.network, problem.parameter_space, [exp1, exp1]
+            )
+
+    def test_train_held_out_name_collision_raises(self, multi):
+        problem, _, experiments = multi
+        held = experiments[2]
+        with pytest.raises(ValueError, match="held-out"):
+            MultiExperimentProblem(
+                problem.network, problem.parameter_space, [held], held_out=[held]
+            )
+
+    def test_duplicate_held_out_names_raise(self, multi):
+        """Дубли внутри held_out затирали бы компоненты validate — отказ."""
+        problem, _, experiments = multi
+        exp1 = experiments[0]
+        held = experiments[2]
+        with pytest.raises(ValueError, match="duplicate held-out"):
+            MultiExperimentProblem(
+                problem.network,
+                problem.parameter_space,
+                [exp1],
+                held_out=[held, held],
             )
 
 
@@ -283,3 +321,419 @@ class TestNonTrainableEntry:
         assert np.asarray(grad).shape == (problem.size,)
         lower, upper = problem.bounds_phi()
         assert lower.shape == upper.shape == (problem.size,)
+
+
+# ---------------------------------------------------------------------------
+# Эксперимент-специфичные x0 (docs/next_steps.md, п. 2)
+# ---------------------------------------------------------------------------
+
+
+def _model_values(space):
+    """θ-значения trainable model_var-записей из текущих переменных."""
+    return {
+        name: entry.variable.numpy()
+        for name, entry in space.entries.items()
+        if entry.variable is not None
+    }
+
+
+def _x0_phi(space, extra_values):
+    """φ из текущих model-параметров + явных значений x0-записей."""
+    values = _model_values(space)
+    values.update(extra_values)
+    return np.asarray(space.pack(values), dtype=np.float64)
+
+
+def _same_experiments(network, t_seq, inputs, target, names=("exp1", "exp2")):
+    return [
+        Experiment(name=n, t_sequence=t_seq, inputs=inputs, objective=_loss(target))
+        for n in names
+    ]
+
+
+def _run_with_slot(network, t_seq, inputs, slot_value):
+    """Ручный прогон сети со slot_value в слоте 0 популяции exc."""
+    pop0, syn0 = network.get_initial_state()
+    state = (
+        [tf.constant([[slot_value]], dtype=pop0[0].dtype)] + list(pop0[1:]),
+        list(syn0),
+    )
+    return network(t_seq, inputs=inputs, initial_state=state)
+
+
+class TestExperimentSpecificX0:
+    """Материализация 'x0/<experiment>/<pop>/<slot>' в MultiExperimentProblem."""
+
+    @staticmethod
+    def _build(l0_factory, experiments=("exp2",), common=True):
+        neuraltide.config.set_dtype(tf.float64)
+        network, space, t_seq, inputs, loss = l0_factory()
+        if common:
+            space.add_initial_state_entries(network)
+        for name in experiments:
+            space.add_experiment_initial_state_entries(network, name)
+        return network, space, t_seq, inputs, loss
+
+    # -- приоритет: common заполняет слот, exp-запись перезаписывает ----
+    def test_common_then_experiment_priority(self, l0_factory):
+        network, space, t_seq, inputs, _ = self._build(l0_factory)
+        values = _model_values(space)
+        values["x0/exc/0"] = [[0.7]]
+        values["x0/exp2/exc/0"] = [[0.9]]
+        phi0 = np.asarray(space.pack(values), dtype=np.float64)
+        target = network(t_seq, inputs=inputs).firing_rates["exc"]
+        problem = MultiExperimentProblem(
+            network, space, _same_experiments(network, t_seq, inputs, target)
+        )
+
+        out1 = problem.simulate(phi0, experiment="exp1")
+        out2 = problem.simulate(phi0, experiment="exp2")
+        ref_common = _run_with_slot(network, t_seq, inputs, 0.7)
+        ref_exp = _run_with_slot(network, t_seq, inputs, 0.9)
+        # exp1 — common x0; exp2 — exp-specific x0 (перезаписал слот)
+        np.testing.assert_allclose(
+            out1.firing_rates["exc"], ref_common.firing_rates["exc"], rtol=1e-10
+        )
+        np.testing.assert_allclose(
+            out2.firing_rates["exc"], ref_exp.firing_rates["exc"], rtol=1e-10
+        )
+        assert not np.allclose(out1.firing_rates["exc"], out2.firing_rates["exc"])
+
+        # exp2-запись перезаписала слот: common-координата не влияет на exp2
+        values_common = dict(values)
+        values_common["x0/exc/0"] = [[0.2]]
+        phi0_b = np.asarray(space.pack(values_common), dtype=np.float64)
+        out2_b = problem.simulate(phi0_b, experiment="exp2")
+        np.testing.assert_allclose(
+            out2_b.firing_rates["exc"], out2.firing_rates["exc"], rtol=1e-10
+        )
+        out1_b = problem.simulate(phi0_b, experiment="exp1")
+        assert not np.allclose(out1_b.firing_rates["exc"], out1.firing_rates["exc"])
+
+        # FD по обеим x0-координатам согласован с value_and_gradient
+        _, grad = problem.value_and_gradient(phi0)
+        names = space.trainable_names
+        for name in ("x0/exc/0", "x0/exp2/exc/0"):
+            i = names.index(name)
+            step = np.zeros_like(phi0)
+            step[i] = 1e-5
+            fd = (
+                problem.evaluate(phi0 + step).loss - problem.evaluate(phi0 - step).loss
+            ) / (2e-5)
+            assert fd == pytest.approx(np.asarray(grad)[i], rel=1e-5, abs=1e-8)
+
+    # -- изоляция градиентов --------------------------------------------
+    def test_gradient_isolation_between_experiments(self, l0_factory):
+        network, space, t_seq, inputs, _ = self._build(l0_factory)
+        values = _model_values(space)
+        values["x0/exc/0"] = [[0.6]]
+        values["x0/exp2/exc/0"] = [[0.9]]
+        phi0 = np.asarray(space.pack(values), dtype=np.float64)
+        target = network(t_seq, inputs=inputs).firing_rates["exc"]
+
+        def build(target1):
+            exps = [
+                Experiment(
+                    name="exp1",
+                    t_sequence=t_seq,
+                    inputs=inputs,
+                    objective=_loss(target1),
+                ),
+                Experiment(
+                    name="exp2",
+                    t_sequence=t_seq,
+                    inputs=inputs,
+                    objective=_loss(target),
+                ),
+            ]
+            return MultiExperimentProblem(network, space, exps)
+
+        problem = build(target)
+        _, grad = problem.value_and_gradient(phi0)
+        grad = np.asarray(grad, dtype=np.float64)
+        # изменение таргета exp1 не меняет градиент по exp2-x0,
+        # но меняет common-градиент (common участвует в обоих экспериментах)
+        problem_b = build(target * 3.0)
+        _, grad_b = problem_b.value_and_gradient(phi0)
+        grad_b = np.asarray(grad_b, dtype=np.float64)
+        names = space.trainable_names
+        i_common = names.index("x0/exc/0")
+        i_exp2 = names.index("x0/exp2/exc/0")
+        assert grad[i_exp2] != 0.0
+        assert grad_b[i_exp2] == pytest.approx(grad[i_exp2], rel=1e-10)
+        assert not np.isclose(grad_b[i_common], grad[i_common])
+
+        # градиент по exp2-x0 против FD суммарной потери
+        step = np.zeros_like(phi0)
+        step[i_exp2] = 1e-5
+        fd = (
+            problem.evaluate(phi0 + step).loss - problem.evaluate(phi0 - step).loss
+        ) / (2e-5)
+        assert fd == pytest.approx(grad[i_exp2], rel=1e-5, abs=1e-8)
+
+    # -- φ-операции согласованы (pack/unpack/bounds_phi/project) ---------
+    def test_phi_ops_consistent_with_experiment_entries(self, l0_factory):
+        network, space, t_seq, inputs, _ = self._build(l0_factory)
+        entry = space.entries["x0/exp2/exc/0"]
+        entry.transform = ScaledSigmoidTransform(min=0.0, max=2.0)
+        entry.min, entry.max = 0.3, 1.5
+        values = _model_values(space)
+        values["x0/exc/0"] = [[0.7]]
+        values["x0/exp2/exc/0"] = [[0.9]]
+        phi0 = np.asarray(space.pack(values), dtype=np.float64)
+
+        assert space.size == 5  # 3 model + common x0 + exp-specific x0
+        theta = space.unpack(phi0)
+        assert set(theta) == set(space.phi_entries)
+        assert np.asarray(theta["x0/exp2/exc/0"]).item() == pytest.approx(
+            0.9, abs=1e-12
+        )
+        # round-trip pack(unpack(phi)) == phi
+        np.testing.assert_allclose(
+            np.asarray(space.pack(theta)), phi0, rtol=1e-10, atol=1e-12
+        )
+        # bounds_phi: границы exp-координаты — inverse физических (0.3, 1.5)
+        names = space.trainable_names
+        i_exp = names.index("x0/exp2/exc/0")
+        problem = MultiExperimentProblem(
+            network,
+            space,
+            _same_experiments(
+                network,
+                t_seq,
+                inputs,
+                network(t_seq, inputs=inputs).firing_rates["exc"],
+            ),
+        )
+        assert problem.size == space.size
+        lower, upper = problem.bounds_phi()
+        assert lower.shape == upper.shape == (problem.size,)
+        assert lower[i_exp] == pytest.approx(
+            float(entry.transform.inverse(tf.constant(0.3, tf.float64)))
+        )
+        assert upper[i_exp] == pytest.approx(
+            float(entry.transform.inverse(tf.constant(1.5, tf.float64)))
+        )
+        # project: θ клиппится в физические границы exp-записи
+        phi_far = phi0.copy()
+        phi_far[i_exp] = 5.0  # forward = 2·sigmoid(5) ≈ 1.987 > 1.5
+        phi_proj = np.asarray(space.project(phi_far), dtype=np.float64)
+        theta_proj = space.unpack(phi_proj)
+        assert np.asarray(theta_proj["x0/exp2/exc/0"]).item() == pytest.approx(
+            1.5, abs=1e-12
+        )
+        # внутренние точки project не двигает
+        phi_in = np.asarray(space.project(phi0), dtype=np.float64)
+        np.testing.assert_allclose(phi_in, phi0, rtol=1e-10, atol=1e-12)
+
+    # -- transform на exp-записи в value_and_gradient --------------------
+    @pytest.mark.parametrize("grad_mode", ["assign", "chain"])
+    def test_experiment_x0_transform_matches_fd(self, l0_factory, grad_mode):
+        neuraltide.config.set_dtype(tf.float64)
+        network, space, t_seq, inputs, _ = l0_factory()
+        space.add_experiment_initial_state_entries(
+            network,
+            "exp2",
+            transforms={"x0/exp2/exc/0": ScaledSigmoidTransform(min=0.0, max=2.0)},
+        )
+        phi0 = _x0_phi(space, {"x0/exp2/exc/0": [[0.9]]})
+        target = network(t_seq, inputs=inputs).firing_rates["exc"]
+        problem = MultiExperimentProblem(
+            network,
+            space,
+            _same_experiments(network, t_seq, inputs, target),
+            grad_mode=grad_mode,
+        )
+        _, grad = problem.value_and_gradient(phi0)
+        i_exp = space.trainable_names.index("x0/exp2/exc/0")
+        assert np.asarray(grad)[i_exp] != 0.0
+        step = np.zeros_like(phi0)
+        step[i_exp] = 1e-5
+        fd = (
+            problem.evaluate(phi0 + step).loss - problem.evaluate(phi0 - step).loss
+        ) / (2e-5)
+        assert fd == pytest.approx(np.asarray(grad)[i_exp], rel=1e-5, abs=1e-8)
+
+    # -- FrozenProblem с exp-именами --------------------------------------
+    def test_frozen_problem_with_experiment_names(self, l0_factory):
+        network, space, t_seq, inputs, _ = self._build(
+            l0_factory, experiments=("exp2",), common=False
+        )
+        values = _model_values(space)
+        values["x0/exp2/exc/0"] = [[0.9]]
+        phi0 = np.asarray(space.pack(values), dtype=np.float64)
+        target = network(t_seq, inputs=inputs).firing_rates["exc"]
+        problem = MultiExperimentProblem(
+            network, space, _same_experiments(network, t_seq, inputs, target)
+        )
+        names = space.trainable_names
+        i_exp = names.index("x0/exp2/exc/0")
+
+        # 1) exp-запись свободна, model-параметры заморожены на текущих
+        frozen = FrozenProblem(problem, free_names=["x0/exp2/exc/0"])
+        assert frozen.size == 1
+        assert frozen.free_names == ["x0/exp2/exc/0"]
+        phi_free = phi0[[i_exp]]
+        ev, grad = frozen.value_and_gradient(phi_free)
+        assert np.asarray(grad).shape == (1,)
+        # identity transform: composed-точка совпадает с phi0
+        assert ev.loss == pytest.approx(problem.evaluate(phi0).loss, rel=1e-12)
+        fd = (
+            frozen.evaluate(phi_free + 1e-5).loss
+            - frozen.evaluate(phi_free - 1e-5).loss
+        ) / (2e-5)
+        assert fd == pytest.approx(np.asarray(grad)[0], rel=1e-5, abs=1e-8)
+
+        # 2) exp-запись fixed на явном значении, model-параметры свободны
+        frozen2 = FrozenProblem(problem, fixed={"x0/exp2/exc/0": 0.55})
+        assert frozen2.size == 3
+        phi_model = np.delete(phi0, i_exp)
+        full = phi0.copy()
+        full[i_exp] = 0.55
+        assert frozen2.evaluate(phi_model).loss == pytest.approx(
+            problem.evaluate(full).loss, rel=1e-12
+        )
+        _, grad2 = frozen2.value_and_gradient(phi_model)
+        assert np.asarray(grad2).shape == (3,)
+        h = 1e-5
+        for i in range(3):
+            step = np.zeros_like(phi_model)
+            step[i] = h
+            fd = (
+                frozen2.evaluate(phi_model + step).loss
+                - frozen2.evaluate(phi_model - step).loss
+            ) / (2 * h)
+            assert fd == pytest.approx(np.asarray(grad2)[i], rel=1e-5, abs=1e-8)
+
+        # 3) неизвестное exp-имя — понятная ошибка
+        with pytest.raises(ValueError, match="unknown free"):
+            FrozenProblem(problem, free_names=["x0/ghost/exc/0"])
+
+    # -- held-out получает exp-specific x0 --------------------------------
+    def test_held_out_receives_experiment_specific_x0(self, l0_factory):
+        network, space, t_seq, inputs, _ = self._build(
+            l0_factory, experiments=("exp2", "held")
+        )
+        values = _model_values(space)
+        values["x0/exc/0"] = [[0.7]]
+        values["x0/exp2/exc/0"] = [[0.9]]
+        values["x0/held/exc/0"] = [[0.4]]
+        phi0 = np.asarray(space.pack(values), dtype=np.float64)
+        target = network(t_seq, inputs=inputs).firing_rates["exc"]
+        exps = _same_experiments(network, t_seq, inputs, target, names=("exp1", "exp2"))
+        held = Experiment(
+            name="held", t_sequence=t_seq, inputs=inputs, objective=_loss(target)
+        )
+        problem = MultiExperimentProblem(network, space, exps, held_out=[held])
+
+        val = problem.validate(phi0)
+        # held-out прогон использует held-x0 (0.4), а не common (0.7)
+        space.apply_to_model(space.unpack(phi0))
+        ref_held = _run_with_slot(network, t_seq, inputs, 0.4)
+        ref_common = _run_with_slot(network, t_seq, inputs, 0.7)
+        assert val["held"] == pytest.approx(
+            float(_loss(target)(ref_held, network)), rel=1e-10
+        )
+        assert val["held"] != pytest.approx(
+            float(_loss(target)(ref_common, network)), rel=1e-10
+        )
+
+    # -- осиротевшие exp-записи: UserWarning при каждом конструировании ----
+    def test_orphaned_experiment_records_warn(self, l0_factory):
+        neuraltide.config.set_dtype(tf.float64)
+        network, space, t_seq, inputs, loss = l0_factory()
+        space.add_experiment_initial_state_entries(network, "ghost")
+        exp1 = Experiment(name="exp1", t_sequence=t_seq, inputs=inputs, objective=loss)
+        with pytest.warns(UserWarning, match="ghost"):
+            MultiExperimentProblem(network, space, [exp1])
+        # совпадающие имена не предупреждают
+        space2 = space  # тот же реестр, но эксперимент с именем 'ghost'
+        exp_ghost = Experiment(
+            name="ghost", t_sequence=t_seq, inputs=inputs, objective=loss
+        )
+        with warnings.catch_warnings(record=True) as record:
+            warnings.simplefilter("always")
+            MultiExperimentProblem(network, space2, [exp_ghost])
+        assert not any("ghost" in str(w.message) for w in record)
+
+    # -- non-trainable exp-запись вне φ не ломает duck-API -----------------
+    def test_nontrainable_experiment_entry_outside_phi(self, l0_factory):
+        neuraltide.config.set_dtype(tf.float64)
+        network, space, t_seq, inputs, loss = l0_factory()
+        space.add_experiment_initial_state_entries(network, "exp2")
+        space.entries["x0/exp2/exc/0"].trainable = False
+        target = network(t_seq, inputs=inputs).firing_rates["exc"]
+        problem = MultiExperimentProblem(
+            network, space, _same_experiments(network, t_seq, inputs, target)
+        )
+        assert "x0/exp2/exc/0" in problem.parameter_space.entries
+        assert "x0/exp2/exc/0" not in problem.parameter_space.phi_entries
+        assert problem.size == 3
+        phi0 = np.asarray(problem.pack(), dtype=np.float64)
+        theta = problem.unpack(phi0)
+        assert "x0/exp2/exc/0" not in theta
+        with warnings.catch_warnings(record=True) as record:
+            warnings.simplefilter("always")
+            ev, grad = problem.value_and_gradient(phi0)
+        # non-trainable exp-запись не предупреждает и не материализуется
+        assert not any("экспериментного контекста" in str(w.message) for w in record)
+        assert np.asarray(grad).shape == (3,)
+        # exp1 и exp2 — одинаковые траектории (exp-x0 не применён)
+        out1 = problem.simulate(phi0, experiment="exp1")
+        out2 = problem.simulate(phi0, experiment="exp2")
+        np.testing.assert_allclose(
+            out1.firing_rates["exc"], out2.firing_rates["exc"], rtol=1e-10
+        )
+        lower, upper = problem.bounds_phi()
+        assert lower.shape == upper.shape == (3,)
+
+    # -- вне экспериментного контекста: пропуск с одноразовым warning ------
+    def test_experiment_x0_skipped_outside_experiment_context(self, l0_factory):
+        problem_module._X0_OUTSIDE_CONTEXT_WARNED.clear()
+        neuraltide.config.set_dtype(tf.float64)
+        network, space, t_seq, inputs, loss = l0_factory()
+        space.add_experiment_initial_state_entries(network, "exp2")
+        phi0 = _x0_phi(space, {"x0/exp2/exc/0": [[0.9]]})
+        problem = CalibrationProblem(
+            network, space, t_seq, inputs=inputs, objective=loss
+        )
+        with pytest.warns(UserWarning, match="экспериментного контекста"):
+            problem.evaluate(phi0)
+        # one-time: повторные прогоны не предупреждают
+        with warnings.catch_warnings(record=True) as record:
+            warnings.simplefilter("always")
+            problem.evaluate(phi0)
+        assert not any("экспериментного контекста" in str(w.message) for w in record)
+        # exp-x0 не применён: траектория совпадает с прогоном по умолчанию
+        space.apply_to_model(space.unpack(phi0))
+        ref = network(t_seq, inputs=inputs)
+        out = problem.simulate(phi0)
+        np.testing.assert_allclose(
+            out.firing_rates["exc"], ref.firing_rates["exc"], rtol=1e-10
+        )
+
+    # -- OptimizationResult roundtrip с exp-ключами ------------------------
+    def test_optimization_result_roundtrip_with_experiment_keys(self, tmp_path):
+        result = OptimizationResult(
+            phi_best=np.array([1.0, 2.0, 3.0, -0.2]),
+            theta_best={
+                "exc/tau": np.array([8.0]),
+                "x0/exc/0": np.array([[0.7]]),
+                "x0/exp2/exc/0": np.array([[0.9]]),
+            },
+            loss_best=0.5,
+        )
+        restored = OptimizationResult.from_dict(result.to_dict())
+        assert set(restored.theta_best) == set(result.theta_best)
+        for key in result.theta_best:
+            np.testing.assert_allclose(restored.theta_best[key], result.theta_best[key])
+        path = tmp_path / "result.json"
+        result.save(path)
+        loaded = OptimizationResult.load(path)
+        assert set(loaded.theta_best) == {
+            "exc/tau",
+            "x0/exc/0",
+            "x0/exp2/exc/0",
+        }
+        np.testing.assert_allclose(loaded.phi_best, result.phi_best)
+        assert loaded.loss_best == pytest.approx(0.5)

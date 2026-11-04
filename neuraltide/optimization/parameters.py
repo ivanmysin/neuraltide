@@ -10,10 +10,17 @@ ParameterSpace: единый реестр оптимизируемых пара�
 Стабильные полные имена имеют вид ``<owner>/<param>`` (например
 ``exc/Delta_I`` или ``inh->exc/tau_f``): owner — имя популяции/синапса
 в NetworkGraph, param — имя переменной без служебного суффикса ``:0``.
-Компоненты начального состояния регистрируются отдельно именами вида
-``x0/<population>/<slot>`` (метод add_initial_state_entries) и адресуются
-StateLocator(population, slot) в плоском списке начальных состояний сети
-(см. NetworkRNN.pop_state_offsets).
+Компоненты начального состояния регистрируются отдельно и бывают двух
+видов: общие (common) именами вида ``x0/<population>/<slot>`` (метод
+add_initial_state_entries) и эксперимент-специфичные именами вида
+``x0/<experiment>/<population>/<slot>`` (метод
+add_experiment_initial_state_entries). Обе адресуются StateLocator
+(population, slot, experiment) в плоском списке начальных состояний сети
+(см. NetworkRNN.pop_state_offsets); классификация common vs exp-specific
+определяется полем ``locator.experiment``, а не разбором имени записи.
+Общие и экспериментные записи имеют разные полные имена и могут
+сосуществовать в одном реестре (например общий ``x0/exc/0`` и
+экспериментный ``x0/exp1/exc/0``).
 
 Физические min/max извлекаются из MinMaxConstraint переменной
 (т.е. из ``min``/``max`` пользовательского params-словаря). Без явно
@@ -99,15 +106,22 @@ class StateLocator:
     Атрибуты:
         population: имя популяции в NetworkGraph;
         slot: индекс тензора внутри состояния популяции
-            (0 <= slot < len(pop.state_size)).
+            (0 <= slot < len(pop.state_size));
+        experiment: None — общая (common) компонента начального состояния
+            с именем ``x0/<population>/<slot>``; строка — эксперимент-
+            специфичная компонента с именем
+            ``x0/<experiment>/<population>/<slot>``. Классификация
+            common vs exp-specific определяется этим полем, а не разбором
+            имени записи.
 
     Плоский индекс в списке pop-начальных состояний вычисляется как
     ``start + slot``, где ``(start, count) = network.pop_state_offsets[
-    population]``.
+    population]``; он не зависит от experiment.
     """
 
     population: str
     slot: int
+    experiment: Optional[str] = None
 
 
 @dataclass
@@ -117,7 +131,9 @@ class ParameterEntry:
 
     Атрибуты:
         full_name: стабильное полное имя вида 'exc/Delta_I' или
-            'x0/exc/0' для компонент начального состояния;
+            'x0/exc/0' для общей компоненты начального состояния
+            ('x0/<experiment>/<pop>/<slot>' для эксперимент-
+            специфичной);
         shape: исходная форма тензора параметра;
         transform: преобразование координат θ = forward(φ);
         min/max: физические границы (None — не ограничен);
@@ -294,14 +310,19 @@ class ParameterSpace:
         bounds: Optional[Mapping[str, Tuple[Optional[float], Optional[float]]]] = None,
     ) -> List[str]:
         """
-        Регистрирует оптимизируемые компоненты начального состояния сети.
+        Регистрирует общие (common) компоненты начального состояния сети.
 
         Для каждой динамической популяции графа и каждого слота её
         state_size создаётся запись 'x0/<population>/<slot>' формы
         [1, n_units] с group='initial_state', kind='initial_state' и
-        locator=StateLocator(population, slot). Адресация слотов —
-        через network.pop_state_offsets. Слоты с нулевым числом
+        locator=StateLocator(population, slot, experiment=None). Адресация
+        слотов — через network.pop_state_offsets. Слоты с нулевым числом
         элементов пропускаются.
+
+        Для эксперимент-специфичных компонент с именами
+        'x0/<experiment>/<population>/<slot>' см.
+        add_experiment_initial_state_entries; общие и экспериментные
+        записи могут сосуществовать в одном реестре.
 
         Args:
             network: NetworkRNN — источник популяций и offsets.
@@ -320,48 +341,152 @@ class ParameterSpace:
             TypeError: при transform не-Transform.
             ValueError: при дублировании имени или неизвестном include.
         """
+        return self._add_x0_entries(
+            network,
+            experiment=None,
+            include=include,
+            transforms=transforms,
+            bounds=bounds,
+        )
+
+    def add_experiment_initial_state_entries(
+        self,
+        network,
+        experiment: str,
+        include: Optional[object] = None,
+        transforms: Optional[Mapping[str, Transform]] = None,
+        bounds: Optional[Mapping[str, Tuple[Optional[float], Optional[float]]]] = None,
+    ) -> List[str]:
+        """
+        Регистрирует эксперимент-специфичные компоненты начального
+        состояния сети.
+
+        Для каждой динамической популяции графа и каждого слота её
+        state_size создаётся запись 'x0/<experiment>/<population>/<slot>'
+        формы [1, n_units] с group='initial_state', kind='initial_state'
+        и locator=StateLocator(population, slot, experiment=experiment).
+        kind/group/locator отличаются от общих записей только полем
+        locator.experiment и префиксом имени, поэтому общий 'x0/exc/0' и
+        экспериментный 'x0/exp1/exc/0' могут сосуществовать в одном
+        реестре; дубли ловятся по полному имени как обычно.
+
+        Args:
+            network: NetworkRNN — источник популяций и offsets.
+            experiment: имя эксперимента; не должно содержать '/'.
+            include: опциональный фильтр — перечисление полных exp-имён
+                ('x0/exp1/exc/0'), кортежей (population, slot) и/или
+                кортежей (experiment, population, slot). Без него
+                регистрируются все слоты всех динамических популяций.
+            transforms: необязательный словарь {full_name: Transform} с
+                exp-именами; записи без явного transform получают
+                identity.
+            bounds: необязательный словарь {full_name: (min, max)} с
+                exp-именами — физические границы компонент состояния.
+
+        Returns:
+            Список зарегистрированных имён (в порядке создания).
+
+        Raises:
+            TypeError: при нестроковом experiment или transform
+                не-Transform.
+            ValueError: при пустом имени experiment, '/' в experiment,
+                дублировании имени или неизвестном include.
+        """
+        if not isinstance(experiment, str):
+            raise TypeError(
+                "ParameterSpace: experiment name must be a string, got "
+                f"{type(experiment).__name__} ({experiment!r})."
+            )
+        if not experiment:
+            raise ValueError(
+                "ParameterSpace: experiment name must be a non-empty "
+                f"string, got {experiment!r}."
+            )
+        if "/" in experiment:
+            raise ValueError(
+                f"ParameterSpace: experiment name must not contain '/': {experiment!r}."
+            )
+        return self._add_x0_entries(
+            network,
+            experiment=experiment,
+            include=include,
+            transforms=transforms,
+            bounds=bounds,
+        )
+
+    def _add_x0_entries(
+        self,
+        network,
+        experiment: Optional[str],
+        include: Optional[object],
+        transforms: Optional[Mapping[str, Transform]],
+        bounds: Optional[Mapping[str, Tuple[Optional[float], Optional[float]]]],
+    ) -> List[str]:
+        """
+        Общая реализация add_initial_state_entries (experiment=None) и
+        add_experiment_initial_state_entries. experiment задаёт префикс
+        имён ('x0/<population>/<slot>' vs 'x0/<experiment>/<population>/
+        <slot>') и поле StateLocator.experiment; остальное поведение
+        одинаково.
+        """
         remaining_transforms: Dict[str, Transform] = dict(transforms or {})
         remaining_bounds: Dict[str, Tuple[Optional[float], Optional[float]]] = dict(
             bounds or {}
         )
-        include_set = self._normalize_include(include)
+        include_set = self._normalize_include(include, experiment)
         registered: List[str] = []
+        prefix = "x0" if experiment is None else f"x0/{experiment}"
 
+        # Кандидаты: все непустые слоты динамических популяций. include
+        # валидируется до любой мутации реестра — опечатка в имени не
+        # должна оставлять частично зарегистрированный набор.
+        candidates = []
         for pop_name in network._graph.dynamic_population_names:
             pop = network._graph._populations[pop_name]
             for slot, shape in enumerate(pop.state_size):
-                full = f"x0/{pop_name}/{slot}"
-                if include_set is not None and full not in include_set:
-                    continue
                 shape = tf.TensorShape(shape)
                 if shape.num_elements() == 0:
                     continue
-                if full in self._entries:
-                    raise ValueError(
-                        f"ParameterSpace: duplicate parameter name '{full}'."
-                    )
-                transform = remaining_transforms.pop(full, None)
-                if transform is None:
-                    transform = IdentityTransform()
-                elif not isinstance(transform, Transform):
-                    raise TypeError(
-                        f"ParameterSpace: transform for '{full}' must be a "
-                        f"Transform instance, got {type(transform).__name__}."
-                    )
-                min_val, max_val = remaining_bounds.pop(full, (None, None))
-                self._entries[full] = ParameterEntry(
-                    full_name=full,
-                    shape=shape,
-                    transform=transform,
-                    min=min_val,
-                    max=max_val,
-                    group="initial_state",
-                    trainable=True,
-                    variable=None,
-                    kind="initial_state",
-                    locator=StateLocator(population=pop_name, slot=slot),
+                candidates.append(
+                    (f"{prefix}/{pop_name}/{slot}", shape, pop_name, slot)
                 )
-                registered.append(full)
+        if include_set is not None:
+            unknown = sorted(include_set - {full for full, _, _, _ in candidates})
+            if unknown:
+                raise ValueError(
+                    "ParameterSpace: 'include' names do not match any "
+                    f"initial-state entries: {unknown}."
+                )
+
+        for full, shape, pop_name, slot in candidates:
+            if include_set is not None and full not in include_set:
+                continue
+            if full in self._entries:
+                raise ValueError(f"ParameterSpace: duplicate parameter name '{full}'.")
+            transform = remaining_transforms.pop(full, None)
+            if transform is None:
+                transform = IdentityTransform()
+            elif not isinstance(transform, Transform):
+                raise TypeError(
+                    f"ParameterSpace: transform for '{full}' must be a "
+                    f"Transform instance, got {type(transform).__name__}."
+                )
+            min_val, max_val = remaining_bounds.pop(full, (None, None))
+            self._entries[full] = ParameterEntry(
+                full_name=full,
+                shape=shape,
+                transform=transform,
+                min=min_val,
+                max=max_val,
+                group="initial_state",
+                trainable=True,
+                variable=None,
+                kind="initial_state",
+                locator=StateLocator(
+                    population=pop_name, slot=slot, experiment=experiment
+                ),
+            )
+            registered.append(full)
 
         if remaining_transforms:
             warnings.warn(
@@ -380,8 +505,19 @@ class ParameterSpace:
         return registered
 
     @staticmethod
-    def _normalize_include(include: Optional[object]) -> Optional[set]:
-        """Приводит include к множеству полных имён; None — без фильтра."""
+    def _normalize_include(
+        include: Optional[object], experiment: Optional[str] = None
+    ) -> Optional[set]:
+        """
+        Приводит include к множеству полных имён; None — без фильтра.
+
+        Полные имена добавляются как есть. При experiment=None кортежи
+        (population, slot) превращаются в 'x0/<population>/<slot>'. При
+        заданном experiment кортежи (population, slot) превращаются в
+        'x0/<experiment>/<population>/<slot>', а кортежи
+        (experiment, population, slot) — в 'x0/<experiment>/<population>/
+        <slot>' при совпадении experiment (иначе ValueError).
+        """
         if include is None:
             return None
         names = set()
@@ -389,11 +525,28 @@ class ParameterSpace:
             if isinstance(item, str):
                 names.add(item)
             elif isinstance(item, tuple) and len(item) == 2:
-                names.add(f"x0/{item[0]}/{item[1]}")
-            else:
+                if experiment is None:
+                    names.add(f"x0/{item[0]}/{item[1]}")
+                else:
+                    names.add(f"x0/{experiment}/{item[0]}/{item[1]}")
+            elif experiment is not None and isinstance(item, tuple) and len(item) == 3:
+                if item[0] != experiment:
+                    raise ValueError(
+                        "ParameterSpace: 'include' tuple "
+                        f"{item!r} names experiment '{item[0]}', but this "
+                        f"call registers experiment '{experiment}'."
+                    )
+                names.add(f"x0/{item[0]}/{item[1]}/{item[2]}")
+            elif experiment is None:
                 raise ValueError(
                     "ParameterSpace: 'include' items must be full names "
                     f"('x0/exc/0') or (population, slot) tuples, got {item!r}."
+                )
+            else:
+                raise ValueError(
+                    "ParameterSpace: 'include' items must be full names "
+                    f"('x0/{experiment}/exc/0'), (population, slot) tuples or "
+                    f"(experiment, population, slot) tuples, got {item!r}."
                 )
         return names
 

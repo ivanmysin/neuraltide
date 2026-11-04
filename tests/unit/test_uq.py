@@ -620,6 +620,122 @@ class TestBootstrapExperiments:
         assert "iid" in res.notes
         json.dumps(res.to_dict())
 
+    def test_experiments_unique_service_names_no_mutation(self, multi_problem_f64):
+        """Дубликаты внутри draw: уникальные служебные имена, исходные
+        Experiment не мутируют."""
+        seen: List[List[str]] = []
+        seen_ids: List[List[int]] = []
+
+        def recording_stub(problem, phi0):
+            seen.append([e.name for e in problem.experiments])
+            seen_ids.append([id(e) for e in problem.experiments])
+            phi = np.asarray(phi0, dtype=np.float64).reshape(-1)
+            return SimpleNamespace(
+                base=SimpleNamespace(phi_best=phi, loss_best=0.5), message="stub"
+            )
+
+        originals = list(multi_problem_f64.experiments)
+        res = uq.bootstrap_experiments(
+            multi_problem_f64, n_draws=5, seed=11, evaluator=recording_stub
+        )
+        assert res.statuses == ["ok"] * 5
+        # Исходные Experiment не изменились: имена и объекты прежние.
+        assert len(multi_problem_f64.experiments) == 2
+        assert multi_problem_f64.experiments[0] is originals[0]
+        assert multi_problem_f64.experiments[1] is originals[1]
+        assert [e.name for e in multi_problem_f64.experiments] == ["e1", "e2"]
+        # Копии в draw — новые объекты, не исходные.
+        original_ids = {id(e) for e in originals}
+        for ids in seen_ids:
+            assert not (set(ids) & original_ids)
+        # Каждая draw — уникальные имена формата boot_{i}_{k}_{original}.
+        assert len(seen) == 5
+        for i, names in enumerate(seen):
+            assert len(set(names)) == len(names)
+            suffixes = []
+            for k, name in enumerate(names):
+                prefix = f"boot_{i}_{k}_"
+                assert name.startswith(prefix), name
+                suffixes.append(name[len(prefix) :])
+            assert all(s in ("e1", "e2") for s in suffixes)
+        # seed=11: draw 0 = [e2, e2], draw 2 = [e1, e1] — дубликаты внутри
+        # draw не роняют bootstrap-задачу (statuses ok выше).
+        assert [n.removeprefix(f"boot_0_{k}_") for k, n in enumerate(seen[0])] == [
+            "e2",
+            "e2",
+        ]
+
+    def test_experiments_name_sanitizes_slash(self, l0_factory):
+        """'/' в исходном имени sanitize'ится — соглашение x0/<exp>/... цело."""
+        neuraltide.config.set_dtype(tf.float64)
+        network, space, t_seq, inputs, loss = l0_factory()
+        ea = Experiment(name="sess/1", t_sequence=t_seq, inputs=inputs, objective=loss)
+        eb = Experiment(name="sess/2", t_sequence=t_seq, inputs=inputs, objective=loss)
+        problem = MultiExperimentProblem(network, space, [ea, eb])
+        seen: List[List[str]] = []
+
+        def recording_stub(problem, phi0):
+            seen.append([e.name for e in problem.experiments])
+            phi = np.asarray(phi0, dtype=np.float64).reshape(-1)
+            return SimpleNamespace(
+                base=SimpleNamespace(phi_best=phi, loss_best=0.25), message="stub"
+            )
+
+        res = uq.bootstrap_experiments(
+            problem, n_draws=2, seed=3, evaluator=recording_stub
+        )
+        assert res.statuses == ["ok"] * 2
+        joined = [n for names in seen for n in names]
+        for names in seen:
+            assert len(set(names)) == len(names)
+        for name in joined:
+            assert "/" not in name
+        assert any(n.endswith("_sess_1") for n in joined)
+        assert any(n.endswith("_sess_2") for n in joined)
+        # Исходные имена со слэшем не изменились.
+        assert [e.name for e in problem.experiments] == ["sess/1", "sess/2"]
+
+    def test_experiments_deterministic_by_seed(self, multi_problem_f64):
+        def make_stub(seen):
+            def stub(problem, phi0):
+                seen.append([e.name for e in problem.experiments])
+                phi = np.asarray(phi0, dtype=np.float64).reshape(-1)
+                return SimpleNamespace(
+                    base=SimpleNamespace(phi_best=phi * 1.01, loss_best=0.5),
+                    message="stub",
+                )
+
+            return stub
+
+        seen1: List[List[str]] = []
+        res1 = uq.bootstrap_experiments(
+            multi_problem_f64, n_draws=4, seed=11, evaluator=make_stub(seen1)
+        )
+        seen2: List[List[str]] = []
+        res2 = uq.bootstrap_experiments(
+            multi_problem_f64, n_draws=4, seed=11, evaluator=make_stub(seen2)
+        )
+        assert res1.statuses == ["ok"] * 4
+        np.testing.assert_array_equal(res1.phi_samples, res2.phi_samples)
+        assert res1.weights == res2.weights
+        assert res1.statuses == res2.statuses
+        # Служебные имена draw тоже детерминированы по seed.
+        assert seen1 == seen2
+
+    def test_experiments_exp_specific_x0_refused(self, l0_factory):
+        """Пространства с exp-specific x0 отклоняются понятным ValueError."""
+        neuraltide.config.set_dtype(tf.float64)
+        network, space, t_seq, inputs, loss = l0_factory()
+        exp_x0 = space.add_experiment_initial_state_entries(network, "e1")
+        assert exp_x0
+        e1 = Experiment(name="e1", t_sequence=t_seq, inputs=inputs, objective=loss)
+        e2 = Experiment(name="e2", t_sequence=t_seq, inputs=inputs, objective=loss)
+        problem = MultiExperimentProblem(network, space, [e1, e2])
+        with pytest.raises(ValueError, match="exp-specific x0"):
+            uq.bootstrap_experiments(
+                problem, n_draws=2, seed=1, evaluator=_serial_stub()
+            )
+
     def test_default_evaluator_random_weights(self, problem_f64):
         """evaluator=None → lbfgsb (ленивая резолюция, без импорта в uq)."""
         res = uq.bootstrap_experiments(problem_f64, n_draws=2, seed=3)

@@ -21,6 +21,16 @@ CalibrationProblem: единая постановка задачи калибр�
       network.call(initial_state=...); вклад в градиент в chain-режиме —
       tape.gradient(loss, x0_tensor) * transform.jacobian (для model_var
       путь прежний: градиент по переменным × jacobian);
+    * эксперимент-специфичные x0-записи 'x0/<experiment>/<population>/
+      <slot>' (см. ParameterSpace.add_experiment_initial_state_entries):
+      в MultiExperimentProblem материализуются у эксперимента с
+      совпадающим именем с приоритетом над общими 'x0/<pop>/<slot>'
+      (двухпроходная подстановка); общие model-параметры и общий x0
+      участвуют во всех экспериментах, вклады общего x0 в градиент
+      суммируются по экспериментам, экспериментные x0 между экспериментами
+      не смешиваются; вне экспериментного контекста (CalibrationProblem,
+      shooting, sensitivities) exp-specific записи пропускаются с
+      одноразовым UserWarning;
     * view-хелперы time_slice/with_objective/with_inputs/with_initial_state,
       возвращающие новую CalibrationProblem с ОБЩИМИ счётчиками;
     * Experiment — протокол одного эксперимента; held_out=[Experiment]
@@ -72,6 +82,7 @@ ParameterSpace (``phi_entries``/``trainable_names``): non-trainable
 """
 
 import time
+import warnings
 from dataclasses import dataclass
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple, Union
 
@@ -96,6 +107,12 @@ _TENSOR_KINDS = ("initial_state", "shooting_state")
 
 InitialState = Optional[Tuple[Sequence[TensorType], Sequence[TensorType]]]
 
+# «One-time» защита от спама предупреждением о пропуске эксперимент-
+# специфичных x0-записей вне экспериментного контекста: наборы имён,
+# по которым предупреждение уже выданы (materialize вызывается на каждый
+# прогон — без дедупликации оптимизатор получил бы тысячи копий).
+_X0_OUTSIDE_CONTEXT_WARNED: set = set()
+
 
 # ---------------------------------------------------------------------------
 # Experiment
@@ -119,7 +136,9 @@ class Experiment:
             None — при validate используется objective задачи;
         initial_state: опциональное начальное состояние протокола
             (pop, syn) — база, в которую подставляются x0-записи
-            ParameterSpace.
+            ParameterSpace: общие 'x0/<pop>/<slot>' и эксперимент-
+            специфичные 'x0/<name>/<pop>/<slot>' (только у эксперимента
+            с совпадающим name, с приоритетом над общими).
     """
 
     name: str
@@ -145,11 +164,17 @@ def _tensor_entries(space: ParameterSpace):
     return [(n, e) for n, e in space.phi_entries.items() if e.kind in _TENSOR_KINDS]
 
 
+def _x0_experiment(entry) -> Optional[str]:
+    """experiment записи x0 (None — common); locator=None трактуем как common."""
+    return entry.locator.experiment if entry.locator is not None else None
+
+
 def _materialize_initial_state(
     network: NetworkRNN,
     space: ParameterSpace,
     theta: Mapping[str, tf.Tensor],
     base_initial_state: InitialState,
+    experiment: Optional[str] = None,
 ) -> Tuple[InitialState, Dict[str, tf.Tensor]]:
     """
     Строит начальное состояние для network.call с подставленными x0.
@@ -161,14 +186,53 @@ def _materialize_initial_state(
     пропускаются (без валидации locator), их слоты сохраняют значения
     base/network initial state.
 
+    Подстановка двухпроходная с явным приоритетом эксперимент-специфичных
+    записей (kind 'initial_state'/'shooting_state' с
+    locator.experiment != None, см. ParameterSpace.
+    add_experiment_initial_state_entries):
+
+    * pass 1 — common-записи (locator.experiment is None) заполняют
+      свои слоты начального состояния;
+    * pass 2 — записи с locator.experiment == experiment перезаписывают
+      те же слоты (перезаписанная common-запись удаляется из x0_map —
+      её тензор больше не участвует в состоянии);
+    * записи с другим locator.experiment пропускаются.
+
+    experiment=None — внеэкспериментный контекст (CalibrationProblem,
+    shooting, sensitivities, robust): применяются только common-записи,
+    trainable exp-specific записи пропускаются с одноразовым UserWarning
+    (предупреждение выдаётся один раз на набор имён, а не на каждый
+    прогон).
+
     Returns:
         (initial_state, x0_map): initial_state — None, если нет ни
-        tensor-записей, ни base (сеть возьмёт своё дефолтное); иначе
+        применимых записей, ни base (сеть возьмёт своё дефолтное); иначе
         (init_pop, init_syn). x0_map: full_name → тензор, фактически
         подставленный в состояние (источник для chain-градиента).
     """
     entries = _tensor_entries(space)
-    if not entries:
+    common = [(n, e) for n, e in entries if _x0_experiment(e) is None]
+    if experiment is None:
+        skipped = sorted(n for n, e in entries if _x0_experiment(e) is not None)
+        if skipped:
+            key = tuple(skipped)
+            if key not in _X0_OUTSIDE_CONTEXT_WARNED:
+                _X0_OUTSIDE_CONTEXT_WARNED.add(key)
+                warnings.warn(
+                    "Эксперимент-специфичные начальные состояния "
+                    f"{skipped} пропущены вне экспериментного контекста "
+                    "(experiment=None): они материализуются только в "
+                    "MultiExperimentProblem у эксперимента с совпадающим "
+                    "именем.",
+                    UserWarning,
+                    stacklevel=2,
+                )
+        applicable = common
+    else:
+        applicable = common + [
+            (n, e) for n, e in entries if _x0_experiment(e) == experiment
+        ]
+    if not applicable:
         return base_initial_state, {}
     dtype = neuraltide.config.get_dtype()
     if base_initial_state is not None:
@@ -180,7 +244,8 @@ def _materialize_initial_state(
         init_syn = list(syn)
     offsets = network.pop_state_offsets
     x0_map: Dict[str, tf.Tensor] = {}
-    for name, entry in entries:
+    slot_owner: Dict[int, str] = {}
+    for name, entry in applicable:
         locator = entry.locator
         if locator is None or locator.population not in offsets:
             raise ValueError(
@@ -194,10 +259,18 @@ def _materialize_initial_state(
                 f"CalibrationProblem: locator slot {locator.slot} вне "
                 f"[0, {count}) для популяции '{locator.population}'."
             )
+        flat = start + locator.slot
         x0 = cast_if_needed(tf.convert_to_tensor(theta[name]), dtype)
         x0 = tf.reshape(x0, entry.shape)
-        init_pop[start + locator.slot] = x0
+        # Exp-запись перезаписывает слот common-записи: прежний тензор
+        # выходит из состояния — убираем его из x0_map (chain-градиент
+        # не должен получать вклад по уже не подставленному тензору).
+        prev = slot_owner.get(flat)
+        if prev is not None:
+            x0_map.pop(prev, None)
+        init_pop[flat] = x0
         x0_map[name] = x0
+        slot_owner[flat] = name
     return (init_pop, init_syn), x0_map
 
 
@@ -215,7 +288,10 @@ def _chain_gradient(
     tensor-записи: dloss/dx0 по подставленному тензору × transform.jacobian.
     x0_map[name] может быть списком тензоров — по одному на эксперимент,
     в котором подставлялась запись (MultiExperimentProblem): вклады
-    суммируются. Записи без доступного источника дают нулевой вклад.
+    суммируются, поэтому градиент по общему x0 аккумулирует вклады всех
+    экспериментов, а эксперимент-специфичные x0-записи попадают в x0_map
+    только своего эксперимента и между экспериментами не смешиваются.
+    Записи без доступного источника дают нулевой вклад.
     """
     dtype = neuraltide.config.get_dtype()
     # Смещения по trainable-записям — в согласии с ParameterSpace.unpack
@@ -818,6 +894,14 @@ class MultiExperimentProblem:
     префикс '{exp.name}/'. Held-out эксперименты (held_out=[Experiment])
     в evaluate/value_and_gradient/residual не входят — только validate.
 
+    Начальные состояния: общие x0-записи 'x0/<pop>/<slot>' участвуют во
+    всех экспериментах; эксперимент-специфичные 'x0/<experiment>/<pop>/
+    <slot>' материализуются только у эксперимента с совпадающим именем
+    (включая held-out в validate) и перезаписывают общие значения в
+    своих слотах; записи, не совпадающие ни с одним именем, никогда не
+    материализуются — при каждом конструировании выдаётся UserWarning
+    со списком таких «осиротевших» экспериментов.
+
     Тот же duck-type API, что у CalibrationProblem: size / pack / unpack /
     bounds_phi / evaluate / value_and_gradient / residual / simulate /
     validate. n_forward увеличивается на число прогонённых экспериментов
@@ -826,13 +910,18 @@ class MultiExperimentProblem:
 
     Args:
         network: NetworkRNN (одна сеть для всех экспериментов).
-        parameter_space: ParameterSpace (общие параметры; x0-записи
-            подставляются в начальное состояние каждого эксперимента).
-        experiments: непустая последовательность Experiment с objective.
+        parameter_space: ParameterSpace (общие параметры; общий x0
+            подставляется в начальное состояние каждого эксперимента,
+            exp-specific x0 — только в свой).
+        experiments: непустая последовательность Experiment с objective;
+            имена обучающих экспериментов должны быть уникальны и не
+            пересекаться с held_out (иначе ValueError — два одинаковых
+            имени делили бы exp-specific x0 одного имени молча).
         grad_mode: 'assign' (по умолчанию) или 'chain'.
-        held_out: отложенные Experiment для validate; objective у
-            held-out эксперимента обязателен (иначе validate поднимет
-            ValueError).
+        held_out: отложенные Experiment для validate; имена не должны
+            дублироваться внутри held_out и пересекаться с обучающими
+            (иначе ValueError); objective у held-out эксперимента
+            обязателен (иначе validate поднимет ValueError).
     """
 
     def __init__(
@@ -863,6 +952,51 @@ class MultiExperimentProblem:
                     f"MultiExperimentProblem: training experiment "
                     f"'{exp.name}' requires an objective."
                 )
+        train_names = [exp.name for exp in self.experiments]
+        duplicates = sorted({n for n in train_names if train_names.count(n) > 1})
+        if duplicates:
+            raise ValueError(
+                "MultiExperimentProblem: duplicate experiment names "
+                f"{duplicates}: имена обучающих экспериментов должны быть "
+                "уникальны, иначе эксперименты с одним именем делили бы "
+                "exp-specific x0-записи этого имени."
+            )
+        held_names = [e.name for e in self.held_out]
+        held_duplicates = sorted({n for n in held_names if held_names.count(n) > 1})
+        if held_duplicates:
+            raise ValueError(
+                "MultiExperimentProblem: duplicate held-out experiment "
+                f"names {held_duplicates}: имена должны быть уникальны, "
+                "иначе validate() затирал бы компоненты одного имени "
+                "другим в возвращаемом словаре."
+            )
+        overlap = sorted(set(train_names) & set(held_names))
+        if overlap:
+            raise ValueError(
+                "MultiExperimentProblem: experiment names used both as "
+                f"training and held-out: {overlap} — переименуйте одну из "
+                "групп, иначе held-out неотличим от обучающего эксперимента."
+            )
+        known = {e.name for e in self.experiments} | {e.name for e in self.held_out}
+        orphaned = sorted(
+            {
+                _x0_experiment(entry)
+                for entry in self.parameter_space.phi_entries.values()
+                if entry.kind in _TENSOR_KINDS
+                and _x0_experiment(entry) is not None
+                and _x0_experiment(entry) not in known
+            }
+        )
+        if orphaned:
+            warnings.warn(
+                "MultiExperimentProblem: эксперимент-специфичные "
+                f"x0-записи для экспериментов {orphaned} не совпадают ни "
+                "с одним именем train/held-out эксперимента и никогда не "
+                "материализуются (проверьте имена в "
+                "add_experiment_initial_state_entries).",
+                UserWarning,
+                stacklevel=2,
+            )
         self._counters: Dict[str, Any] = {
             "n_forward": 0,
             "n_gradient": 0,
@@ -965,7 +1099,11 @@ class MultiExperimentProblem:
 
     def _run_experiment(self, exp: Experiment, theta: Mapping[str, tf.Tensor]):
         initial_state, x0_map = _materialize_initial_state(
-            self.network, self.parameter_space, theta, exp.initial_state
+            self.network,
+            self.parameter_space,
+            theta,
+            exp.initial_state,
+            experiment=exp.name,
         )
         output = self.network(
             exp.t_sequence, inputs=exp.inputs, initial_state=initial_state

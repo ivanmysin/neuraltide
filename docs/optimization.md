@@ -124,6 +124,73 @@ ParameterSpace (`phi_entries`/`trainable_names`): non-trainable записи —
 на dθ/dφ (jacobians transforms); результаты совпадают, что контролируется
 taylor_test'ом.
 
+## Мультиэкспериментная калибровка (`MultiExperimentProblem`)
+
+Несколько экспериментов (`Experiment`: `name`, `t_sequence`, `inputs`,
+`objective`, опциональный `initial_state`) над одной сетью и одним
+`ParameterSpace`. Потеря — сумма потерь обучающих экспериментов, все
+прогоны выполняются в одной `GradientTape`, поэтому градиенты общих
+параметров суммируются по протоколам автоматически; `residual` —
+конкатенация невязок, компоненты несут префикс `'{name}/'`. Held-out
+эксперименты (`held_out=[Experiment]`) входят только в `validate`.
+
+```python
+from neuraltide.optimization import Experiment, MultiExperimentProblem
+
+problem = MultiExperimentProblem(
+    network, space,
+    experiments=[exp_a, exp_b],      # у каждого — свой objective
+    grad_mode="assign",              # или "chain"
+    held_out=[exp_holdout],
+)
+```
+
+**Общий и эксперимент-специфичный начальный вектор `x0`.** Компоненты
+начального состояния регистрируются в ParameterSpace двумя способами:
+
+- общие: `space.add_initial_state_entries(network)` → записи
+  `x0/<population>/<slot>` (участвуют во всех экспериментах);
+- эксперимент-специфичные:
+  `space.add_experiment_initial_state_entries(network, "exp1")` → записи
+  `x0/<experiment>/<population>/<slot>`; аргумент `include` принимает
+  полные exp-имена, кортежи `(population, slot)` и
+  `(experiment, population, slot)`; непотреблённые include-имена
+  (опечатки) отклоняются `ValueError` со списком неизвестных имён —
+  до любой регистрации; `transforms`/`bounds` задаются по
+  exp-именам (записи корректно проходят через transforms, bounds и
+  φ-операции).
+
+При материализации начального состояния эксперимента действует приоритет
+exp-specific → common → начальное состояние протокола/сети по умолчанию;
+exp-запись перезаписывает слот common-записи (её тензор выходит из
+состояния и из chain-градиента). Градиент по exp-specific `x0` идёт
+только через соответствующий эксперимент.
+
+Held-out внутри `MultiExperimentProblem` — обычный эксперимент по своему
+имени: в `validate()` ему применяется его exp-specific `x0` (при
+наличии), как обучающим. Отдельный `CalibrationProblem.validate()`
+(held-out эксперименты вне multi-контекста) материализует только common
+`x0`: exp-specific записи пропускаются с одноразовым `UserWarning`
+(см. ниже).
+
+Warnings: записи, имя эксперимента которых не совпадает ни с одним
+train/held-out экспериментом, никогда не материализуются — при каждом
+конструировании `MultiExperimentProblem` выдаётся `UserWarning` со
+списком таких «осиротевших» экспериментов (предупреждение повторяется
+при каждом конструировании). Вне экспериментного контекста
+(`CalibrationProblem`, shooting, robust) trainable exp-записи
+пропускаются с одноразовым `UserWarning` (материализуются только у
+эксперимента с совпадающим именем, включая held-out в `validate`).
+
+Имена обучающих экспериментов должны быть уникальны и не пересекаться с
+held-out — иначе `ValueError` при конструировании (два одинаковых имени
+делили бы exp-specific `x0` одного имени молча).
+
+Ограничения: sensitivities/UQ пока не материализуют exp-specific `x0`
+(внеэкспериментный контекст — см. warning выше); `MultipleShootingProblem`
+не строится поверх `MultiExperimentProblem` (shooting — над
+`CalibrationProblem`).
+
 ## Результаты (`results`)
 
 - `Evaluation` — результат одной оценки (см. выше), `to_dict()` с
@@ -306,8 +373,17 @@ augmented Lagrangian). Residual-раскладка `r = [r_data; √w·gap_k]` �
 предупреждение). `finalize` выполняет честный свободный single-shooting
 прогон с `x0 = s_0`, проверяет разрывы и сравнивает `loss_ms` с
 `loss_single` (`loss_rtol`, `loss_atol`). Начальное состояние первого
-сегмента `s_0` тоже свободно, то есть оценивается, а не берётся из
-протокола.
+сегмента `s_0` по умолчанию тоже свободно, то есть оценивается, а не
+берётся из протокола.
+
+`fix_first_segment=True` закрепляет сегмент 0 за начальным состоянием
+базовой задачи (base initial state протокола с общими `x0/...`-записями
+базового пространства): записи `x0s/0/...` не создаются, размерность φ
+уменьшается ровно на число начальных слотов первого сегмента, стыки
+`0->1, 1->2, ...` и `finalize`/`to_single_shooting_problem` сохраняются
+(single shooting стартует из base state). `initialize_from_single_shooting`
+не создаёт переменные для фиксированного сегмента 0. Параметр обратно
+совместим: по умолчанию `False` и прежнее поведение бит-в-бит.
 `BrunelFokkerPlanck` не поддерживается (буфер задержки и CFL-субшагивание
 несовместимы с точной сегментацией) — честный `NotImplementedError`.
 
@@ -519,7 +595,13 @@ pred = predictive_intervals(problem, samples, level=0.95)    # per-(pop, t, unit
   min/max записей в них **не вшиты**;
 - `bootstrap_experiments(problem, n_draws, evaluator=None)` — бутстреп по
   экспериментам/записям; `residual_bootstrap(problem, n_draws)` — по
-  остаткам (с оговорками в notes);
+  остаткам (с оговорками в notes). Для `MultiExperimentProblem` каждая
+  draw — подвыборка экспериментов с повторением, где копии получают
+  уникальные служебные имена `boot_{draw}_{position}_{original_name}`
+  ('/' в имени sanitize'ится в '_'), counts подвыборки — в `weights`;
+  пространства с эксперимент-специфичными x0-записями
+  (`add_experiment_initial_state_entries`) отклоняются `ValueError` —
+  такие записи на служебные имена не переносятся;
 - `parameter_ensemble(results)` — ансамбль φ/θ из готовых результатов
   (`.base` любых результатов оптимизации), выборочная ковариация;
 - `predictive_intervals(problem, phi_samples, level)` — прогнозные квантили
@@ -629,6 +711,11 @@ finally:
   posterior интервалы приближённы (границы min/max не вшиты); `'fd-hessian'`
   — sanity-check с капом 50 параметров; bootstrap-выводы опираются на
   число независимых экспериментов/остатков;
+- **Bootstrap и exp-specific x0**: `bootstrap_experiments` для
+  `MultiExperimentProblem` переименовывает копии экспериментов draw в
+  уникальные служебные имена, поэтому эксперимент-специфичные начальные
+  состояния `x0/<experiment>/<pop>/<slot>` на них не переносятся —
+  пространства с такими записями отклоняются `ValueError` до цикла draw;
 - **Жёсткие интеграторы P2** (`docs/integrators.md`): substepping внутри
   `derivatives()`, синапсы остаются явными, while_loop-adjoint для них не
   поддержан — совместимость с чувствительностями/BPTT проверяйте
