@@ -103,7 +103,7 @@ graph.add_synapse('input->exc', syn, src='input', tgt='exc')
 Проверки:
 1. `n_pre` каждого синапса == `n_units` исходной популяции/входа
 2. `n_post` каждого синапса == `n_units` целевой популяции
-3. Все динамические популяции имеют хотя бы один входящий синапс (警告)
+3. Все динамические популяции имеют хотя бы один входящий синапс
 
 ```python
 graph.validate()  # Raises ValueError при ошибке
@@ -245,7 +245,7 @@ inputs = graph.pack_inputs({'theta': gen(t_seq)})
 
 ### Концепция
 
-NetworkRNN использует `tf.scan` для пошагового интегрирования сети. На каждом временном шаге:
+NetworkRNN использует `tf.while_loop` по TensorArrays для пошагового интегрирования сети. На каждом временном шаге:
 1. Вычисляются синаптические токи от всех проекций
 2. Обновляются состояния динамических популяций через интегратор
 3. Обновляются состояния синапсов
@@ -257,6 +257,8 @@ NetworkRNN(
     graph: NetworkGraph,
     integrator: BaseIntegrator,
     stability_penalty_weight: float = 0.0,
+    *,
+    integration_mode: str = "split",
     **kwargs
 )
 ```
@@ -266,18 +268,37 @@ NetworkRNN(
 | `graph` | NetworkGraph | Граф сети | — |
 | `integrator` | BaseIntegrator | Интегратор | — |
 | `stability_penalty_weight` | float | Вес штрафа за стабильность | 0.0 |
+| `integration_mode` | str | Режим интегрирования: `'split'` или `'network'` | `'split'` |
+
+### Режим интегрирования (integration_mode)
+
+- `'split'` (по умолчанию): на каждом шаге сначала обновляются синапсы,
+  затем популяции — с токами по новым состояниям синапсов. Из-за
+  расщепления порядок на связанной сети не выше 2 (подробности и числа —
+  `docs/integrators.md`).
+- `'network'`: интегратор делает один согласованный шаг по всей связанной
+  сети (`step_network` поверх `_JointNetworkRHS`); RK4 сохраняет порядок ~4
+  на связанной сети. Требует `integrator.supports_network_step=True`
+  (Euler/Heun/RK4/Rosenbrock; AdaptiveRK/IMEX/Exponential бросят
+  `ValueError`). Ограничения режима: `stability_loss` равен 0 (не
+  оценивается), аналитический adjoint не поддержан (только discrete/BPTT).
+
+Режим задаётся один раз в конструкторе и един на весь прогон. Форматы
+`final_state` и `initial_state` (плоские списки `(pop_states, syn_states)`)
+от режима не зависят, поэтому carry-цепочки продолжения симуляции
+(`output.final_state` → `initial_state` следующего прогона) работают в обоих
+режимах.
 
 ### Вызов сети
 
 ```python
-output = network(t_sequence, inputs=None, initial_state=None, training=False)
+output = network(t_sequence, inputs=None, initial_state=None)
 ```
 
 **Аргументы**:
 - `t_sequence`: tf.Tensor shape `[batch, T, 1]` или `[batch, T]` — временная последовательность в мс
 - `inputs`: Optional tf.Tensor shape `[batch, T, total_input_units]` — предвычисленные частоты разрядов внешних входов, упакованные через `graph.pack_inputs()`. Если граф не содержит объявленных входов — `None`
 - `initial_state`: Optional[Tuple[pop_states, syn_states]] — начальное состояние. Если None, используется нулевое.
-- `training`: bool — режим обучения
 
 **Возвращает**: `NetworkOutput`
 
@@ -438,6 +459,11 @@ output = network(t_seq, inputs=inputs)
 print(output.stability_loss)  # скаляр
 ```
 
+> **Примечание.** В режиме `integration_mode='network'` оценка
+> стабильности не производится и `stability_loss` равен нулю
+> (`step_network` не аккумулирует per-step `local_error`) — мониторинг
+> стабильности работает в split-режиме (по умолчанию).
+
 ---
 
 ## Внутренняя структура (_step_fn)
@@ -445,10 +471,15 @@ print(output.stability_loss)  # скаляр
 Функция `_step_fn` выполняет один шаг симуляции и декорирована `@tf.function` для компиляции в граф TensorFlow:
 
 ```python
-def _step_fn(states, t, input_step, graph, integrator):
+def _step_fn(states, t, input_step, graph, integrator, *, integration_mode="split"):
     # 1. Распаковка состояний с использованием кэшированных оффсетов
     pop_states_dict = {...}
     syn_states_dict = {...}
+
+    # integration_mode='network': единый шаг интегратора по всей сети —
+    # integrator.step_network(_JointNetworkRHS(graph, input_rates),
+    #                         pop_states, syn_states, graph.dt);
+    # stability-аккумулятор возвращается неизменным.
 
     # 2. Вычисление синаптических токов с использованием кэша _syn_info_cache
     for syn_name, entry, _ in graph._syn_info_cache:
@@ -468,7 +499,9 @@ def _step_fn(states, t, input_step, graph, integrator):
     return (new_pop_states, new_syn_states, stability_error)
 ```
 
-Внешние входы (`input_step`) передаются на каждом шаге как срез упакованного тензора `inputs`.
+Внешние входы (`input_step`) передаются на каждом шаге как срез упакованного
+тензора `inputs`; внутри шага в обоих режимах они заморожены (zero-order
+hold).
 
 ### Кэширование структур
 

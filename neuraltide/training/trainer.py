@@ -2,7 +2,7 @@ import csv
 import json
 import os
 from dataclasses import dataclass
-from typing import Dict, List, Optional, Literal, Tuple, Union
+from typing import Any, Dict, List, Optional, Literal, Tuple, Union
 
 import tensorflow as tf
 
@@ -113,7 +113,7 @@ class Trainer:
         t_sequence: TensorType,
         inputs: TensorType,
         initial_state: Optional[Tuple[StateList, StateList]] = None,
-    ) -> Dict[str, float]:
+    ) -> Dict[str, Any]:
         with tf.GradientTape() as tape:
             output = self.network(
                 t_sequence, inputs=inputs, training=True, initial_state=initial_state
@@ -121,44 +121,49 @@ class Trainer:
             loss = self.loss_fn(output, self.network)
 
         grads = tape.gradient(loss, self.network.trainable_variables)
+        # grads — до клиппинга; их получают callbacks через logs["grads"].
         grads_and_vars = [
             (g, v)
             for g, v in zip(grads, self.network.trainable_variables)
             if g is not None
         ]
         self._apply_grads(grads_and_vars)
-        return {"loss": loss}
+        return {"loss": loss, "grads": grads}
 
     def _train_step_adjoint(
         self,
         t_sequence: TensorType,
         inputs: TensorType,
         initial_state: Optional[Tuple[StateList, StateList]] = None,
-    ) -> Dict[str, float]:
+    ) -> Dict[str, Any]:
         """Train step using AdjointSolver (memory-efficient gradients).
 
-        initial_state is accepted for API parity but ignored: AdjointSolver
-        currently runs the forward pass from the network's default zero state.
+        initial_state передаётся в AdjointSolver.compute_gradients и влияет
+        и на прямой прогон, и на backward (state_info строится от него).
+        Градиенты stability-штрафа считаются от состояния по умолчанию
+        (см. AdjointSolver.compute_gradients).
         """
-        del initial_state  # not supported by AdjointSolver.compute_gradients yet
-
         target = self._extract_targets(self.loss_fn)
         solver = self._get_adjoint_solver()
         grads, variables, output = solver.compute_gradients(
-            t_sequence, inputs, target, self.loss_fn
+            t_sequence,
+            inputs,
+            target,
+            self.loss_fn,
+            initial_state=initial_state,
         )
 
         loss = self.loss_fn(output, self.network)
         grads_and_vars = [(g, v) for g, v in zip(grads, variables) if g is not None]
         self._apply_grads(grads_and_vars)
-        return {"loss": loss}
+        return {"loss": loss, "grads": grads}
 
     def train_step(
         self,
         t_sequence: TensorType,
         inputs: TensorType,
         initial_state: Optional[Tuple[StateList, StateList]] = None,
-    ) -> Dict[str, float]:
+    ) -> Dict[str, Any]:
         if self.grad_method == "adjoint":
             return self._train_step_adjoint(t_sequence, inputs, initial_state)
         if self._compiled_train_step is not None:
@@ -189,9 +194,14 @@ class Trainer:
             history.loss_history.append(loss_val)
 
             if callbacks:
+                logs: Dict[str, Any] = {"loss": loss_val}
+                # Градиенты (до клиппинга) получают callbacks, например
+                # GradientMonitor читает их из logs["grads"].
+                if step_result.get("grads") is not None:
+                    logs["grads"] = step_result["grads"]
                 for callback in callbacks:
                     if hasattr(callback, "on_epoch_end"):
-                        callback.on_epoch_end(epoch, {"loss": loss_val})
+                        callback.on_epoch_end(epoch, logs)
 
         self._last_history = history
         return history

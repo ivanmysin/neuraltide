@@ -5,12 +5,14 @@ requires-python = ">=3.12"
 dependencies = [
     "tensorflow>=2.16",
     "numpy>=1.26",
-    "scipy>=1.12",
+    "scipy>=1.15",
 ]
 
 [project.optional-dependencies]
 dev = ["pytest>=8.0", "pytest-cov", "black", "ruff"]
 vis = ["rich>=13.0"]
+global = ["cma>=3.3"]
+pareto = ["pymoo>=0.6"]
 
 [build-system]
 requires = ["setuptools>=61.0"]
@@ -33,3 +35,4 @@ testpaths = ["tests"]
 python_files = ["test_*.py"]
 python_functions = ["test_*"]
 addopts = "-v --tb=short"
+markers = ["slow: long-running numerical or audit tests"]

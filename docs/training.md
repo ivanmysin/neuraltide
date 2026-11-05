@@ -37,7 +37,6 @@ history = trainer.fit(t_seq, inputs=inputs, epochs=epochs, verbose=1)
 
 - `fit(t_seq, inputs=None, epochs, verbose)` — обучение сети
 - `predict(t_seq, inputs)` — предсказание без обучения
-- `evaluate(t_seq, inputs)` — вычисление loss без обновления весов
 - `export_results(path, format="json")` — экспорт результатов в JSON или CSV
 
 ### Экспорт результатов
@@ -131,12 +130,17 @@ trainer.fit(t_seq, inputs=inputs, epochs=500, callbacks=callbacks)
 
 ### GradientMonitor
 
-Логирует градиенты:
+Логирует нормы градиентов по переменным. Trainer пробрасывает градиенты в
+колбэки через `logs["grads"]` на каждой эпохе (до клиппинга); монитор
+сохраняет историю норм в `monitor.history` — список dict с ключами
+`epoch`, `global_norm`, `norms`:
 
 ```python
 from neuraltide.training import GradientMonitor
 
-callbacks = [GradientMonitor(every_n_steps=50)]
+monitor = GradientMonitor(log_every=50)
+callbacks = [monitor]
+# После обучения: monitor.history — история норм градиентов по эпохам
 ```
 
 ### ExperimentLogger
@@ -167,7 +171,7 @@ Adjoint вычисляет градиенты через backward pass, анал
 - **Ограниченная видеопамять** (GPU)
 - **Большие модели** с many parameters
 
-### benchmarks
+### Потребление памяти (измерения)
 
 | T | BPTT RAM | Adjoint RAM | Уменьшение |
 |---|----------|------------|-------------|
@@ -197,17 +201,34 @@ history = trainer.fit(t_seq, inputs=inputs, epochs=100)
 Для верификации можно сравнить градиенты adjoint и BPTT:
 
 ```python
-from neuraltide.training.adjoint import compute_gradients as adjoint_grads
-from neuraltide.training.trainer import compute_gradients as bptt_grads
+from neuraltide.optimization import compare_bptt_adjoint
 
-grads_adjoint = adjoint_grads(network, t_seq, inputs, loss_fn)
-grads_bptt = bptt_grads(network, t_seq, inputs, loss_fn)
+report = compare_bptt_adjoint(network, loss_fn, t_seq, inputs=inputs)
 
-# Максимальная разница ~1e-7
-for (name_a, g_a), (name_b, g_b) in zip(grads_adjoint, grads_bptt):
-    diff = tf.abs(g_a - g_b).numpy().max()
-    print(f"{name}: {diff:.2e}")
+print(report['loss_abs_diff'])      # разница потерь BPTT vs adjoint (~1e-7)
+print(report['max_grad_abs_diff'])  # максимальная разница градиентов
+print(report['cosine_similarity'])  # косинусная близость векторов градиентов
 ```
+
+### Adjoint и режим интегрирования (integration_mode)
+
+`AdjointSolver` захватывает `network.integration_mode` (по умолчанию
+`'split'`) и проигрывает его во всех шагах backward-циклов, поэтому
+**discrete adjoint** (по умолчанию, `use_analytical_adjoint=False`) и BPTT
+поддержаны в обоих режимах и дифференцируют ровно тот шаг, который сделан
+в прямом прогоне — включая network-wide шаг `step_network`
+(`integration_mode='network'`).
+
+**Analytical adjoint** (`use_analytical_adjoint=True`) привязан к
+split-шагу (`adjoint_derivatives()`/`parameter_jacobian()` моделей): в
+network-режиме конструктор `AdjointSolver` бросает `NotImplementedError`.
+Используйте discrete adjoint или соберите сеть с
+`integration_mode='split'`.
+
+**Ограничение stability-штрафа**: `step_network` не возвращает per-step
+`local_error`, поэтому в network-режиме `stability_loss` равен нулю и
+`StabilityPenalty` не даёт ни сигнала, ни градиента — штрафы за
+стабильность работают только в split-режиме.
 
 ---
 
@@ -289,3 +310,5 @@ print(f"Final loss: {history.loss_history[-1]:.4f}")
 1. **Adjoint работает только для моделей с дискретным временем** — непрерывные методы (CTNG) не поддерживаются
 2. **Точность градиентов ~1e-7** — достаточна для обучения, но не для теоретических исследований
 3. **Медленнее BPTT** — из-за Python loop, рекомендуется для длинных последовательностей где память важнее скорости
+4. **Analytical adjoint — только split-режим** — с `integration_mode='network'` используйте discrete adjoint (или BPTT)
+5. **Stability-штрафы — только split-режим** — в network-режиме `stability_loss == 0` и `StabilityPenalty` не оценивается

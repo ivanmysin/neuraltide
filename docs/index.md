@@ -1,104 +1,91 @@
-# NeuralTide Documentation
+# NeuralTide
 
-Добро пожаловать в NeuralTide — библиотеку для моделирования нейронных сетей на основе популяционных моделей с использованием TensorFlow.
+NeuralTide — Python-библиотека для дифференцируемого моделирования, обучения и калибровки нейронных сетей на основе популяционных (mean-field) моделей. Все вычисления выполняются в TensorFlow, поэтому градиенты по параметрам доступны напрямую — через BPTT или adjoint-метод.
 
-## Описание
+## Для кого
 
-NeuralTide предоставляет гибкий инструментарий для создания и симуляции нейронных сетей с:
+- **Вычислительные нейробиологи и исследователи**, которым нужны сети из популяционных моделей (Izhikevich mean-field, Wilson–Cowan, Fokker–Planck) с реалистичной синаптической динамикой.
+- **Инженеры и data-scientists**, подгоняющие параметры модели под экспериментальные данные: слой калибровки объединяет локальные и глобальные оптимизаторы, анализ идентифицируемости и оценку неопределённости.
+- **Студенты и преподаватели**, изучающие динамику нейронных сетей: модель собирается из готовых компонентов декларативно, без ручного программирования уравнений.
 
-- **Популяционными моделями**: Izhikevich Mean-Field, Wilson-Cowan, Fokker-Planck
-- **Синаптическими моделями**: Static, NMDA, Tsodyks-Markram (STP), Composite
-- **Входными генераторами**: Sinusoidal, ConstantRate, VonMises
-- **Интеграторами**: Euler, Heun, RK4
-- **Модулями данных**: `neuraltide.data` (сохранение/загрузка HDF5)
-- **Keras-моделью**: `neuraltide.model.BrainModelKeras`
+## Возможности
 
-## Быстрый старт
-
-```python
-import numpy as np
-import tensorflow as tf
-from neuraltide.populations import IzhikevichMeanField
-from neuraltide.synapses import StaticSynapse
-from neuraltide.inputs import SinusoidalGenerator
-from neuraltide.core.network import NetworkGraph, NetworkRNN
-from neuraltide.integrators import RK4Integrator
-
-# Создание популяции
-pop = IzhikevichMeanField(dt=0.5, params={
-    'tau_pop': [1.0], 'alpha': [0.5], 'a': [0.02],
-    'b': [0.2], 'w_jump': [0.1], 'Delta_I': [0.5], 'I_ext': [1.0],
-})
-
-# Создание генератора входного сигнала
-gen = SinusoidalGenerator(dt=0.5, params={
-    'amplitude': 10.0, 'freq': 8.0, 'phase': 0.0, 'offset': 5.0,
-})
-
-# Создание синапса
-syn = StaticSynapse(n_pre=1, n_post=1, dt=0.5, params={
-    'gsyn_max': 0.1, 'pconn': [[1.0]], 'e_r': 0.0,
-})
-
-# Построение сети
-graph = NetworkGraph(dt=0.5)
-graph.declare_input('input', n_units=gen.n_units)
-graph.add_population('exc', pop)
-graph.add_synapse('input->exc', syn, src='input', tgt='exc')
-
-network = NetworkRNN(graph, integrator=RK4Integrator())
-
-# Запуск симуляции
-t_seq = tf.constant(np.arange(0, 100, 0.5)[None, :, None])
-inputs = graph.pack_inputs({'input': gen(t_seq)})
-output = network(t_seq, inputs=inputs)
-```
-
-## Структура документации
-
-### Основные разделы
-
-| Раздел | Описание |
-|--------|----------|
-| [Архитектура](architecture.md) | Общее устройство библиотеки |
-| [Базовые классы](core.md) | PopulationModel, SynapseModel, BaseInputGenerator |
-| [Популяции](populations.md) | Все типы популяционных моделей |
-| [Синапсы](synapses.md) | Все типы синаптических моделей |
-| [Генераторы](inputs.md) | Все типы входных генераторов |
-| [Интеграторы](integrators.md) | Методы численного интегрирования |
-| [Сеть](network.md) | NetworkGraph и NetworkRNN |
-| [Конфигурация](config.md) | Система конфигурации и реестры |
-| [Обучение](training.md) | Обучение сети: Trainer, loss functions, adjoint method |
-| [Данные](data.md) | Модуль neuraltide.data: сохранение и загрузка HDF5 |
-| [Модель](model.md) | Модуль neuraltide.model: BrainModelKeras |
-| [Playbook по оптимизации](optimization_playbook.md) | Приёмы подгонки параметров: масштабирование, loss, градиенты, жёсткость, идентифицируемость, UQ |
-| [Ограничения](constraints.md) | Ограничения на параметры |
-| [Примеры](examples.md) | Полные примеры использования |
-| [API Reference](api_reference.md) | Полный справочник API |
+- **Популяционные модели**: Izhikevich mean-field, Wilson–Cowan (rate model), Fokker–Planck (Brunel 2000, модель A)
+- **Синаптическая динамика**: Tsodyks–Markram (STP), NMDA с Mg²⁺ блоком, SecondOrder (двойная экспонента), статические и композитные синапсы
+- **Входные генераторы**: Sinusoidal, ConstantRate, VonMises, PlaceField (клетки места с фазовой прецессией)
+- **Интеграторы**: Euler, Heun, RK4; режимы split и network-wide для связанной сети
+- **Обучение и калибровка**: Trainer (BPTT/adjoint), SciPy-оптимизаторы, мультистарт, multiple shooting, анализ чувствительности, FIM, оценка неопределённости
+- **Работа с данными**: сохранение и загрузка состояний и результатов в HDF5 (`neuraltide.data`)
 
 ## Установка
 
-```bash
-pip install neuraltide
-```
-
-или из исходников:
+Пакет пока не опубликован на PyPI, поэтому установка выполняется из
+исходников репозитория (после публикации на PyPI станет доступна
+команда `pip install neuraltide`):
 
 ```bash
-git clone https://github.com/your-repo/neuraltide.git
+git clone https://github.com/ivanmysin/neuraltide.git
 cd neuraltide
-pip install -e .
+pip install -e "."
 ```
+
+Для разработки используйте `pip install -e ".[dev]"`.
+
+## Быстрый старт
+
+Минимальный рабочий пример — сборка сети из одной популяции и запуск симуляции — приведён в [README](../README.md#быстрый-старт) репозитория. Дальнейшие разделы документации ссылаются на этот пример как на отправную точку; подробные сценарии — в [Примерах](examples.md).
+
+## Карта документации
+
+### Руководства (`guide/`)
+
+Пошаговые сценарии для новых пользователей:
+
+| Раздел | Описание |
+|--------|----------|
+| [Первые шаги](guide/getting_started.md) | Установка, основные понятия, первый запуск |
+| [Построение сети](guide/building_networks.md) | Популяции, синапсы, входы, топология через `NetworkGraph` |
+| [Запуск симуляций](guide/running_simulations.md) | Выбор интегратора и шага, режимы split/network, контроль точности |
+| [Калибровка по данным](guide/calibration.md) | Постановка задачи, оптимизаторы, проверка результата |
+| [Расширенная калибровка](guide/advanced_calibration.md) | Идентифицируемость, неопределённость, ограничения на прогнозы, параллельные оценки |
+
+### Примеры и решение проблем
+
+| Раздел | Описание |
+|--------|----------|
+| [Примеры](examples.md) | Полные примеры использования: от простой сети до сквозной калибровки |
+| [Решение проблем](troubleshooting.md) | Типичные ошибки, NaN в градиентах, выбор шага интегрирования, диагностика |
+| [API Reference](api_reference.md) | Полный справочник по публичному API |
+
+### Справочные разделы
+
+| Раздел | Описание |
+|--------|----------|
+| [Архитектура](architecture.md) | Общее устройство библиотеки и взаимодействие компонентов |
+| [Базовые классы](core.md) | `PopulationModel`, `SynapseModel`, `BaseInputGenerator` |
+| [Популяции](populations.md) | Все типы популяционных моделей |
+| [Синапсы](synapses.md) | Все типы синаптических моделей |
+| [Генераторы входов](inputs.md) | Все типы входных генераторов |
+| [Интеграторы](integrators.md) | Методы численного интегрирования и работа с жёсткими системами |
+| [Сеть](network.md) | `NetworkGraph` и `NetworkRNN` |
+| [Обучение](training.md) | `Trainer`, функции потерь, BPTT и adjoint-метод |
+| [Оптимизация и калибровка](optimization.md) | Слой калибровки: постановка задачи, оптимизаторы, чувствительности, неопределённость |
+| [Конфигурация](config.md) | Глобальные настройки и реестры классов |
+| [Ограничения параметров](constraints.md) | Мин/макс и другие ограничения на параметры |
+| [Данные](data.md) | Модуль `neuraltide.data`: сохранение и загрузка HDF5 |
+| [Модель](model.md) | Модуль `neuraltide.model`: `BrainModelKeras` |
 
 ## Требования
 
-- Python 3.12+
-- TensorFlow 2.x
-- NumPy
+- Python >= 3.12
+- TensorFlow >= 2.16
+- NumPy >= 1.26
+- SciPy >= 1.15 (обязательная зависимость: локальные оптимизаторы и
+  стратегии калибровки, спектральные вычисления FIM; генераторы входов
+  её не используют)
 - (опционально) Matplotlib для визуализации
-- (опционально) SciPy для VonMisesGenerator
-- (опционально) h5py для neuraltide.data
+- (опционально) h5py для `neuraltide.data`
 
 ## Версия
 
-0.2.0
+0.1.0
