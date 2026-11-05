@@ -1,7 +1,7 @@
 """
 neuraltide.optimization — слой калибровки поверх моделей сети.
 
-Этапы P0/P1 дорожной карты оптимизации (docs/optimization_roadmap.md):
+Состав пакета:
 
 - transforms: дифференцируемые преобразования координат параметров
   (θ ↔ φ) — identity/affine/log/logit/scaled_sigmoid/softplus/bounded_log;
@@ -16,9 +16,9 @@ neuraltide.optimization — слой калибровки поверх моде�
   with_objective, with_inputs, with_initial_state) с общими счётчиками;
   Experiment, MultiExperimentProblem (сумма потерь по экспериментам в
   одной GradientTape), FrozenProblem (подпространство φ);
-- results: Evaluation, OptimizationResult и DTO этапа P1
-  (LocalOptimizerResult, StartResult, MultistartResult, RunCheckpoint,
-  JacobianResult) с единой JSON-сериализацией;
+- results: Evaluation, OptimizationResult и производные DTO результатов
+  оптимизации (LocalOptimizerResult, StartResult, MultistartResult,
+  RunCheckpoint, JacobianResult) с единой JSON-сериализацией;
 - diagnostics: FD/Taylor/dot-product/dt/dtype проверки градиентов;
 - local: SciPy-адаптеры minimize_lbfgsb / least_squares (TRF/LM) поверх
   CalibrationProblem;
@@ -36,31 +36,31 @@ neuraltide.optimization — слой калибровки поверх моде�
 - identifiability: compute_fim (FIM = JᵀJ по готовому якобиану),
   likelihood_profile (профиль правдоподобия, χ²-интервалы), select_subset
   (доводка подмножества с оценкой смещения);
-- global_search (P2): единый глобальный безградиентный поиск
+- global_search: единый глобальный безградиентный поиск
   (global_search с method='de'|'cma'|'spsa'|'basinhopping'|'nsga2',
   бюджет max_evals, refine_top_k, checkpoint/resume для cma/spsa;
   extras 'global'/'pareto' для cma/pymoo);
-- robust (P2): балансировка компонент потерь — WeightStrategy
+- robust: балансировка компонент потерь — WeightStrategy
   (FixedWeights/UncertaintyWeighting/SelfAdaptiveWeights/GradNormWeights),
   PCGrad/CAGrad-проекции, balanced_gradient/balanced_train с обязательным
   baseline, adaptive_window_sampler (focused view по остатку);
-- constraints (P2): ограничения на прогнозы — ConstraintSpec,
+- constraints: ограничения на прогнозы — ConstraintSpec,
   ConstrainedProblem (AL-член одной лентой), augmented_lagrangian
   (внешние итерации, checkpoint/resume), epsilon_constraint;
-- uq (P2): неопределённость — residual_diagnostics, laplace_approximation
+- uq: неопределённость — residual_diagnostics, laplace_approximation
   (GN/FD-Гессиан, маргинальные интервалы), bootstrap_experiments /
   residual_bootstrap, parameter_ensemble, predictive_intervals,
   noise_sensitivity;
-- parallel (P2): пакетная оценка кандидатов — CandidateTask/EvalRecord,
+- parallel: пакетная оценка кандидатов — CandidateTask/EvalRecord,
   SerialPool, ProcessPool (spawn-процессы), evaluate_candidates,
   make_evaluator (инъекция в global_search).
 
-Имена P0 (transforms/parameters/objectives/problem/results/diagnostics)
-импортированы eager-импортом; имена P1/P2 (local/sensitivities/shooting/
-strategies/schedules/identifiability/global_search/robust/constraints/uq/
-parallel) доступны лениво через PEP-562 __getattr__ по _LAZY_MAP. Все
-модули — eager-режим, batch=1 (контракт NetworkRNN); публичный API —
-через __all__ ниже.
+Имена базовых модулей (transforms/parameters/objectives/problem/results/
+diagnostics) импортированы eager-импортом; имена остальных модулей
+(local/sensitivities/shooting/strategies/schedules/identifiability/
+global_search/robust/constraints/uq/parallel) доступны лениво через
+PEP-562 __getattr__ по _LAZY_MAP. Все модули — eager-режим, batch=1
+(контракт NetworkRNN); публичный API — через __all__ ниже.
 """
 
 import importlib
@@ -93,8 +93,8 @@ from neuraltide.optimization.transforms import (
 )
 
 # Карта публичных имён на модули (PEP-562). Существующие имена уже
-# импортированы eager-импортом выше; карта дополнительно покрывает новые
-# CORE-имена P1 и служит единым реестром для ленивого доступа.
+# импортированы eager-импортом выше; карта служит единым реестром для
+# ленивого доступа к остальным именам.
 _LAZY_MAP: Dict[str, str] = {
     # transforms
     "Transform": "neuraltide.optimization.transforms",
@@ -135,27 +135,27 @@ _LAZY_MAP: Dict[str, str] = {
     "dt_convergence": "neuraltide.optimization.diagnostics",
     "dtype_consistency_check": "neuraltide.optimization.diagnostics",
     "compare_bptt_adjoint": "neuraltide.optimization.diagnostics",
-    # local (P1)
+    # local
     "minimize_lbfgsb": "neuraltide.optimization.local",
     "least_squares": "neuraltide.optimization.local",
-    # sensitivities (P1)
+    # sensitivities
     "residual_jvp": "neuraltide.optimization.sensitivities",
     "residual_jacobian": "neuraltide.optimization.sensitivities",
     "value_and_gradient_checkpointed": "neuraltide.optimization.sensitivities",
     "truncated_bptt": "neuraltide.optimization.sensitivities",
     "CheckpointedGradient": "neuraltide.optimization.sensitivities",
     "TruncatedResult": "neuraltide.optimization.sensitivities",
-    # shooting (P1)
+    # shooting
     "ShootingConfig": "neuraltide.optimization.shooting",
     "MultipleShootingProblem": "neuraltide.optimization.shooting",
     "SingleShootingCheck": "neuraltide.optimization.shooting",
-    # strategies (P1)
+    # strategies
     "sample_phi0s": "neuraltide.optimization.strategies",
     "multistart": "neuraltide.optimization.strategies",
     "dt_continuation": "neuraltide.optimization.strategies",
     "subset_continuation": "neuraltide.optimization.strategies",
     "ContinuationResult": "neuraltide.optimization.strategies",
-    # schedules (P1)
+    # schedules
     "Stage": "neuraltide.optimization.schedules",
     "ScheduleResult": "neuraltide.optimization.schedules",
     "ContinuationScheduler": "neuraltide.optimization.schedules",
@@ -163,7 +163,7 @@ _LAZY_MAP: Dict[str, str] = {
     "teacher_forcing_schedule": "neuraltide.optimization.schedules",
     "objective_schedule": "neuraltide.optimization.schedules",
     "smooth_objective": "neuraltide.optimization.schedules",
-    # identifiability (P1)
+    # identifiability
     "compute_fim": "neuraltide.optimization.identifiability",
     "likelihood_profile": "neuraltide.optimization.identifiability",
     "select_subset": "neuraltide.optimization.identifiability",
@@ -172,12 +172,12 @@ _LAZY_MAP: Dict[str, str] = {
     "CollinearityPair": "neuraltide.optimization.identifiability",
     "ProfileResult": "neuraltide.optimization.identifiability",
     "SubsetResult": "neuraltide.optimization.identifiability",
-    # global_search (P2)
+    # global_search
     "global_search": "neuraltide.optimization.global_search",
     "GlobalOptimizerResult": "neuraltide.optimization.global_search",
     "ParetoResult": "neuraltide.optimization.global_search",
     "OptionalDependencyError": "neuraltide.optimization.global_search",
-    # robust (P2)
+    # robust
     "WeightStrategy": "neuraltide.optimization.robust",
     "FixedWeights": "neuraltide.optimization.robust",
     "UncertaintyWeighting": "neuraltide.optimization.robust",
@@ -190,7 +190,7 @@ _LAZY_MAP: Dict[str, str] = {
     "adaptive_window_sampler": "neuraltide.optimization.robust",
     "balanced_train": "neuraltide.optimization.robust",
     "BalancedResult": "neuraltide.optimization.robust",
-    # constraints (P2)
+    # constraints
     "ConstraintSpec": "neuraltide.optimization.constraints",
     "AugmentedLagrangianState": "neuraltide.optimization.constraints",
     "ConstrainedProblem": "neuraltide.optimization.constraints",
@@ -198,7 +198,7 @@ _LAZY_MAP: Dict[str, str] = {
     "epsilon_constraint": "neuraltide.optimization.constraints",
     "augmented_lagrangian": "neuraltide.optimization.constraints",
     "ALResult": "neuraltide.optimization.constraints",
-    # uq (P2)
+    # uq
     "residual_diagnostics": "neuraltide.optimization.uq",
     "SpecResidualDiagnostics": "neuraltide.optimization.uq",
     "WindowDiagnostics": "neuraltide.optimization.uq",
@@ -215,7 +215,7 @@ _LAZY_MAP: Dict[str, str] = {
     "noise_sensitivity": "neuraltide.optimization.uq",
     "NoiseFactorResult": "neuraltide.optimization.uq",
     "SensitivityResult": "neuraltide.optimization.uq",
-    # parallel (P2)
+    # parallel
     "CandidateTask": "neuraltide.optimization.parallel",
     "EvalRecord": "neuraltide.optimization.parallel",
     "SerialPool": "neuraltide.optimization.parallel",
@@ -263,27 +263,27 @@ __all__ = [
     "dt_convergence",
     "dtype_consistency_check",
     "compare_bptt_adjoint",
-    # local (P1)
+    # local
     "minimize_lbfgsb",
     "least_squares",
-    # sensitivities (P1)
+    # sensitivities
     "residual_jvp",
     "residual_jacobian",
     "value_and_gradient_checkpointed",
     "truncated_bptt",
     "CheckpointedGradient",
     "TruncatedResult",
-    # shooting (P1)
+    # shooting
     "ShootingConfig",
     "MultipleShootingProblem",
     "SingleShootingCheck",
-    # strategies (P1)
+    # strategies
     "sample_phi0s",
     "multistart",
     "dt_continuation",
     "subset_continuation",
     "ContinuationResult",
-    # schedules (P1)
+    # schedules
     "Stage",
     "ScheduleResult",
     "ContinuationScheduler",
@@ -291,7 +291,7 @@ __all__ = [
     "teacher_forcing_schedule",
     "objective_schedule",
     "smooth_objective",
-    # identifiability (P1)
+    # identifiability
     "compute_fim",
     "likelihood_profile",
     "select_subset",
@@ -300,12 +300,12 @@ __all__ = [
     "CollinearityPair",
     "ProfileResult",
     "SubsetResult",
-    # global_search (P2)
+    # global_search
     "global_search",
     "GlobalOptimizerResult",
     "ParetoResult",
     "OptionalDependencyError",
-    # robust (P2)
+    # robust
     "WeightStrategy",
     "FixedWeights",
     "UncertaintyWeighting",
@@ -318,7 +318,7 @@ __all__ = [
     "adaptive_window_sampler",
     "balanced_train",
     "BalancedResult",
-    # constraints (P2)
+    # constraints
     "ConstraintSpec",
     "AugmentedLagrangianState",
     "ConstrainedProblem",
@@ -326,7 +326,7 @@ __all__ = [
     "epsilon_constraint",
     "augmented_lagrangian",
     "ALResult",
-    # uq (P2)
+    # uq
     "residual_diagnostics",
     "SpecResidualDiagnostics",
     "WindowDiagnostics",
@@ -343,7 +343,7 @@ __all__ = [
     "noise_sensitivity",
     "NoiseFactorResult",
     "SensitivityResult",
-    # parallel (P2)
+    # parallel
     "CandidateTask",
     "EvalRecord",
     "SerialPool",

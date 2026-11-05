@@ -1,5 +1,5 @@
 """
-Экспоненциальный метод Эйлера (exponential Euler) — этап P2.
+Экспоненциальный метод Эйлера (exponential Euler) для жёсткой динамики.
 
 Правая часть на субшаге линеаризуется в текущей точке:
 
@@ -28,7 +28,7 @@ on_large_block='raise' (по умолчанию) бросает ValueError; 'eul
 (Python int d), поэтому работает и под tf.function.
 
 Градиенты — через развёртку шагов (BPTT/AD, tf.linalg.expm дифференцируем);
-аналитический while_loop-adjoint не поддерживается. Синапсы в P2 явные.
+аналитический while_loop-adjoint не поддерживается. Синапсы остаются явными.
 
 Network-wide шаг (integration_mode='network') не поддерживается
 (supports_network_step=False): NetworkRNN в этом режиме бросит ValueError.

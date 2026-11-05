@@ -854,13 +854,15 @@ class AdjointSolver:
 
 ## neuraltide.optimization
 
-Слой калибровки поверх сети (этапы P0/P1): дифференцируемые преобразования
-координат параметров (θ ↔ φ), единое пространство параметров, нормированные
-невязки, постановка задачи калибровки, диагностика градиентов (P0); SciPy
-L-BFGS-B / least_squares, мультистарт и continuation, forward sensitivities и
-checkpointed/truncated BPTT, multiple shooting, расписания и анализ
-идентифицируемости (P1). Публичные имена P1 доступны лениво (PEP-562)
-через `neuraltide.optimization`.
+Слой калибровки поверх сети: дифференцируемые преобразования координат
+параметров (θ ↔ φ), единое пространство параметров, нормированные невязки,
+постановка задачи калибровки (в том числе мультиэкспериментной) и
+диагностика градиентов; SciPy L-BFGS-B / least_squares, мультистарт и
+continuation, forward sensitivities и checkpointed/truncated BPTT, multiple
+shooting, расписания и анализ идентифицируемости; глобальный поиск,
+балансировка компонент целей, ограничения на прогнозы, оценка
+неопределённости и пакетная оценка кандидатов. Публичные имена доступны
+лениво (PEP-562) через `neuraltide.optimization`.
 
 ### Transform
 
@@ -994,11 +996,17 @@ class ObservationSpec:
     sigma: float = 1.0              # масштаб шума; вклад делится на sigma**2
     mask: Optional[TensorType] = None
     weight: float = 1.0
-    kind: str = "l2"                # l2 | relative | msle | huber | pseudo_huber
+    kind: str = "l2"                # l2 | relative | msle | huber |
+                                    # pseudo_huber | cauchy | tukey
     readout: Optional[BaseReadout] = None
     eps: float = 1e-8
-    delta: float = 1.0
+    delta: float = 1.0              # порог Хьюбера (> 0): huber/pseudo_huber
+    scale: float = 1.0              # масштаб c (> 0): cauchy/tukey
 ```
+
+`cauchy` и `tukey` — робастные виды: ограничивают вклад выбросов (у tukey
+штраф константен при |e| > c, у cauchy хвост логарифмический). Для `msle`
+предсказания должны быть неотрицательными.
 
 ### ResidualLoss
 
@@ -1094,7 +1102,7 @@ class OptimizationResult:
 Единый формат результата оптимизации. `to_dict()` / `from_dict()`,
 `save(path)` / `load(path)` — JSON-сериализация (numpy → list).
 
-### DTO результатов (P1)
+### DTO результатов
 
 ```python
 @dataclass
@@ -1194,7 +1202,7 @@ class FrozenProblem:
     # simulate/bounds_phi/pack/unpack; счётчики общие с базовой задачей
 ```
 
-### Локальные оптимизаторы (P1)
+### Локальные оптимизаторы
 
 ```python
 def minimize_lbfgsb(problem, phi0=None, *, maxiter=200, gtol=1e-6,
@@ -1206,8 +1214,8 @@ def least_squares(problem, phi0=None, *, method="trf", jacobian=None,
                   ) -> LocalOptimizerResult
 ```
 
-`minimize_lbfgsb`: `ftol=None` — dtype-aware auto (float64 → 2.2e-9,
-прежнее поведение scipy; float32 → ≈eps32, 1.19e-7). Явный `ftol`/
+`minimize_lbfgsb`: `ftol=None` — dtype-aware auto (float64 → 2.2e-9;
+float32 → ≈eps32, 1.19e-7). Явный `ftol`/
 `options['ftol']` чтится без изменений (приоритет у `options`), resolved
 значение фиксируется в `config['options']['ftol']`. При float32-координатах
 φ и эффективном `ftol < 1e-7` — одноразовый `UserWarning` о риске
@@ -1233,7 +1241,7 @@ forward-AD state одного `NetworkRNN`): честный fallback на `'2-po
 (значение не переопределяется). Нефинитный
 старт/невязки отклоняются `ValueError` до запуска решателя.
 
-### Чувствительности (P1)
+### Чувствительности
 
 ```python
 def residual_jvp(problem, phi, v) -> Tuple[np.ndarray, np.ndarray]
@@ -1261,7 +1269,7 @@ class TruncatedResult:
     notes: str             # документация приближённости режима
 ```
 
-### Multiple shooting (P1)
+### Multiple shooting
 
 ```python
 @dataclass
@@ -1294,7 +1302,7 @@ Residual-раскладка `r = [r_data; √w·gap_k]`, `0.5·‖r‖² == loss
 слотов первого сегмента, стыки и `finalize` сохраняются.
 `BrunelFokkerPlanck` не поддерживается (`NotImplementedError`).
 
-### Стратегии и расписания (P1)
+### Стратегии и расписания
 
 ```python
 def sample_phi0s(space, n, *, method="sobol", seed=None,
@@ -1346,7 +1354,7 @@ def objective_schedule(base_problem, objectives) -> List[Stage]
 def smooth_objective(objective, window: int) -> ResidualLoss
 ```
 
-### Идентифицируемость (P1)
+### Идентифицируемость
 
 ```python
 def compute_fim(jac: JacobianResult, *, energy=0.99, param_names=None,
@@ -1360,6 +1368,7 @@ def select_subset(problem, jac, keep, *, refit=True) -> SubsetResult
 ParameterSpace (координатами φ): non-trainable имя (реестровая константа
 вне вектора φ) отклоняется `ValueError`, как и неизвестное.
 
+```python
 @dataclass
 class FIMDirection:
     index: int
@@ -1432,7 +1441,7 @@ class SubsetResult:          # доводка подмножества с оце
     wall_time: float = 0.0
 ```
 
-### Глобальный поиск (P2)
+### Глобальный поиск
 
 ```python
 def global_search(problem, *, method="de", max_evals=None, bounds=None,
@@ -1481,7 +1490,7 @@ class ParetoResult:               # method='nsga2'
     config: Dict[str, Any] = {}
 ```
 
-### Балансировка компонент и робастные градиенты (P2)
+### Балансировка компонент и робастные градиенты
 
 ```python
 class WeightStrategy:                 # протокол: initial_weights/update
@@ -1528,7 +1537,7 @@ losses/grads, не совместное обучение); только BPTT-р�
 `projector`/`projector_kwargs` применяются и в основном, и в baseline-
 прогонах (kwargs сохраняются в `base.config['projector_kwargs']`).
 
-### Ограничения на прогнозы (P2)
+### Ограничения на прогнозы
 
 ```python
 @dataclass
@@ -1570,7 +1579,7 @@ class ALResult:
     wall_time: float
 ```
 
-### Неопределённость (P2)
+### Неопределённость
 
 ```python
 def residual_diagnostics(problem, phi, *, max_lag=10, n_bins=10,
@@ -1675,7 +1684,7 @@ class SensitivityResult:           # noise_sensitivity: per-factor записи
     notes: str = ""
 ```
 
-### Пакетная оценка кандидатов (P2)
+### Пакетная оценка кандидатов
 
 ```python
 @dataclass
@@ -1716,8 +1725,7 @@ def make_evaluator(build_problem, n_workers=1, seed=None, *,
 
 `tf_threads` — ограничение intra-op и inter-op пулов потоков TensorFlow в
 каждом worker-процессе (по умолчанию 1 — защита от CPU oversubscription
-между n_workers процессами); `None` — не трогать потоки TF (поведение до
-появления параметра). Если пулы TF в worker'е уже инициализированы и
+между n_workers процессами); `None` — не изменять потоки TF. Если пулы TF в worker'е уже инициализированы и
 настройка бросает `RuntimeError`, worker остаётся на дефолтной
 конфигурации потоков (fallback) — семантика оценки не меняется. При
 `n_workers=1` параметр валидируется, но игнорируется (SerialPool потоки
@@ -1765,13 +1773,13 @@ def print_summary(network, rich_library: Optional[object] = None) -> None:
 
 ## neuraltide.integrators.__init__
 
-Экспорты (P0/P1):
+Экспорты:
 - `BaseIntegrator`
 - `EulerIntegrator`
 - `HeunIntegrator`
 - `RK4Integrator`
 
-Экспорты P2 (жёсткие системы, см. `docs/integrators.md`):
+Экспорты жёстких систем (см. `docs/integrators.md`):
 - `AdaptiveRKIntegrator`
 - `IMEXEulerIntegrator`
 - `RosenbrockIntegrator`

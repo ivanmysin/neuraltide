@@ -1,5 +1,5 @@
 """
-CalibrationProblem: единая постановка задачи калибровки (этапы P0/P1).
+CalibrationProblem: единая постановка задачи калибровки.
 
 Инкапсулирует модель (NetworkRNN), пространство параметров (ParameterSpace),
 протокол (t_sequence, inputs, initial_state) и целевую функцию (objective),
@@ -12,7 +12,7 @@ CalibrationProblem: единая постановка задачи калибр�
     residual(phi)           — вектор нормированных невязок для GN/LM/TRF;
     validate(phi)           — потери на held-out экспериментах.
 
-Этап P1 добавляет поверх P0:
+Дополнительно к базовым операциям:
 
     * tensor-backed записи ParameterSpace (kind 'initial_state'/
       'shooting_state', см. ParameterSpace.add_initial_state_entries):

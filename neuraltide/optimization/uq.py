@@ -1,7 +1,7 @@
 """
-Uncertainty quantification этапа P2 (дорожная карта, раздел 7.4).
+Uncertainty quantification: оценка неопределённости параметров и прогнозов.
 
-Поверх CalibrationProblem / ParameterSpace / JacobianResult (P0/P1):
+Поверх CalibrationProblem / ParameterSpace / JacobianResult:
 
 - residual_diagnostics — разложение вектора невязок по ObservationSpec
   ResidualLoss: per-spec mean/std/max|.|, окна времени, автокорреляция

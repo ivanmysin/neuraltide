@@ -33,7 +33,7 @@ add_experiment_initial_state_entries). Обе адресуются StateLocator
 duplicate-check), но исключены из ``size``, ``pack``, ``unpack``,
 ``project`` и ``apply_to_model``.
 
-Ограничения P0/P1:
+Ограничения:
   * автоматически охватываются только trainable-параметры популяций
     и синапсов графа. Параметры генераторов входов и readout-слои в
     ``network.trainable_variables`` обычно не входят — они не

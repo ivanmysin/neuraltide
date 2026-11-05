@@ -1,508 +1,70 @@
 # Примеры использования
 
-В этом разделе приведены типичные сценарии использования NeuralTide.
+Все примеры — исполняемые скрипты в каталоге [`examples/`](../examples/),
+запускаются из корня репозитория:
 
-> Базовый пример смотрите в [`examples/example_simple.py`](../examples/example_simple.py).
+```bash
+python examples/example_simple.py
+```
+
+Разделы сгруппированы по задачам: от построения и симуляции сети до
+обучения и калибровки параметров.
 
 ---
 
-## Пример 1: Простая сеть — один вход, одна популяция
+## Базовая симуляция сетей
+
+| Пример | Файл | Что показывает |
+|--------|------|----------------|
+| Простая сеть | [`example_simple.py`](../examples/example_simple.py) | Базовая схема «вход → синапс → популяция»: синусоидальный генератор, `IzhikevichMeanField`, обучаемый `TsodyksMarkramSynapse`; сеть обучается воспроизводить заданную траекторию firing rate |
+| Одна популяция с тета-входом | [`example_01_single_population.py`](../examples/example_01_single_population.py) | `IzhikevichMeanField` (n_units=2) с тета-ритмическим входом через обучаемый синапс; воспроизведение целевой firing rate |
+| Сеть E–I с NMDA | [`example_02_exc_inh_nmda.py`](../examples/example_02_exc_inh_nmda.py) | Две популяции (exc + inh), синапсы AMPA+NMDA / AMPA / GABA_A, частичные наблюдения (target только для exc), `BandpassReadout` — loss в тета-диапазоне |
+| Несколько входов на популяции | [`example_multi_input_to_population.py`](../examples/example_multi_input_to_population.py) | Два `VonMisesGenerator` (30/40 Гц) → две популяции через синапс с диагональной матрицей связей |
+| Управление начальным состоянием | [`example_initial_state.py`](../examples/example_initial_state.py) | Пользовательские начальные условия (r, v, w), продолжение симуляции через `final_state`, сброс к нулевому состоянию |
+
+Общий паттерн построения сети (все примеры выше):
 
 ```python
-import numpy as np
-import tensorflow as tf
-from neuraltide.core.network import NetworkGraph, NetworkRNN
-from neuraltide.populations import IzhikevichMeanField
-from neuraltide.synapses import StaticSynapse
-from neuraltide.inputs import SinusoidalGenerator
-from neuraltide.integrators import RK4Integrator
-from neuraltide.utils import print_summary
-
-# Параметры
-dt = 0.5
-T = 1000  # мс
-
-# Создание генератора
-gen = SinusoidalGenerator(
-    dt=dt,
-    params={
-        'amplitude': 10.0,
-        'freq': 8.0,
-        'phase': 0.0,
-        'offset': 5.0,
-    }
-)
-
-# Создание популяции
-pop = IzhikevichMeanField(
-    dt=dt,
-    params={
-        'tau_pop':   [1.0],
-        'alpha':     [0.5],
-        'a':         [0.02],
-        'b':         [0.2],
-        'w_jump':    [0.1],
-        'Delta_I':   [0.5],
-        'I_ext':     [1.0],
-    }
-)
-
-# Создание синапса
-syn = StaticSynapse(
-    n_pre=1,
-    n_post=1,
-    dt=dt,
-    params={
-        'gsyn_max': 0.1,
-        'pconn': [[1.0]],
-        'e_r': 0.0,
-    }
-)
-
-# Построение графа
-graph = NetworkGraph(dt=dt)
+graph = NetworkGraph(dt=0.5)
 graph.declare_input('input', n_units=gen.n_units)
 graph.add_population('exc', pop)
 graph.add_synapse('input->exc', syn, src='input', tgt='exc')
 
-# Создание сети
-network = NetworkRNN(graph, integrator=RK4Integrator())
-print_summary(network)
-
-# Симуляция
-t_values = np.arange(0, T, dt, dtype=np.float32)
-t_seq = tf.constant(t_values[None, :, None])
-
-# Предвычисление входных частот
-inputs = graph.pack_inputs({'input': gen(t_seq)})
-
-output = network(t_seq, inputs=inputs)
-print(f"Output shape: {output.firing_rates['exc'].shape}")
-# (1, 2000, 1)
-```
-
----
-
-## Пример 2: Две популяции (E-I) с синапсами
-
-```python
-import numpy as np
-import tensorflow as tf
-from neuraltide.core.network import NetworkGraph, NetworkRNN
-from neuraltide.populations import IzhikevichMeanField
-from neuraltide.synapses import StaticSynapse
-from neuraltide.inputs import ConstantRateGenerator
-from neuraltide.integrators import RK4Integrator
-
-dt = 0.5
-T = 1000
-
-# Входной генератор (постоянная частота)
-gen = ConstantRateGenerator(dt=dt, params={'rate': 20.0})
-
-# Возбуждающая популяция (2 единицы)
-pop_exc = IzhikevichMeanField(dt=dt, params={
-    'tau_pop':   [1.0, 1.0],
-    'alpha':     [0.5, 0.5],
-    'a':         [0.02, 0.02],
-    'b':         [0.2, 0.2],
-    'w_jump':    [0.1, 0.1],
-    'Delta_I':   [0.5, 0.6],
-    'I_ext':     [1.0, 1.2],
-})
-
-# Тормозная популяция (2 единицы)
-pop_inh = IzhikevichMeanField(dt=dt, params={
-    'tau_pop':   [1.0, 1.0],
-    'alpha':     [0.5, 0.5],
-    'a':         [0.02, 0.02],
-    'b':         [0.2, 0.2],
-    'w_jump':    [0.1, 0.1],
-    'Delta_I':   [0.5, 0.5],
-    'I_ext':     [0.3, 0.3],  # меньший внешний ток
-})
-
-# Синапс: вход -> возбуждающая
-syn_in_exc = StaticSynapse(n_pre=1, n_post=2, dt=dt, params={
-    'gsyn_max': 0.1,
-    'pconn': [[1.0, 1.0]],
-    'e_r': 0.0,
-})
-
-# Синапс: возбуждающая -> тормозная
-syn_exc_inh = StaticSynapse(n_pre=2, n_post=2, dt=dt, params={
-    'gsyn_max': 0.08,
-    'pconn': [[1.0, 1.0], [1.0, 1.0]],
-    'e_r': 0.0,
-})
-
-# Синапс: тормозная -> возбуждающая (отрицательная проводимость)
-syn_inh_exc = StaticSynapse(n_pre=2, n_post=2, dt=dt, params={
-    'gsyn_max': -0.3,
-    'pconn': [[1.0, 1.0], [1.0, 1.0]],
-    'e_r': -70.0,  # тормозный потенциал реверса
-})
-
-# Построение графа
-graph = NetworkGraph(dt=dt)
-graph.declare_input('input', n_units=gen.n_units)
-graph.add_population('exc', pop_exc)
-graph.add_population('inh', pop_inh)
-graph.add_synapse('input->exc', syn_in_exc, src='input', tgt='exc')
-graph.add_synapse('exc->inh', syn_exc_inh, src='exc', tgt='inh')
-graph.add_synapse('inh->exc', syn_inh_exc, src='inh', tgt='exc')
-
 network = NetworkRNN(graph, integrator=RK4Integrator())
 
-# Симуляция
-t_values = np.arange(0, T, dt, dtype=np.float32)
-t_seq = tf.constant(t_values[None, :, None])
-inputs = graph.pack_inputs({'input': gen(t_seq)})
-output = network(t_seq, inputs=inputs)
-
-print(f"Exc rates shape: {output.firing_rates['exc'].shape}")
-print(f"Inh rates shape: {output.firing_rates['inh'].shape}")
+t_seq = tf.constant(t_values[None, :, None])       # [1, T, 1]
+inputs = graph.pack_inputs({'input': gen(t_seq)})  # предвычисленные частоты
+output = network(t_seq, inputs=inputs)             # output.firing_rates['exc']
 ```
 
----
+### Продолжение прогонов
 
-## Пример 3: VonMises генератор + Tsodyks-Markram синапс
+Прогоны стыкуются через `initial_state`: конечное состояние одного прогона
+(`output.final_state`) передаётся в начальное следующего. Сброс к состоянию
+по умолчанию — через `network.get_initial_state()`:
 
 ```python
-import numpy as np
-import tensorflow as tf
-from neuraltide.core.network import NetworkGraph, NetworkRNN
-from neuraltide.populations import IzhikevichMeanField
-from neuraltide.synapses import TsodyksMarkramSynapse
-from neuraltide.inputs import VonMisesGenerator
-from neuraltide.integrators import RK4Integrator
+output1 = network(t_seq, inputs=inputs)                          # первый прогон
+output2 = network(t_seq, inputs=inputs,
+                  initial_state=output1.final_state)             # продолжение
 
-dt = 0.05
-T = 500
-
-# VonMises генератор (тета-ритм)
-gen = VonMisesGenerator(
-    dt=dt,
-    params={
-        'mean_rate': 20.0,
-        'R': 0.5,
-        'freq': 8.0,
-        'phase': 0.0,
-    }
-)
-
-# Популяция
-pop = IzhikevichMeanField(dt=dt, params={
-    'tau_pop':   [1.0, 1.0],
-    'alpha':     [0.5, 0.5],
-    'a':         [0.02, 0.02],
-    'b':         [0.2, 0.2],
-    'w_jump':    [0.1, 0.1],
-    'Delta_I':   [0.5, 0.6],
-    'I_ext':     [0.1, 0.2],
-})
-
-# Tsodyks-Markram синапс с кратковременной пластичностью
-syn = TsodyksMarkramSynapse(
-    n_pre=1,
-    n_post=2,
-    dt=dt,
-    params={
-        'gsyn_max': {'value': [[0.1, 0.1]], 'trainable': True},
-        'tau_f':    {'value': 20.0,  'trainable': True, 'min': 6.0,  'max': 240.0},
-        'tau_d':    {'value': 5.0,   'trainable': True, 'min': 2.0,  'max': 15.0},
-        'tau_r':    {'value': 200.0, 'trainable': True, 'min': 91.0, 'max': 1300.0},
-        'Uinc':     {'value': 0.2,   'trainable': True, 'min': 0.04, 'max': 0.7},
-        'pconn':    {'value': [[1.0, 1.0]], 'trainable': False},
-        'e_r':      {'value': 0.0,   'trainable': False},
-    }
-)
-
-graph = NetworkGraph(dt=dt)
-graph.declare_input('theta', n_units=gen.n_units)
-graph.add_population('exc', pop)
-graph.add_synapse('theta->exc', syn, src='theta', tgt='exc')
-
-network = NetworkRNN(graph, integrator=RK4Integrator())
-
-# Симуляция
-t_values = np.arange(0, T, dt, dtype=np.float32)
-t_seq = tf.constant(t_values[None, :, None])
-inputs = graph.pack_inputs({'theta': gen(t_seq)})
-output = network(t_seq, inputs=inputs)
-
-# Результат
-rates = output.firing_rates['exc'].numpy()
-print(f"Final rates: {rates[0, -1, :]}")
+init_pop, init_syn = network.get_initial_state(batch_size=1)     # сброс
+output3 = network(t_seq, inputs=inputs,
+                  initial_state=(init_pop, init_syn))
 ```
 
----
+Подробности — в [руководстве по запуску симуляций](guide/running_simulations.md#начальные-состояния-и-продолжение-прогонов).
 
-## Пример 4: NMDA синапс
+### Построение сети из конфигурации
 
-```python
-import numpy as np
-import tensorflow as tf
-from neuraltide.core.network import NetworkGraph, NetworkRNN
-from neuraltide.populations import IzhikevichMeanField
-from neuraltide.synapses import NMDASynapse
-from neuraltide.inputs import SinusoidalGenerator
-from neuraltide.integrators import RK4Integrator
-
-dt = 0.5
-
-gen = SinusoidalGenerator(dt=dt, params={
-    'amplitude': 15.0, 'freq': 5.0, 'phase': 0.0, 'offset': 5.0,
-})
-
-pop = IzhikevichMeanField(dt=dt, params={
-    'tau_pop': [1.0], 'alpha': [0.5], 'a': [0.02],
-    'b': [0.2], 'w_jump': [0.1], 'Delta_I': [0.5], 'I_ext': [1.0],
-})
-
-# NMDA синапс
-syn_nmda = NMDASynapse(
-    n_pre=1,
-    n_post=1,
-    dt=dt,
-    params={
-        'gsyn_max_nmda': {'value': 0.15, 'trainable': True},
-        'tau1_nmda':     {'value': 5.0, 'trainable': False},
-        'tau2_nmda':     {'value': 150.0, 'trainable': False},
-        'Mgb':           {'value': 1.0, 'trainable': False},
-        'av_nmda':       {'value': 0.08, 'trainable': False},
-        'pconn_nmda':    {'value': [[1.0]], 'trainable': False},
-        'e_r_nmda':      {'value': 0.0, 'trainable': False},
-        'v_ref':         {'value': 0.0, 'trainable': False},
-    }
-)
-
-graph = NetworkGraph(dt=dt)
-graph.declare_input('input', n_units=gen.n_units)
-graph.add_population('exc', pop)
-graph.add_synapse('input->exc', syn_nmda, src='input', tgt='exc')
-
-network = NetworkRNN(graph, integrator=RK4Integrator())
-
-# Симуляция
-t_values = np.arange(0, 1000, dt, dtype=np.float32)
-t_seq = tf.constant(t_values[None, :, None])
-inputs = graph.pack_inputs({'input': gen(t_seq)})
-output = network(t_seq, inputs=inputs)
-
-print(f"NMDA output shape: {output.firing_rates['exc'].shape}")
-```
-
----
-
-## Пример 5: Composite синапс (NMDA + STP)
-
-```python
-import numpy as np
-import tensorflow as tf
-from neuraltide.core.network import NetworkGraph, NetworkRNN
-from neuraltide.populations import IzhikevichMeanField
-from neuraltide.synapses import NMDASynapse, TsodyksMarkramSynapse, CompositeSynapse
-from neuraltide.inputs import ConstantRateGenerator
-from neuraltide.integrators import RK4Integrator
-
-dt = 0.5
-
-gen = ConstantRateGenerator(dt=dt, params={'rate': 20.0})
-
-pop = IzhikevichMeanField(dt=dt, params={
-    'tau_pop': [1.0], 'alpha': [0.5], 'a': [0.02],
-    'b': [0.2], 'w_jump': [0.1], 'Delta_I': [0.5], 'I_ext': [1.0],
-})
-
-# Компоненты композитного синапса
-syn_nmda = NMDASynapse(
-    n_pre=1, n_post=1, dt=dt,
-    params={
-        'gsyn_max_nmda': 0.1, 'tau1_nmda': 5.0, 'tau2_nmda': 150.0,
-        'Mgb': 1.0, 'av_nmda': 0.08, 'pconn_nmda': [[1.0]],
-        'e_r_nmda': 0.0, 'v_ref': 0.0,
-    }
-)
-
-syn_stp = TsodyksMarkramSynapse(
-    n_pre=1, n_post=1, dt=dt,
-    params={
-        'gsyn_max': 0.05, 'tau_f': 20.0, 'tau_d': 5.0,
-        'tau_r': 200.0, 'Uinc': 0.2, 'pconn': [[1.0]], 'e_r': 0.0,
-    }
-)
-
-# Композитный синапс
-composite = CompositeSynapse(
-    n_pre=1,
-    n_post=1,
-    dt=dt,
-    components=[
-        ('nmda', syn_nmda),
-        ('stp', syn_stp),
-    ]
-)
-
-graph = NetworkGraph(dt=dt)
-graph.declare_input('input', n_units=gen.n_units)
-graph.add_population('exc', pop)
-graph.add_synapse('input->exc', composite, src='input', tgt='exc')
-
-network = NetworkRNN(graph, integrator=RK4Integrator())
-
-t_values = np.arange(0, 1000, dt, dtype=np.float32)
-t_seq = tf.constant(t_values[None, :, None])
-inputs = graph.pack_inputs({'input': gen(t_seq)})
-output = network(t_seq, inputs=inputs)
-
-print(f"Composite output shape: {output.firing_rates['exc'].shape}")
-```
-
----
-
-## Пример 6: Обучение сети (fit)
-
-```python
-import numpy as np
-import tensorflow as tf
-from neuraltide.core.network import NetworkGraph, NetworkRNN
-from neuraltide.populations import IzhikevichMeanField
-from neuraltide.synapses import TsodyksMarkramSynapse
-from neuraltide.inputs import VonMisesGenerator
-from neuraltide.integrators import RK4Integrator
-from neuraltide.training import Trainer, CompositeLoss, MSELoss, StabilityPenalty
-
-dt = 0.05
-T = 20
-epochs = 500
-
-# Сеть
-gen = VonMisesGenerator(dt=dt, params={
-    'mean_rate': 20.0, 'R': 0.5, 'freq': 8.0, 'phase': 0.0,
-})
-
-pop = IzhikevichMeanField(dt=dt, params={
-    'tau_pop': [1.0, 1.0], 'alpha': [0.5, 0.5], 'a': [0.02, 0.02],
-    'b': [0.2, 0.2], 'w_jump': [0.1, 0.1],
-    'Delta_I': {'value': [0.5, 0.6], 'trainable': True, 'min': 0.01, 'max': 2.0},
-    'I_ext': {'value': [0.1, 0.2], 'trainable': True, 'min': -2.0, 'max': 2.0},
-})
-
-syn = TsodyksMarkramSynapse(n_pre=1, n_post=2, dt=dt, params={
-    'gsyn_max': {'value': [[0.1, 0.1]], 'trainable': True},
-    'tau_f': {'value': 20.0, 'trainable': True, 'min': 6.0, 'max': 240.0},
-    'tau_d': {'value': 5.0, 'trainable': True, 'min': 2.0, 'max': 15.0},
-    'tau_r': {'value': 200.0, 'trainable': True, 'min': 91.0, 'max': 1300.0},
-    'Uinc': {'value': 0.2, 'trainable': True, 'min': 0.04, 'max': 0.7},
-    'pconn': {'value': [[1.0, 1.0]], 'trainable': False},
-    'e_r': {'value': 0.0, 'trainable': False},
-})
-
-graph = NetworkGraph(dt=dt)
-graph.declare_input('theta', n_units=gen.n_units)
-graph.add_population('exc', pop)
-graph.add_synapse('theta->exc', syn, src='theta', tgt='exc')
-
-network = NetworkRNN(graph, integrator=RK4Integrator(), stability_penalty_weight=1e-3)
-
-# Целевые данные
-t_values = np.arange(T, dtype=np.float32) * dt
-target_0 = 10.0 + 5.0*np.sin(2*np.pi*8.0*t_values/1000.0)
-target_1 = 8.0 + 4.0*np.sin(2*np.pi*8.0*t_values/1000.0 + 0.5)
-target = {
-    'exc': tf.constant(np.stack([target_0, target_1], axis=-1)[None, :, :], dtype=tf.float32)
-}
-
-t_seq = tf.constant(t_values[None, :, None])
-inputs = graph.pack_inputs({'theta': gen(t_seq)})
-
-# До обучения
-output_before = network(t_seq, inputs=inputs)
-
-# Обучение
-loss_fn = CompositeLoss([
-    (1.0, MSELoss(target)),
-    (1e-3, StabilityPenalty()),
-])
-trainer = Trainer(network, loss_fn, optimizer=tf.keras.optimizers.Adam(1e-3))
-history = trainer.fit(t_seq, inputs=inputs, epochs=epochs, verbose=1)
-
-# После обучения
-output_after = network(t_seq, inputs=inputs)
-
-print(f"Initial loss: {history.loss_history[0]:.4f}")
-print(f"Final loss: {history.loss_history[-1]:.4f}")
-```
-
----
-
-## Пример 7: Wilson-Cowan популяция
-
-```python
-import numpy as np
-import tensorflow as tf
-from neuraltide.core.network import NetworkGraph, NetworkRNN
-from neuraltide.populations import WilsonCowan
-from neuraltide.synapses import StaticSynapse
-from neuraltide.inputs import ConstantRateGenerator
-from neuraltide.integrators import RK4Integrator
-
-dt = 1.0
-T = 500
-
-# Wilson-Cowan: E и I в одном объекте
-pop = WilsonCowan(
-    n_units=1,
-    dt=dt,
-    params={
-        'tau_E': [10.0],
-        'tau_I': [10.0],
-        'a_E': [1.0],
-        'a_I': [1.0],
-        'theta_E': [0.0],
-        'theta_I': [0.0],
-        'w_EE': [1.5],
-        'w_IE': [1.0],
-        'w_EI': [1.0],
-        'w_II': [0.5],
-        'I_ext_E': [0.5],
-        'I_ext_I': [0.0],
-        'max_rate': [100.0],
-    }
-)
-
-gen = ConstantRateGenerator(dt=dt, params={'rate': 20.0})
-
-syn = StaticSynapse(n_pre=1, n_post=1, dt=dt, params={
-    'gsyn_max': 0.1,
-    'pconn': [[1.0]],
-    'e_r': 0.0,
-})
-
-graph = NetworkGraph(dt=dt)
-graph.declare_input('input', n_units=gen.n_units)
-graph.add_population('EI', pop)
-graph.add_synapse('input->EI', syn, src='input', tgt='EI')
-
-network = NetworkRNN(graph, integrator=RK4Integrator())
-
-t_values = np.arange(0, T, dt, dtype=np.float32)
-t_seq = tf.constant(t_values[None, :, None])
-inputs = graph.pack_inputs({'input': gen(t_seq)})
-output = network(t_seq, inputs=inputs)
-
-print(f"Wilson-Cowan output shape: {output.firing_rates['EI'].shape}")
-```
-
----
-
-## Пример 8: Использование конфигурации
+Сеть можно собрать декларативно через `NetworkConfig` (классы
+регистрируются при импорте `neuraltide.populations` / `neuraltide.synapses`
+/ `neuraltide.inputs`):
 
 ```python
 from neuraltide.config.schema import (
     NetworkConfig, PopulationConfig, SynapseConfig, InputConfig,
-    build_network_from_config
+    build_network_from_config,
 )
 
 config = NetworkConfig(
@@ -512,16 +74,9 @@ config = NetworkConfig(
         InputConfig(
             name='input',
             generator_class='SinusoidalGenerator',
-            params={
-                'dt': 0.5,
-                'params': {
-                    'amplitude': 10.0,
-                    'freq': 8.0,
-                    'phase': 0.0,
-                    'offset': 5.0,
-                },
-            }
-        )
+            params={'dt': 0.5, 'params': {
+                'amplitude': 10.0, 'freq': 8.0, 'phase': 0.0, 'offset': 5.0}},
+        ),
     ],
     populations=[
         PopulationConfig(
@@ -531,176 +86,75 @@ config = NetworkConfig(
             params={
                 'tau_pop': [1.0], 'alpha': [0.5], 'a': [0.02],
                 'b': [0.2], 'w_jump': [0.1], 'Delta_I': [0.5], 'I_ext': [1.0],
-            }
-        )
+            },
+        ),
     ],
     synapses=[
         SynapseConfig(
             name='input->exc',
             synapse_class='StaticSynapse',
-            src='input',
-            tgt='exc',
-            dt=0.5,
-            params={
-                'n_pre': 1,
-                'n_post': 1,
-                'gsyn_max': 0.1,
-                'pconn': [[1.0]],
-                'e_r': 0.0,
-            }
-        )
-    ]
+            src='input', tgt='exc', dt=0.5,
+            params={'n_pre': 1, 'n_post': 1, 'gsyn_max': 0.1,
+                    'pconn': [[1.0]], 'e_r': 0.0},
+        ),
+    ],
 )
 
-# build_network_from_config возвращает (network, generators)
 network, generators = build_network_from_config(config)
-
-# Далее обычная симуляция
-import numpy as np
-import tensorflow as tf
 
 t_seq = tf.constant(np.arange(0, 1000, 0.5)[None, :, None])
 inputs = graph.pack_inputs({name: gen(t_seq) for name, gen in generators.items()})
 output = network(t_seq, inputs=inputs)
-print(output.firing_rates['exc'].shape)
 ```
 
 ---
 
-## Пример: Управление начальным состоянием и Stateful режим
+## Популяционные модели
 
-NeuralTide позволяет:
-1. Устанавливать пользовательские начальные условия
-2. Сохранять состояние между батчами (stateful режим)
-3. Сбрасывать состояние для нового эксперимента
-
-### Пользовательские начальные условия
-
-```python
-network = NetworkRNN(graph, integrator=RK4Integrator())
-
-# Получение начального состояния
-init_pop, init_syn = network.get_initial_state(batch_size=1)
-
-# Модификация: r=0.5, v=-1.0, w=0.0 (для IzhikevichMeanField)
-init_pop[0] = tf.constant([[0.5]])  # r
-init_pop[1] = tf.constant([[-1.0]])  # v (относительно rest=0)
-init_pop[2] = tf.constant([[0.0]])  # w
-
-# Установка состояния
-network.set_initial_state((init_pop, init_syn))
-
-# Запуск симуляции
-output = network(t_seq, inputs=inputs, initial_state=(init_pop, init_syn))
-```
-
-### Stateful режим
-
-```python
-# Создание сети с stateful=True
-network = NetworkRNN(graph, integrator=RK4Integrator(), stateful=True)
-
-# Первый батч
-output1 = network(t_seq, inputs=inputs)
-final_state = network.get_state()
-
-# Второй батч продолжает с финального состояния первого
-output2 = network(t_seq, inputs=inputs)
-
-# Сброс для нового эксперимента
-network.reset_state()
-```
+| Пример | Файл | Что показывает |
+|--------|------|----------------|
+| Izhikevich mean-field | [`example_pop_izhikevich.py`](../examples/example_pop_izhikevich.py) | Безразмерные параметры (рекомендуется) и размерные (обратная совместимость), векторизация по юнитам, обучаемые параметры с ограничениями |
+| Wilson-Cowan | [`example_pop_wilson_cowan.py`](../examples/example_pop_wilson_cowan.py) | Запуск активности постоянным током, установление в фиксированную точку, две независимые популяции с разными параметрами |
+| Пользовательская популяция | [`example_03_custom_population.py`](../examples/example_03_custom_population.py) | Как наследовать `PopulationModel` (минимальная rate-модель `τ·dr/dt = −r + tanh(I_ext + I_syn)`) и подключить её к сети |
+| Fokker-Planck | [`example_04_fokker_planck.py`](../examples/example_04_fokker_planck.py) | Пользовательская FP-модель с процессом Орнштейна–Уленбека |
+| Brunel Fokker-Planck | [`example_06_brunel_fp.py`](../examples/example_06_brunel_fp.py) | `BrunelFokkerPlanck`: сходимость к стационарной частоте, сравнение с аналитическим решением Brunel (2000), сохранение полной вероятности ∫P dV + p_r = 1 |
 
 ---
 
-## Пример 9: Взаимное ингибирование двух популяций
+## Синапсы и входные генераторы
 
-Две популяции fast-spiking нейронов с взаимным ингибированием через синапсыshort-term depression (Tsodyks-Markram). Оптимизируются синаптические проводимости и внешние токи.
+| Пример | Файл | Что показывает |
+|--------|------|----------------|
+| StaticSynapse | [`example_syn_static.py`](../examples/example_syn_static.py) | Синапс без внутренней динамики: g_syn пропорциональна входной частоте, мгновенный отклик |
+| Tsodyks-Markram | [`example_syn_tsodyks_markram.py`](../examples/example_syn_tsodyks_markram.py) | Кратковременная пластичность: фракции R/U, аккумулятор A, ток и проводимость |
+| Tsodyks-Markram (численно) | [`example_syn_tsodyks_markram_numeric.py`](../examples/example_syn_tsodyks_markram_numeric.py) | То же через интегратор (RK4) — синапсы интегрируются численно, аналогично популяциям |
+| NMDA | [`example_syn_nmda.py`](../examples/example_syn_nmda.py) | Двойная экспонента, магниевый блок от постсинаптического потенциала |
+| Composite (AMPA + NMDA) | [`example_syn_composite.py`](../examples/example_syn_composite.py) | `CompositeSynapse`: быстрая AMPA-компонента + медленная NMDA, суммарный ток |
+| Синапс второго порядка | [`example_second_order_synapse.py`](../examples/example_second_order_synapse.py) | `SecondOrderSynapse`: фильтр второго порядка (двойная экспонента), состояния [g_s, dg_s] |
+| VonMises | [`example_von_mises.py`](../examples/example_von_mises.py), [`example_von_mises_with_synapse.py`](../examples/example_von_mises_with_synapse.py) | Тета-модулированный генератор и его связка с TM-синапсом (динамика R, U, A и ток на популяцию) |
 
-```python
-from neuraltide.examples.example_mutual_inhibition import *
-```
+### PlaceFieldGenerator — прямой вызов с фазовой прецессией
 
-Полное описание примера в файле [`examples/example_mutual_inhibition.py`](examples/example_mutual_inhibition.py).
-
-### Архитектура
-
-- Две популяции `IzhikevichMeanField` (pop1, pop2) с dimensionalными параметрами
-- Каждая популяция получает вход от `VonMisesGenerator` со сдвигом фазы 150° (2.61 рад)
-- Взаимное ингибирование через `TsodyksMarkramSynapse` (short-term depression)
-
-### Оптимизируемые параметры
-
-| Параметр | Начальное | Диапазон |
-|----------|-----------|----------|
-| `gsyn_max` (syn_1to2, syn_2to1) | 3000 пСм | 100–5000 |
-| `I_ext` (pop1, pop2) | 200 пА | 50–500 |
-| `tau_d` | 6.02 мс | 2–15 |
-| `tau_r` | 359.8 мс | 91–1300 |
-| `tau_f` | 21.0 мс | 6–240 |
-| `U_inc` | 0.25 | 0.04–0.7 |
-
-### Экспорт результатов
+Полный пример: [`example_place_field_phase_precession.py`](../examples/example_place_field_phase_precession.py)
+— прямой вызов генератора с координатами `(x, y)` в см через `extra_inputs`,
+зашумлённая круговая траектория, диагностический вывод параметров и три
+графика (rate vs theta, фазовая прецессия, карта арены).
 
 ```python
-trainer.export_results('results.json')
-trainer.export_results('results.csv', format='csv')
-```
-
----
-
-## Пример 10: PlaceFieldGenerator — прямой вызов с фазовой прецессией
-
-Полный пример: `examples/example_place_field_phase_precession.py`
-
-Демонстрирует прямой вызов `PlaceFieldGenerator` с передачей пространственных координат `(x, y)` и скоростей `(vx, vy)` (в см и см/мс) через параметр `extra_inputs`, зашумлённую круговую траекторию, диагностический вывод всех параметров и три графика (rate vs theta, фазовая прецессия, карта арены).
-
-```python
-import numpy as np
-import tensorflow as tf
-from neuraltide.inputs import PlaceFieldGenerator
-
-n_place_cells = 6
-dt = 0.5
-
-# Все пространственные координаты — в см
 gen = PlaceFieldGenerator(dt=dt, params={
-    'center_x': [40.0, -50.0, 20.0, -30.0, 60.0, -10.0],
-    'center_y': [30.0,  40.0, -50.0, 10.0, -20.0, 50.0],
-    'radius':   [35.0, 40.0, 30.0, 35.0, 30.0, 35.0],
-    'peak_rate': [25.0, 30.0, 20.0, 22.0, 18.0, 15.0],
+    'center_x': [40.0, -50.0, ...], 'center_y': [30.0, 40.0, ...],
+    'radius': [35.0, 40.0, ...], 'peak_rate': [25.0, 30.0, ...],
     'background_rate': [2.0]*6,
     'theta_modulation_factor': 0.0,
-    'precession_slope': [30.0, 35.0, 25.0, -20.0, 40.0, 28.0],
-    'precession_init_phase': [0.0, 45.0, 90.0, 135.0, 180.0, 225.0],
-    'phase_outside': 0.0,
-    'R': 0.6, 'freq': 8.0,
+    'precession_slope': [30.0, ...], 'precession_init_phase': [0.0, ...],
+    'phase_outside': 0.0, 'R': 0.6, 'freq': 8.0,
 })
 
-# Время (мс) + координаты (см)
-T_total = 5000
-t_values = np.arange(0, T_total, dt, dtype=np.float32)
-t_seq = tf.constant(t_values[None, :, None])  # [1, T, 1]
-
-# Траектория
-n_steps = len(t_values)
-r_traj = 70.0  # см
-theta = 2.0 * np.pi * np.arange(n_steps) / n_steps * 2
-pos_x = r_traj * np.cos(theta)
-pos_y = r_traj * np.sin(theta)
-extra = tf.constant(
-    np.stack([pos_x, pos_y], axis=-1).astype(np.float32)[None, :, :]
-)  # [1, T, 2]
-
-# Прямой вызов генератора
-rates = gen(t_seq, extra_inputs=extra)  # [1, T, n_place_cells]
-print(f"Output shape: {rates.shape}")
-
-# Без координат — только фоновая частота
-rates_no_pos = gen(t_seq, extra_inputs=None)
+# extra_inputs: [batch, T, 2] — (x, y) в см, или [batch, T, 4] — (x, y, vx, vy)
+rates = gen(t_seq, extra_inputs=extra)   # [1, T, n_place_cells]
 ```
 
-### Поток данных
+Поток данных:
 
 ```
 pos_x, pos_y, vx, vy (см, см/мс)  ──→  extra_inputs [batch, T, 4]
@@ -723,7 +177,7 @@ pos_x, pos_y, vx, vy (см, см/мс)  ──→  extra_inputs [batch, T, 4]
                     output.firing_rates['readout']
 ```
 
-### Примечания
+Примечания:
 
 - `inputs` опционален (по умолчанию `None`). При `None` и нулевом `total_input_units` генераторы не используются.
 - `inputs` передаётся в `NetworkRNN.call()` как единый тензор, упакованный через `graph.pack_inputs()`.
@@ -731,25 +185,61 @@ pos_x, pos_y, vx, vy (см, см/мс)  ──→  extra_inputs [batch, T, 4]
 
 ---
 
-## Пример 11: Калибровка параметров (этап P0)
+## Обучение
 
-Полный пример: [`examples/example_07_calibration.py`](../examples/example_07_calibration.py)
+| Пример | Файл | Что показывает |
+|--------|------|----------------|
+| Обучение через Trainer | [`example_simple.py`](../examples/example_simple.py) | `Trainer` + `CompositeLoss([MSELoss, StabilityPenalty])`, воспроизведение целевой траектории |
+| Сравнение градиентных методов | [`example_gradient_method.py`](../examples/example_gradient_method.py), [`example_compare_gradients.py`](../examples/example_compare_gradients.py) | Autograd (BPTT) против adjoint: равенство градиентов, замеры времени и памяти |
+| Прямой AdjointSolver | [`example_adjoint_direct.py`](../examples/example_adjoint_direct.py) | Использование `AdjointSolver` без `Trainer`, градиенты для длинных последовательностей |
+| Adjoint + штраф за стабильность | [`example_adjoint_with_stability.py`](../examples/example_adjoint_with_stability.py) | Adjoint-обучение с `StabilityPenalty` на сети, склонной к нестабильности |
+| Взаимное ингибирование | [`example_mutual_inhibition.py`](../examples/example_mutual_inhibition.py) | Две fast-spiking популяции с взаимным торможением через TM-синапсы (депрессия); оптимизация проводимостей и внешних токов; экспорт результатов |
+| Демо нестабильности | [`example_instability_demo.py`](../examples/example_instability_demo.py) | Сеть с высоким `I_ext` и `stability_penalty_weight` — как работает штраф за численную нестабильность |
+| LFP-прокси | [`example_05_lfp_proxy.py`](../examples/example_05_lfp_proxy.py) | LFP-подобный сигнал как взвешенная сумма частот популяций, отфильтрованная в тета-диапазоне (`BandpassReadout`), сравнение с целью через `MSELoss` |
 
-Демонстрирует слой калибровки `neuraltide.optimization`: сборку ParameterSpace
-из сети с преобразованиями координат (log — для положительных параметров),
-постановку задачи через ObservationSpec/ResidualLoss и CalibrationProblem,
-верификацию градиента taylor_test'ом и ручные шаги Adam по вектору φ с
-сохранением результата в OptimizationResult (без файлов).
+Краткий паттерн обучения:
 
+```python
+from neuraltide.training import Trainer, CompositeLoss, MSELoss, StabilityPenalty
+
+loss_fn = CompositeLoss([
+    (1.0, MSELoss(target)),      # основная ошибка
+    (1e-3, StabilityPenalty()),  # штраф за нестабильность
+])
+trainer = Trainer(network, loss_fn, optimizer=tf.keras.optimizers.Adam(1e-3))
+history = trainer.fit(t_seq, inputs=inputs, epochs=500, verbose=1)
+
+# Экспорт результатов
+trainer.export_results('results.json')
+trainer.export_results('results.csv', format='csv')
+```
+
+Больше о градиентных методах (BPTT/adjoint), колбэках и ограничениях —
+в [`docs/training.md`](training.md).
 
 ---
 
-## Пример 12: Сквозной рабочий процесс калибровки P1
+## Калибровка и оптимизация
 
-Полный пример: [`examples/example_08_p1_workflow.py`](../examples/example_08_p1_workflow.py)
+Сквозные сценарии слоя `neuraltide.optimization`. Ограничения и полное
+описание API — в [`docs/optimization.md`](optimization.md).
 
-Демонстрирует практический набор этапа P1 на малой синтетической сети
-(WilsonCowan + StaticSynapse от SinusoidalGenerator) с известным theta*:
+### Калибровка: постановка задачи и верификация градиентов
+
+Полный пример: [`example_07_calibration.py`](../examples/example_07_calibration.py)
+
+Сборка `ParameterSpace` из сети с преобразованиями координат (log — для
+положительных параметров), постановка задачи через `ObservationSpec`/
+`ResidualLoss` и `CalibrationProblem`, верификация градиента `taylor_test`ом
+и ручные шаги Adam по вектору φ с сохранением результата в
+`OptimizationResult`.
+
+### Сквозной рабочий процесс калибровки
+
+Полный пример: [`example_08_p1_workflow.py`](../examples/example_08_p1_workflow.py)
+
+Практическая цепочка на малой синтетической сети (WilsonCowan +
+StaticSynapse от SinusoidalGenerator) с известным θ*:
 
 1. **multistart** — детерминированный Sobol-дизайн стартов, screening и
    локальная доводка top-k через `least_squares` (TRF);
@@ -758,22 +248,11 @@ pos_x, pos_y, vx, vy (см, см/мс)  ──→  extra_inputs [batch, T, 4]
 3. **compute_fim** — FIM = JᵀJ: спектр, effective rank, число
    обусловленности, жёсткие направления и коллинеарные пары параметров;
 4. **likelihood_profile** — одномерный профиль правдоподобия по `exc/tau` с
-   χ²-интервалом 95% (warm start от соседнего узла);
+   χ²-интервалом 95 % (warm start от соседнего узла);
 5. **validate / free-run** — отложенный протокол (другая частота входа) и
    честный свободный прогон без teacher forcing.
 
 ```python
-import numpy as np
-import tensorflow as tf
-import neuraltide.config
-from neuraltide.optimization import (
-    CalibrationProblem, LogTransform, ObservationSpec, ParameterSpace,
-    ResidualLoss, compute_fim, least_squares, likelihood_profile,
-    multistart, residual_jacobian,
-)
-# ... сборка сети, target = прогон при theta*, space с LogTransform,
-#     problem = CalibrationProblem(network, space, t_seq, inputs, objective)
-
 ms = multistart(problem, n_starts=8, method="sobol", refine_top_k=3,
                 local="least_squares", seed=7)
 phi_best = np.asarray(ms.base.phi_best)
@@ -783,60 +262,47 @@ fim = compute_fim(jac, param_names=space.names)
 
 profile = likelihood_profile(problem, "exc/tau",
                              grid=np.linspace(4.0, 14.0, 6))
-print(profile.intervals["0.95"])   # 95% интервал по chi2(1)
+print(profile.intervals["0.95"])          # 95% интервал по chi2(1)
 
 validation = problem.validate(phi_best)   # held-out протокол
 ev_free = problem.evaluate(phi_best)      # честный free-run
 ```
 
-Ограничения P1 (eager-режим, batch=1, shooting — penalty method, FIM по
-готовому якобиану, профили для гауссова шума с известной sigma) см. в
-[`docs/optimization.md`](optimization.md). Бенчмарки L0–L2 — в `benchmarks/`.
+### Глобальный поиск, балансировка и неопределённость
 
----
+Полный пример: [`example_09_p2_workflow.py`](../examples/example_09_p2_workflow.py)
 
-## Пример 13: Сквозной рабочий процесс калибровки P2
-
-Полный пример: [`examples/example_09_p2_workflow.py`](../examples/example_09_p2_workflow.py)
-
-Демонстрирует набор этапа P2 на малой синтетической E–I сети
-(WilsonCowan x 2 + StaticSynapse от SinusoidalGenerator) с известным
-theta* и зашумлёнными целями (шум с тем же sigma, что в ObservationSpec —
-так интервалы UQ имеют статистический смысл):
+На малой синтетической E–I сети (WilsonCowan × 2 + StaticSynapse от
+SinusoidalGenerator) с известным θ* и зашумлёнными целями (шум с тем же
+sigma, что в ObservationSpec — тогда интервалы UQ имеют статистический
+смысл):
 
 1. **global_search** — DE малого бюджета (max_evals) с доводкой
    refine_top_k через L-BFGS-B;
 2. **minimize_lbfgsb** — явная доводка от лучшей точки глобальной фазы,
-   восстановление theta*;
+   восстановление θ*;
 3. **balanced_train** — балансировка компонент потерь (GradNormWeights) с
    PCGrad-проекцией конфликтующих градиентов и обязательным сравнением с
    baseline FixedWeights;
 4. **laplace_approximation** — GN-ковариация постериора через якобиан
-   невязок, маргинальные 95%-интервалы параметров (на свежем экземпляре
+   невязок, маргинальные 95 %-интервалы параметров (на свежем экземпляре
    задачи: TF forward-AD несовместим с предшествующими gradient-прогонами
    в пределах одного NetworkRNN);
 5. **predictive_intervals** — прогнозные интервалы firing_rates по
-   ансамблю phi из posterior, покрытие зашумлённой цели;
+   ансамблю φ из posterior, покрытие зашумлённой цели;
 6. Отдельно: **residual_diagnostics** (остатки в MAP-точке) и
    **evaluate_candidates** с SerialPool (эквивалентность потерь ручному
    циклу problem.evaluate).
 
 ```python
-from neuraltide.optimization import (
-    CalibrationProblem, GradNormWeights, ObservationSpec, ParameterSpace,
-    ResidualLoss, evaluate_candidates, global_search, laplace_approximation,
-    minimize_lbfgsb, balanced_train, pcgrad_project, predictive_intervals,
-    residual_diagnostics,
-)
-# ... сборка сети, зашумлённая цель, problem = CalibrationProblem(...)
-
 gs = global_search(problem, method="de", max_evals=200, refine_top_k=1,
                    local="lbfgsb", seed=11)
 phi_map = minimize_lbfgsb(problem, gs.base.phi_best, maxiter=100).base.phi_best
 
 bt = balanced_train(problem, gs.base.phi_best, GradNormWeights(),
                     optimizer="adam", max_steps=6, projector=pcgrad_project)
-# UQ — на свежем экземпляре задачи (ограничение TF forward-AD, см. ниже)
+
+# UQ — на свежем экземпляре задачи (ограничение TF forward-AD, см. выше)
 problem_uq = build_problem()
 lap = laplace_approximation(problem_uq, phi_map, method="gn")
 samples = rng.multivariate_normal(lap.phi_map, lap.covariance, size=48)
@@ -844,20 +310,11 @@ pred = predictive_intervals(problem_uq, samples, level=0.95)
 diag = residual_diagnostics(problem_uq, phi_map)
 ```
 
-Ограничения P2 (eager/batch=1, optional extras `global`/`pareto` для
-cma/pymoo, экономика process parallelism в `benchmarks/l3_parallel_scaling.py`,
-tensor candidate-batch вне P2, несовместимость TF forward-AD с
-GradientTape в пределах одного NetworkRNN,
-балансировка — BPTT-only) см. в
-[`docs/optimization.md`](optimization.md). Бенчмарки L0–L3 — в `benchmarks/`.
+### Мультиэкспериментная калибровка с общим и эксперимент-специфичным x0
 
----
+Полный пример: [`example_10_multiexperiment_x0.py`](../examples/example_10_multiexperiment_x0.py)
 
-## Пример 14: Общий и эксперимент-специфичный начальный вектор x0
-
-Полный пример: [`examples/example_10_multiexperiment_x0.py`](../examples/example_10_multiexperiment_x0.py)
-
-Демонстрирует `MultiExperimentProblem` с двумя экспериментами на одной сети
+`MultiExperimentProblem` с двумя экспериментами на одной сети
 (WilsonCowan + StaticSynapse от SinusoidalGenerator, одинаковые входы и
 динамика, разные начальные состояния):
 
@@ -866,7 +323,7 @@ GradientTape в пределах одного NetworkRNN,
    экспериментах) и эксперимент-специфичные `x0/<experiment>/<pop>/<slot>`
    через `add_experiment_initial_state_entries` (только у эксперимента с
    совпадающим именем, с приоритетом над общими);
-2. **Различие траекторий**: при одном и том же phi прогоны `simulate(...,
+2. **Различие траекторий**: при одном и том же φ прогоны `simulate(...,
    experiment="control")` и `simulate(..., experiment="stim")` стартуют из
    разных начальных состояний — exp-запись перезаписывает общий слот;
 3. **Разложение градиентов**: градиент по общему `x0` — сумма вкладов
@@ -875,12 +332,8 @@ GradientTape в пределах одного NetworkRNN,
    сравнением с одноэкспериментными задачами.
 
 ```python
-import neuraltide.config
-from neuraltide.optimization import (Experiment, MultiExperimentProblem,
-                                     ParameterSpace)
-
 space = ParameterSpace.from_network(network)
-space.add_initial_state_entries(network)                    # общий x0
+space.add_initial_state_entries(network)                     # общий x0
 space.add_experiment_initial_state_entries(network, "stim")  # exp-specific x0
 
 problem = MultiExperimentProblem(network, space,
@@ -888,6 +341,6 @@ problem = MultiExperimentProblem(network, space,
 ev, grad = problem.value_and_gradient(phi0)
 ```
 
-Подробности семантики (приоритет exp → common → default, warning'и для
-orphan-записей и внеэкспериментного контекста, ограничения sensitivities/UQ
-и shooting) см. в [`docs/optimization.md`](optimization.md).
+Подробности семантики (приоритет exp → common → default, предупреждения
+для orphan-записей и внеэкспериментного контекста, ограничения
+sensitivities/UQ и shooting) — в [`docs/optimization.md`](optimization.md).

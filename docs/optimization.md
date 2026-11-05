@@ -1,15 +1,25 @@
 # Оптимизация и калибровка
 
-Модуль `neuraltide.optimization` — слой калибровки поверх моделей сети. Он
-реализует этапы **P0/P1/P2** дорожной карты (`docs/optimization_roadmap.md`):
-корректную постановку задачи и проверяемые градиенты (P0), практический
-набор методов калибровки (P1): сильные локальные оптимизаторы SciPy,
-мультистарт, режимы производных для длинных горизонтов, multiple shooting,
-continuation-расписания и анализ идентифицируемости; затем глобальный
-поиск, робастные/балансируемые цели, ограничения на прогнозы, оценку
-неопределённости и пакетную оценку кандидатов (P2). `Trainer` остаётся
-простым совместимым API градиентного обучения; все новые методы работают
-поверх общего `CalibrationProblem`.
+Модуль `neuraltide.optimization` — слой калибровки поверх моделей сети.
+Все методы работают поверх общего `CalibrationProblem` и покрывают:
+
+- дифференцируемые преобразования координат параметров (θ ↔ φ) и единое
+  пространство параметров;
+- нормированные невязки и постановку задачи калибровки (в том числе
+  мультиэкспериментную), диагностику градиентов;
+- локальные оптимизаторы SciPy (L-BFGS-B, least squares TRF/LM),
+  мультистарт и continuation-стратегии;
+- производные режимы для длинных горизонтов (forward sensitivities,
+  checkpointed и truncated BPTT), multiple shooting, continuation-расписания
+  (включая teacher forcing);
+- анализ идентифицируемости (FIM, профили правдоподобия, выбор подмножества);
+- глобальный поиск (DE, CMA-ES, SPSA, basinhopping, NSGA-II), балансировку
+  компонент целей и робастные градиенты (PCGrad/CAGrad);
+- ограничения на прогнозы (augmented Lagrangian, epsilon-constraint),
+  оценку неопределённости (Лаплас, бутстреп, прогнозные интервалы) и
+  пакетную оценку кандидатов в нескольких процессах.
+
+`Trainer` остаётся простым совместимым API градиентного обучения.
 
 ## Преобразования координат параметров (`transforms`)
 
@@ -18,7 +28,7 @@ continuation-расписания и анализ идентифицируемо
 
 | Преобразование | Назначение |
 |---|---|
-| `identity` | текущее поведение params-формата без изменений |
+| `identity` | params-формат без изменений |
 | `affine` | центрирование и масштабирование (θ = a·φ + b) |
 | `log` | положительные параметры, меняющиеся по порядкам величины (θ = exp φ) |
 | `logit`, `scaled_sigmoid` | параметры ограниченного интервала |
@@ -29,15 +39,17 @@ continuation-расписания и анализ идентифицируемо
 Обратное преобразование `inverse(θ)` клиппит θ в допустимую область с
 безопасным численным margin; `jacobian(φ)` возвращает dθ/dφ.
 
-Предупреждение: sigmoid-образные преобразования насыщаются у границ
-интервала (производная → 0), поэтому это не универсальный способ задания
-ограничений — настоящие bounds (L-BFGS-B/TRF) появятся в P1.
+Жёсткие границы параметров задаются через `min`/`max` в params-формате:
+они поддерживаются локальными решателями с bounds (L-BFGS-B, TRF) и
+учитываются при сэмплировании стартов. Sigmoid-образные преобразования
+насыщаются у границ интервала (производная → 0) — это мягкий способ
+удержания в диапазоне, а не замена bounds.
 
 ## Реестр параметров (`ParameterSpace`)
 
 `ParameterSpace.from_network(network, transforms={full_name: Transform})`
 сканирует обучаемые переменные популяций и синапсов графа и строит плоский
-вектор φ единый для всех оптимизаторов:
+вектор φ, единый для всех оптимизаторов:
 
 - `pack(values=None)` — θ → φ; `None` — текущие значения переменных модели;
 - `unpack(phi)` — φ → θ (дифференцируемо, GradientTape-совместимо);
@@ -57,12 +69,10 @@ trainable-only view в порядке регистрации; именно он�
 φ. Записи с `trainable=False` (ручные `add_entry(..., trainable=False)`,
 а также переменные модели с `trainable=False`) — реестровые константы вне
 φ: `size`, `pack`, `unpack`, `project`, `apply_to_model` и все φ-операции
-задач их игнорируют. Совместимость старых phi-векторов и checkpoint'ей
-по размеру зависит от состава пространства: где все записи trainable,
-они по-прежнему совпадают по размеру с `size` пересобранного пространства;
-для смешанных пространств с ручными non-trainable записями размер φ мог
-измениться — пересобирайте стартовые точки через `pack()`; обращение к non-trainable имени там, где
-ожидается координата φ (`likelihood_profile`, `select_subset`,
+задач их игнорируют. В смешанных пространствах с ручными non-trainable
+записями размер φ может отличаться от числа всех записей — стартовые
+точки пересобирайте через `pack()`; обращение к non-trainable имени там,
+где ожидается координата φ (`likelihood_profile`, `select_subset`,
 `sample_phi0s(log_uniform=...)`, `FrozenProblem`), отклоняется `ValueError`.
 
 ## Наблюдения и невязки (`objectives`)
@@ -75,12 +85,12 @@ trainable-only view в порядке регистрации; именно он�
 - `relative` — 0.5·(e / (|target| + eps))²;
 - `msle` — 0.5·(log1p(pred + eps) − log1p(target + eps))²;
 - `huber` и `pseudo_huber` — порог `delta`, устойчивость к выбросам;
-- `cauchy` и `tukey` (P2) — масштаб `scale` c: cauchy с логарифмическим
+- `cauchy` и `tukey` — масштаб `scale` c: cauchy с логарифмическим
   хвостом, tukey обнуляет вклад выбросов при |e| > c (нулевой градиент).
 
 Вес `weight` — неотрицательный float либо 0-d Tensor/Variable (тогда
 приводится к глобальному dtype и используется как есть — обучаемый или
-адаптивный вес, P2).
+адаптивный вес).
 
 Нормировка — masked mean: `weight · sum(mask · psi) / (N · sigma²)`,
 где N = max(sum(mask), eps) либо число элементов траектории. Маска масштаб
@@ -91,7 +101,7 @@ trainable-only view в порядке регистрации; именно он�
   (совместимо с `Trainer`), аддитивный `per_step_loss`;
 - векторный: `residual(predictions)` — честные невязки r, такие что
   `0.5 · ||r||² == loss` с учётом sigma/weight/mask/kind. Это постановка
-  для nonlinear least squares (Gauss–Newton / LM / TRF в P1).
+  для nonlinear least squares (Gauss–Newton / LM / TRF).
 
 ## Задача калибровки (`CalibrationProblem`)
 
@@ -104,8 +114,8 @@ trainable-only view в порядке регистрации; именно он�
   счётчики `n_forward`/`n_gradient`, wall time, dtype, dt;
 - `value_and_gradient(phi=None)` — `(Evaluation, grad)` одним прогоном;
 - `residual(phi=None)` — вектор невязок для GN/LM/TRF;
-- `bounds_phi()` — φ-границы из физических min/max (заготовка для
-  SciPy-адаптеров).
+- `bounds_phi()` — φ-границы из физических min/max (используются
+  SciPy-адаптерами).
 
 Все φ-операции задачи (`pack`/`unpack`/`bounds_phi`/`search_box_phi`,
 материализация x0, `FrozenProblem`) работают только с trainable-записями
@@ -118,11 +128,10 @@ ParameterSpace (`phi_entries`/`trainable_names`): non-trainable записи —
 `saved = problem.pack()` и
 `space.apply_to_model(space.unpack(saved))`.
 
-Режимы градиента (`grad_mode`): `'assign'` (по умолчанию) и `'chain'`. В
-текущем eager TensorFlow градиент через `variable.assign` недоступен, поэтому
-оба режима вычисляют dloss/dφ как dloss/dθ по переменным модели, умноженный
-на dθ/dφ (jacobians transforms); результаты совпадают, что контролируется
-taylor_test'ом.
+Режимы градиента (`grad_mode`): `'assign'` (по умолчанию) и `'chain'`.
+Оба режима вычисляют dloss/dφ как dloss/dθ по переменным модели,
+умноженный на dθ/dφ (jacobians transforms), и дают совпадающий результат
+(проверяется `taylor_test`).
 
 ## Мультиэкспериментная калибровка (`MultiExperimentProblem`)
 
@@ -170,11 +179,10 @@ Held-out внутри `MultiExperimentProblem` — обычный экспери
 имени: в `validate()` ему применяется его exp-specific `x0` (при
 наличии), как обучающим. Отдельный `CalibrationProblem.validate()`
 (held-out эксперименты вне multi-контекста) материализует только common
-`x0`: exp-specific записи пропускаются с одноразовым `UserWarning`
-(см. ниже).
+`x0`: exp-specific записи пропускаются с одноразовым `UserWarning`.
 
-Warnings: записи, имя эксперимента которых не совпадает ни с одним
-train/held-out экспериментом, никогда не материализуются — при каждом
+Правила предупреждений: записи, имя эксперимента которых не совпадает ни с
+одним train/held-out экспериментом, никогда не материализуются — при каждом
 конструировании `MultiExperimentProblem` выдаётся `UserWarning` со
 списком таких «осиротевших» экспериментов (предупреждение повторяется
 при каждом конструировании). Вне экспериментного контекста
@@ -186,7 +194,7 @@ train/held-out экспериментом, никогда не материал�
 held-out — иначе `ValueError` при конструировании (два одинаковых имени
 делили бы exp-specific `x0` одного имени молча).
 
-Ограничения: sensitivities/UQ пока не материализуют exp-specific `x0`
+Ограничения: sensitivities/UQ не материализуют exp-specific `x0`
 (внеэкспериментный контекст — см. warning выше); `MultipleShootingProblem`
 не строится поверх `MultiExperimentProblem` (shooting — над
 `CalibrationProblem`).
@@ -202,7 +210,7 @@ held-out — иначе `ValueError` при конструировании (дв
 
 ## Диагностика градиентов (`diagnostics`)
 
-Пользовательские численные проверки (см. также `tests/unit/test_diagnostics.py`):
+Пользовательские численные проверки:
 
 - `finite_difference_scan` — центральные конечные разности со сканированием h;
 - `taylor_test` — направленный тест порядков 1 и 2 до численного предела;
@@ -211,7 +219,7 @@ held-out — иначе `ValueError` при конструировании (дв
 - `dtype_consistency_check` — согласованность float32/float64 через config;
 - `compare_bptt_adjoint` — равенство потери и градиентов BPTT и adjoint.
 
-## Локальные оптимизаторы (`local`, P1)
+## Локальные оптимизаторы (`local`)
 
 Два SciPy-адаптера с единым контрактом (возвращают `LocalOptimizerResult`):
 
@@ -225,11 +233,10 @@ print(res.base.loss_best, res.n_forward, res.bounds_active)
 
 - `minimize_lbfgsb` — `scipy.optimize.minimize(method='L-BFGS-B', jac=True)`
   поверх `value_and_gradient`; bounds из `problem.bounds_phi()`; `ftol=None`
-  — dtype-aware auto: float64 → 2.2e-9 (прежнее поведение scipy),
-  float32 → ≈eps32 (1.19e-7). Явный `ftol`/`options['ftol']` чтится без
-  изменений (приоритет у `options`; `options['ftol']=None` — как «не
-  задано»: fallback на явный `ftol`/auto, `None` в scipy не передаётся),
-  resolved-значение фиксируется в
+  — dtype-aware auto: float64 → 2.2e-9, float32 → ≈eps32 (1.19e-7). Явный
+  `ftol`/`options['ftol']` чтится без изменений (приоритет у `options`;
+  `options['ftol']=None` — как «не задано»: fallback на явный `ftol`/auto,
+  `None` в scipy не передаётся), resolved-значение фиксируется в
   `config['options']['ftol']`; при float32-координатах φ и эффективном
   `ftol < 1e-7` — одноразовый `UserWarning` (риск
   `ABNORMAL_TERMINATION_IN_LNSRCH`), значение не переопределяется;
@@ -265,7 +272,7 @@ print(res.base.loss_best, res.n_forward, res.bounds_active)
 (`ResidualLoss`), такой что `0.5·||r||² == loss`; иначе `TypeError` с
 направлением на L-BFGS-B.
 
-Ограничение forward-режима (`jacobian=None` по умолчанию): TF forward-AD
+Правило forward-режима (`jacobian=None` по умолчанию): TF forward-AD
 (`residual_jacobian`) несовместим с предшествующими gradient-прогонами в
 пределах одного `NetworkRNN`; если задача уже использовалась для
 BPTT-градиентов (`problem.n_gradient > 0` — L-BFGS-B, shooting, truncated
@@ -274,7 +281,7 @@ BPTT, градиентный screen-refine в `multistart`), адаптер са
 `config["jacobian"]`); для forward-режима передайте `jacobian=None` на
 свежем экземпляре задачи или явный `jacobian='2-point'`/`'3-point'`.
 
-## Мультистарт и continuation (`strategies`, P1)
+## Мультистарт и continuation (`strategies`)
 
 ```python
 from neuraltide.optimization import multistart, sample_phi0s, dt_continuation
@@ -302,10 +309,9 @@ result = dt_continuation(build_problem, dts=[2.0, 1.0, 0.5],
   близости φ (`dedup_rtol`); checkpoint/resume через `checkpoint_path` +
   `resume=True` (seed и конфигурация — включая `screen_refine_steps` и
   `screen_local` — сверяются с чекпоинтом, старты с `screen_refined=True`
-  повторно screen-refine не проходят). Чекпоинты старого формата, записанные
-  до появления screen-refine (без `screen_refine_steps`/`screen_local` в
-  конфигурации), не resume-ятся: сверка конфигурации честно отклонит их с
-  `ValueError` — это by design, прогон надо начать заново;
+  повторно screen-refine не проходят); чекпоинты, записанные без
+  screen-refine в конфигурации, не resume-ятся: сверка конфигурации
+  отклонит их с `ValueError` — прогон надо начать заново;
 - замечание по совместимости режимов: градиентный screen-refine
   (`screen_local='lbfgsb'` или gradient-based callable) делает
   `problem.n_gradient > 0`, после чего default forward-якобиан полной
@@ -320,7 +326,7 @@ result = dt_continuation(build_problem, dts=[2.0, 1.0, 0.5],
   `FrozenProblem` «reduced subset -> joint»; финальная совместная доводка
   добавляется автоматически, если последняя стадия не покрывает все записи.
 
-## Чувствительности и длинные горизонты (`sensitivities`, P1)
+## Чувствительности и длинные горизонты (`sensitivities`)
 
 ```python
 from neuraltide.optimization import (residual_jacobian,
@@ -343,14 +349,13 @@ print(tb.free_run_loss)   # обязательный полный прогон �
   честной оценкой стоимости и альтернативами;
 - `value_and_gradient_checkpointed` — сегментный прогон с переносом
   final_state и checkpointing (`tf.recompute_grad` при подтверждённом probe,
-  иначе ручной `tf.custom_gradient` fallback); градиент совпадает с plain BPTT
-  — это критерий приёмки; `peak_memory` — best-effort (tracemalloc, нижняя
-  оценка);
+  иначе ручной `tf.custom_gradient` fallback); градиент совпадает с plain BPTT;
+  `peak_memory` — best-effort (tracemalloc, нижняя оценка);
 - `truncated_bptt` — явно приближённый режим: обрыв градиента
   (`tf.stop_gradient`) на границе окна, carry — финальное состояние
   предыдущего окна; после обучения всегда полный free-run.
 
-## Multiple shooting (`shooting`, P1)
+## Multiple shooting (`shooting`)
 
 ```python
 from neuraltide.optimization import MultipleShootingProblem, ShootingConfig
@@ -382,12 +387,11 @@ augmented Lagrangian). Residual-раскладка `r = [r_data; √w·gap_k]` �
 уменьшается ровно на число начальных слотов первого сегмента, стыки
 `0->1, 1->2, ...` и `finalize`/`to_single_shooting_problem` сохраняются
 (single shooting стартует из base state). `initialize_from_single_shooting`
-не создаёт переменные для фиксированного сегмента 0. Параметр обратно
-совместим: по умолчанию `False` и прежнее поведение бит-в-бит.
+не создаёт переменные для фиксированного сегмента 0.
 `BrunelFokkerPlanck` не поддерживается (буфер задержки и CFL-субшагивание
 несовместимы с точной сегментацией) — честный `NotImplementedError`.
 
-## Continuation-расписания (`schedules`, P1)
+## Continuation-расписания (`schedules`)
 
 ```python
 from neuraltide.optimization import (ContinuationScheduler, horizon_growth,
@@ -405,11 +409,12 @@ print(result.free_run_check.loss)   # оценка на исходных вхо�
 - `ContinuationScheduler(stages).run(problem)` — последовательный запуск с
   переносом φ и обязательным `free_run_check` на оригинальной задаче;
 - helpers: `horizon_growth` (срез целей и временных масок ResidualLoss через
-  observations), `teacher_forcing_schedule` (смешивание только во входах; последний alpha
-  обязан быть 0 — иначе `ValueError` ещё на построении), `objective_schedule`,
+  observations), `teacher_forcing_schedule` (смешивание только во входах;
+  последний alpha обязан быть 0 — иначе `ValueError` ещё на построении),
+  `objective_schedule`,
   `smooth_objective` (скользящее среднее целей, инициализационная стадия).
 
-## Идентифицируемость (`identifiability`, P1)
+## Идентифицируемость (`identifiability`)
 
 ```python
 from neuraltide.optimization import compute_fim, likelihood_profile, select_subset
@@ -447,8 +452,8 @@ print(subset.loss_before, subset.loss_after, subset.prediction_delta)
   в `normalization='sum'`; `losses` — в этих единицах). Интервал
   `intervals['0.95']` по порогу `χ²_0.95(1)/2 ≈ 1.9207` на `rel_loss` для
   гауссова шума с известной sigma; шаг сетки должен быть меньше полуширины
-  интервала, иначе интервал схлопывается в узел минимума; неуспешные узлы честно фиксируются
-  (losses=NaN, successes=False), немонотонность/несвязность/минимум на
+  интервала, иначе интервал схлопывается в узел минимума; неуспешные узлы
+  честно фиксируются (losses=NaN, successes=False), немонотонность/несвязность/минимум на
   границе — в `warnings`. Только скалярные записи (numel == 1);
 - `select_subset(problem, jac, keep, refit=True)` — совместная доводка
   подмножества поверх FrozenProblem с честной оценкой смещения: дельты θ
@@ -456,7 +461,7 @@ print(subset.loss_before, subset.loss_after, subset.prediction_delta)
   prediction_delta по firing_rates обучающего протокола и validation_delta
   по held-out (None с пояснением в notes при отсутствии).
 
-## Глобальный поиск (`global_search`, P2)
+## Глобальный поиск (`global_search`)
 
 Единая точка входа для безградиентных методов поверх `CalibrationProblem`:
 
@@ -493,7 +498,7 @@ print(res.base.loss_best, res.n_evals, res.message)
 - отсутствие optional-зависимости поднимает `OptionalDependencyError` с
   сообщением об установке.
 
-## Балансировка компонент и робастные градиенты (`robust`, P2)
+## Балансировка компонент и робастные градиенты (`robust`)
 
 ```python
 from neuraltide.optimization import (GradNormWeights, balanced_train,
@@ -537,7 +542,7 @@ print(bt.base.loss_best, bt.weight_history[-1], bt.baseline["best_loss"])
   (`with_objective`, маска усилена в окне; исходные spec не мутируются);
 - только BPTT-режим: adjoint/`Trainer` — `NotImplementedError`.
 
-## Ограничения на прогнозы (`constraints`, P2)
+## Ограничения на прогнозы (`constraints`)
 
 Ограничения вида c(x)=0 / g(x)≤0 на прогнозы сети (не на параметры —
 bounds параметров это transforms + локальные решатели):
@@ -567,7 +572,7 @@ print(result.base.loss_best, result.violation_history, result.state.lambdas)
   `objectives[index]` становится ограничением `<= eps`, цель — сумма
   остальных (или явный `objective`).
 
-## Неопределённость (`uq`, P2)
+## Неопределённость (`uq`)
 
 ```python
 from neuraltide.optimization import (laplace_approximation,
@@ -611,15 +616,13 @@ pred = predictive_intervals(problem, samples, level=0.95)    # per-(pop, t, unit
   posterior к масштабу шума.
 
 Все статистические величины (FIM, Лаплас, профили) — в единицах полного
-NLL; покрытие 95 %-интервалов Лапласа на синтетических ансамблях проверяет
-`tests/unit/test_audit_regressions.py::test_laplace_coverage_on_noisy_l0`
-(`-m slow`). Якобиан невязок конечен и при точном совпадении (exact-fit):
+NLL. Якобиан невязок конечен и при точном совпадении (exact-fit):
 для l2/relative/msle невязка — сама ошибка `e`, для робастных видов
 `sign(e)·sqrt(2ψ)` заменяется на `e` в точках ψ = 0. Прогнозные интервалы
 `predictive_intervals` по сэмплам постериора — неопределённость параметров,
 без шума наблюдений: их сравнивают с бесшумной траекторией, а не с данными.
 
-## Пакетная оценка кандидатов (`parallel`, P2)
+## Пакетная оценка кандидатов (`parallel`)
 
 ```python
 from neuraltide.optimization import evaluate_candidates, make_evaluator
@@ -646,30 +649,40 @@ finally:
   по умолчанию 1) — ограничение intra-op и inter-op пулов потоков
   TensorFlow в каждом worker-процессе: без него n_workers процессов
   держали бы пулы TF на все ядра CPU (oversubscription). `None` — не
-  трогать потоки TF (поведение до появления параметра). Если пулы TF в
-  worker'е уже инициализированы и настройка бросает `RuntimeError`, worker
-  остаётся на дефолтной конфигурации потоков (fallback) — семантика оценки
-  не меняется. `SerialPool` TF не затрагивает; при `n_workers=1` параметр
+  трогать потоки TF. Если пулы TF в worker'е уже инициализированы и
+  настройка бросает `RuntimeError`, worker остаётся на дефолтной
+  конфигурации потоков (fallback) — семантика оценки не меняется.
+  `SerialPool` TF не затрагивает; при `n_workers=1` параметр
   валидируется, но игнорируется;
 - один seed → одинаковые per-candidate сиды → потери воспроизводимы между
-  SerialPool и ProcessPool (см. `benchmarks/l3_parallel_scaling.py`);
+  SerialPool и ProcessPool;
 - экономика: spawn + импорт TF в каждом worker'е стоят секунд — выигрыш
   есть при дорогих оценках (длинный горизонт, жёсткие интеграторы) и
   живом пуле между батчами; на мелких задачах serial быстрее;
-- tensor candidate-batch (batch>1 через NetworkRNN в одном прогоне) в P2
-  не реализован — параллелится только «один кандидат = один прогон».
+- tensor candidate-batch (batch>1 через NetworkRNN в одном прогоне) не
+  поддержан — параллелится только «один кандидат = один прогон».
 
-## Ограничения этапа P1
+## Ограничения
 
-- **Eager-режим**: все методы P1 работают в eager TensorFlow; `tf.function`
+- **Eager-режим**: все методы работают в eager TensorFlow; `tf.function`
   вокруг методов задачи не поддерживается;
-- **batch=1**: контракт NetworkRNN; ансамблевая векторизация — этап P2;
+- **batch=1**: контракт NetworkRNN; прогоны и `predictive_intervals` —
+  по одному кандидату за раз;
+- **TF forward-AD против GradientTape в пределах одного NetworkRNN**:
+  `_scan_forward_states` — `@tf.function`; после gradient-прогона
+  (value_and_gradient/локальные решатели/балансировка) forward-режим
+  чувствительностей (`residual_jvp`/`residual_jacobian` внутри Laplace)
+  в этом экземпляре падает (`variant/int64` в while_loop). Порядок
+  «Laplace/якобиан ДО градиентных методов» или свежий экземпляр задачи
+  через фабрику (как в `examples/example_09_p2_workflow.py`) — рабочие
+  обходные пути; это ограничение TF+кэша tf.function;
 - **Shooting**: только penalty method — continuity обеспечивается
   взвешенным штрафом, не augmented Lagrangian; всегда завершайте
   `finalize`-чеком. Periodic boundary conditions не реализованы (сегменты
   стартуют из независимых состояний `s_k`, свободных/замкнутых кольцевых
   условий нет); инициализация shooting-состояний `x0s/*` из данных не
   реализована — доступен только перенос `initialize_from_single_shooting()`;
+  `MultipleShootingProblem` строится только поверх `CalibrationProblem`;
 - **FIM по якобиану**: `compute_fim` принимает готовый `JacobianResult`;
   качество FIM — качество J (forward sensitivities либо конечные разности);
   интервалы профиля — для гауссова шума с известной sigma, для huber/robust
@@ -679,20 +692,7 @@ finally:
   исходных входах; truncated BPTT — приближённый режим (сравнивать
   `free_run_loss`, не `final_loss`);
 - **Мультистарт последователен**: старты прогоняются по очереди (shared
-  counters); параллельность кандидатов — P2 (`parallel`).
-
-## Ограничения этапа P2
-
-- **Eager/batch**: как и P0/P1 — eager TensorFlow, batch=1; predictive
-  intervals и все прогоны NetworkRNN — по одному кандидату за раз;
-- **TF forward-AD против GradientTape в пределах одного NetworkRNN**:
-  `_scan_forward_states` — `@tf.function`; после gradient-прогона
-  (value_and_gradient/локальные решатели/балансировка) forward-режим
-  чувствительностей (`residual_jvp`/`residual_jacobian` внутри Laplace)
-  в этом экземпляре падает (`variant/int64` в while_loop). Порядок
-  «Laplace/якобиан ДО градиентных методов» или свежий экземпляр задачи
-  через фабрику (как в `examples/example_09_p2_workflow.py`) — рабочие
-  обходные пути; это ограничение TF+кэша tf.function, не P2-модулей;
+  counters); параллельность кандидатов — через `parallel`;
 - **Optional deps**: `'cma'` — extra `global` (`pip install
   'neuraltide[global]'`), `'pymoo'` — extra `pareto`; отсутствие поднимает
   `OptionalDependencyError` с сообщением об установке;
@@ -700,7 +700,7 @@ finally:
   мелких задачах serial быстрее; выигрыш при дорогих оценках и живом пуле
   (`make_evaluator`), потолок — число ядер с учётом конкуренции за
   intra-op потоки (worker'ы по умолчанию ограничены `tf_threads=1`, см.
-  раздел `parallel`); tensor candidate-batch — вне P2;
+  раздел `parallel`); tensor candidate-batch не поддержан;
 - **Балансировка — BPTT-only**: PCGrad/CAGrad/GradNorm/self-adaptive веса
   не работают с adjoint-режимом (`NotImplementedError`); аналитический
   adjoint Trainer для этих целей не поддержан;
@@ -716,13 +716,16 @@ finally:
   уникальные служебные имена, поэтому эксперимент-специфичные начальные
   состояния `x0/<experiment>/<pop>/<slot>` на них не переносятся —
   пространства с такими записями отклоняются `ValueError` до цикла draw;
-- **Жёсткие интеграторы P2** (`docs/integrators.md`): substepping внутри
+- **Sensitivities/UQ и exp-specific x0**: exp-specific начальные состояния
+  материализуются только в `MultiExperimentProblem` (вне его — warning и
+  пропуск, см. выше);
+- **Жёсткие интеграторы** (`docs/integrators.md`): substepping внутри
   `derivatives()`, синапсы остаются явными, while_loop-adjoint для них не
   поддержан — совместимость с чувствительностями/BPTT проверяйте
-  отдельно (`stiffness_report`, `tests/unit/test_integrators_p2.py`).
+  отдельно (`stiffness_report`).
 
-Сквозные примеры: `examples/example_07_calibration.py` (P0),
-`examples/example_08_p1_workflow.py` (P1: мультистарт -> якобиан -> FIM ->
-профиль -> валидация), `examples/example_09_p2_workflow.py` (P2: DE ->
-L-BFGS-B -> балансировка -> Laplace -> прогнозные интервалы + SerialPool).
-Бенчмарки L0–L3: `benchmarks/`.
+Сквозные примеры: `examples/example_07_calibration.py` (постановка задачи
+и верификация градиентов), `examples/example_08_p1_workflow.py`
+(мультистарт -> якобиан -> FIM -> профиль -> валидация),
+`examples/example_09_p2_workflow.py` (DE -> L-BFGS-B -> балансировка ->
+Laplace -> прогнозные интервалы + SerialPool).

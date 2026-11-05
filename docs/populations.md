@@ -365,7 +365,7 @@ state_size = [
 
 Стационарная частота совпадает с самосогласованным уравнением (21)
 Brunel (2000) с точностью ~0.2% (сетка 250, режим у порога);
-см. `tests/unit/test_brunel_fp.py`, `examples/example_06_brunel_fp.py`.
+пример запуска — [`examples/example_06_brunel_fp.py`](../examples/example_06_brunel_fp.py).
 
 ---
 

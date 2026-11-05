@@ -1,5 +1,5 @@
 """
-Multiple shooting поверх CalibrationProblem (этап P1).
+Multiple shooting поверх CalibrationProblem.
 
 MultipleShootingProblem оборачивает базовую задачу калибровки и разбивает
 временной горизонт на сегменты с независимыми начальными состояниями

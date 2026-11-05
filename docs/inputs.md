@@ -327,10 +327,8 @@ gen = VonMisesGenerator(
 
 ### Зависимости
 
-Для вычисления `I0(kappa)` требуется scipy:
-```python
-from scipy.special import i0
-```
+Внешних зависимостей нет: `I0(kappa)` вычисляется средствами TensorFlow
+(`tf.math.bessel_i0`), scipy не требуется.
 
 ---
 

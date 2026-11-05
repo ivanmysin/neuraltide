@@ -1,6 +1,5 @@
 """
-Continuation scheduler и расписания (curriculum) калибровки (этап P1,
-ранг 12 дорожной карты).
+Continuation scheduler и расписания (curriculum) калибровки.
 
 - Stage: именованная стадия — задача (view CalibrationProblem поверх
   той же сети/ParameterSpace), оптимизатор ('lbfgsb' | 'least_squares' |

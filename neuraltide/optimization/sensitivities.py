@@ -1,7 +1,7 @@
 """
-Чувствительности и производные длинных горизонтов (этап P1).
+Чувствительности и производные длинных горизонтов.
 
-Поверх CalibrationProblem (этап P0/P1) реализованы:
+Поверх CalibrationProblem реализованы:
 
 - residual_jvp(problem, phi, v) — одна forward-mode JVP-оценка невязок:
     r = problem.residual(phi), J·v через tf.autodiff.ForwardAccumulator.

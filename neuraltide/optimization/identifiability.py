@@ -1,15 +1,14 @@
 """
-Идентифицируемость: FIM/SVD, профили правдоподобия, выбор подмножества (P1).
+Идентифицируемость: FIM/SVD, профили правдоподобия, выбор подмножества.
 
-Модуль ранга 11 дорожной карты (docs/optimization_roadmap.md, раздел 6.6)
-поверх CalibrationProblem / ParameterSpace / FrozenProblem (P0/P1):
+Поверх CalibrationProblem / ParameterSpace / FrozenProblem:
 
 - compute_fim(jac, ...) — FIM F = JᵀJ по ГОТОВОМУ якобиану невязок
     (JacobianResult, см. sensitivities.residual_jacobian): спектр, число
     обусловленности, effective rank, жёсткие/мягкие направления с вкладом
     параметров, коллинеарность столбцов J и нормы чувствительности;
 - likelihood_profile(problem, name, ...) — одномерный профиль правдоподобия
-    по физическому θ фиксированной сеткой (не адаптивной в P1) с доводкой
+    по физическому θ фиксированной (не адаптивной) сеткой с доводкой
     остальных координат через локальный оптимизатор (warm start от соседнего
     успешного узла) и интервалами по χ²(1); имя должно быть trainable —
     non-trainable запись реестра отклоняется ValueError;
@@ -18,7 +17,7 @@
     изменение замороженных θ относительно точки якобиана, потерь и прогноза;
     keep — только trainable-имена (non-trainable -> ValueError).
 
-Допущения и ограничения (P1):
+Допущения и ограничения:
   * якобиан здесь НЕ вычисляется: compute_fim/select_subset принимают готовый
     JacobianResult (например, из sensitivities.residual_jacobian). Способ
     получения J (forward sensitivities, конечные разности) — вне контракта;
@@ -44,7 +43,8 @@
   * узлы неуспешных запусков не скрываются (losses = NaN, successes = False,
     phi_path = None) и не участвуют в интервалах; немонотонность, несвязность
     допустимой области и минимум на границе сетки фиксируются в warnings;
-  * P1-профили — только по скалярным записям ParameterSpace (numel == 1).
+    * Профили строятся только по скалярным записям ParameterSpace
+      (numel == 1).
 
 Eager API; numpy-выходы — float64. Глобальный dtype (neuraltide.config)
 используется только при взаимодействии с ParameterSpace/трансформами.
@@ -744,13 +744,13 @@ def _likelihood_profile(
     В каждом узле фиксированной сетки (в физических θ) координата name
     замораживается через FrozenProblem (φ-значение = transform.inverse(θ)),
     остальные координаты доводятся локальным оптимизатором. Сетка
-    фиксированная, не адаптивная (P1).
+    фиксированная, не адаптивная.
 
     Args:
         problem: CalibrationProblem (или duck-typed аналог с
             parameter_space/pack/bounds_phi/counters).
         name: full_name скалярной trainable-записи ParameterSpace
-            (numel == 1 в P1; non-trainable запись реестра отклоняется
+            (numel == 1; non-trainable запись реестра отклоняется
             ValueError — профиль по координате вне вектора φ невозможен).
         phi: стартовый вектор φ — точка отсчёта профиля: cold start для
             свободных координат (при warm_start=False) и значения
@@ -804,7 +804,7 @@ def _likelihood_profile(
     entry = entries[name]
     if entry.numel != 1:
         raise ValueError(
-            f"likelihood_profile: P1-профили поддерживают только скалярные "
+            f"likelihood_profile: профили поддерживают только скалярные "
             f"записи (numel == 1); '{name}' имеет numel={entry.numel}. "
             "Задайте одну φ-координату явно."
         )

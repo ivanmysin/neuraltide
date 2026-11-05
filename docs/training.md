@@ -37,7 +37,6 @@ history = trainer.fit(t_seq, inputs=inputs, epochs=epochs, verbose=1)
 
 - `fit(t_seq, inputs=None, epochs, verbose)` — обучение сети
 - `predict(t_seq, inputs)` — предсказание без обучения
-- `evaluate(t_seq, inputs)` — вычисление loss без обновления весов
 - `export_results(path, format="json")` — экспорт результатов в JSON или CSV
 
 ### Экспорт результатов
@@ -172,7 +171,7 @@ Adjoint вычисляет градиенты через backward pass, анал
 - **Ограниченная видеопамять** (GPU)
 - **Большие модели** с many parameters
 
-### benchmarks
+### Потребление памяти (измерения)
 
 | T | BPTT RAM | Adjoint RAM | Уменьшение |
 |---|----------|------------|-------------|

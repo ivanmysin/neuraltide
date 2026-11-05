@@ -1,5 +1,5 @@
 """
-Глобальный безградиентный поиск (этап P2 дорожной карты: CMA-ES/DE,
+Глобальный безградиентный поиск (CMA-ES/DE/SPSA/basinhopping/NSGA-II,
 база для параллелизма по кандидатам).
 
 Единая точка входа global_search поверх CalibrationProblem (или
@@ -1131,7 +1131,7 @@ def global_search(
     validate: bool = True,
 ):
     """
-    Глобальный поиск поверх CalibrationProblem (этап P2).
+    Глобальный поиск поверх CalibrationProblem.
 
     Args:
         problem: CalibrationProblem (или duck-typed: size/pack/evaluate/
