@@ -15,6 +15,9 @@ tf.while_loop: метод работает и в eager-режиме, и под t
 не поддерживается (см. docs/integrators.md).
 
 Синапсы в P2 остаются явными: step_synapse делегирует явному Эйлеру.
+
+Network-wide шаг (integration_mode='network') не поддерживается
+(supports_network_step=False): NetworkRNN в этом режиме бросит ValueError.
 """
 
 from typing import Dict, Tuple

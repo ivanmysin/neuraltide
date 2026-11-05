@@ -66,7 +66,7 @@ def _perturbed(problem, seed=0, rel=0.05):
     return phi0 + rng.standard_normal(phi0.size) * (rel * np.abs(phi0) + 1e-3)
 
 
-def _ee_tm_network(dt, integrator, e_r=1.0, gsyn=0.5):
+def _ee_tm_network(dt, integrator, e_r=1.0, gsyn=0.5, mode="split"):
     """
     E–E сеть Уилсона–Коуэна с рекуррентным синапсом Цодыкса–Маркрама.
 
@@ -109,7 +109,7 @@ def _ee_tm_network(dt, integrator, e_r=1.0, gsyn=0.5):
     graph = NetworkGraph(dt=dt)
     graph.add_population("exc", pop)
     graph.add_synapse("exc->exc", syn, src="exc", tgt="exc")
-    return NetworkRNN(graph, integrator)
+    return NetworkRNN(graph, integrator, integration_mode=mode)
 
 
 def _t_seq(n, dt):
@@ -472,35 +472,30 @@ def test_cagrad_improves_worst_task_over_mean(c):
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="В6: шаг сети расщеплён (синапсы | популяции), порядок связанной "
-    "сети 2 — ограничение задокументировано в docs/integrators.md; тест "
-    "станет проходить после интегрирования сети целиком.",
-)
 def test_rk4_network_order_with_tm_coupling():
     """
-    Ловит В6. Сходимость по dt на связанной сети со STP, а не на одной
-    популяции. Для RK4 ожидается порядок около 4. На dev измерен
-    порядок 2.0 (а не 1, как было написано в ревью): синапс шагает с
-    частотой популяции в начале шага, популяция — с током синапса в
-    конце шага. Без связи (gsyn = 0) RK4 даёт 4.0, Эйлер — 1.0;
-    см. test_audit_controls.py::test_network_order_diagnostic.
-    Если решено только задокументировать ограничение — пометить
-    xfail(strict=True) со ссылкой на docs/integrators.md.
+    Регрессионный тест исправления В6: сходимость по dt на связанной сети
+    со STP в network-wide режиме (integration_mode='network'). Для RK4
+    ожидается порядок около 4 (> 3.5). Раньше шаг сети был расщеплён
+    (синапсы | популяции): частота пресинаптического юнита бралась в
+    начале шага, ток синапса — в конце, и порядок связанной сети был 2.
+    Split-понижение (~2) остаётся контролем в
+    test_audit_controls.py::test_network_order_diagnostic, а согласованный
+    network-wide шаг (step_network) закреплён здесь.
     """
     neuraltide.config.set_dtype(tf.float64)
     t_end = 20.0
 
     def final_E(dt):
-        net = _ee_tm_network(dt, RK4Integrator())
+        net = _ee_tm_network(dt, RK4Integrator(), mode="network")
         out = net(_t_seq(int(round(t_end / dt)), dt))
         return float(np.asarray(out.final_state[0][0]).ravel()[0])  # E в момент t_end
 
     ref = final_E(0.5 / 64)
     errs = [abs(final_E(dt) - ref) for dt in (0.5, 0.25, 0.125)]
+    assert errs[0] > errs[1] > errs[2] > 0.0, errs
     order = np.log2(errs[1] / errs[2])
-    assert order > 2.5, (errs, order)
+    assert order > 3.5, (errs, order)
 
 
 # ---------------------------------------------------------------------------

@@ -418,7 +418,7 @@ t_seq = tf.constant(t_values[None, :, None])
 inputs = graph.pack_inputs({'theta': gen(t_seq)})
 
 # До обучения
-output_before = network(t_seq, inputs=inputs, training=False)
+output_before = network(t_seq, inputs=inputs)
 
 # Обучение
 loss_fn = CompositeLoss([
@@ -429,7 +429,7 @@ trainer = Trainer(network, loss_fn, optimizer=tf.keras.optimizers.Adam(1e-3))
 history = trainer.fit(t_seq, inputs=inputs, epochs=epochs, verbose=1)
 
 # После обучения
-output_after = network(t_seq, inputs=inputs, training=False)
+output_after = network(t_seq, inputs=inputs)
 
 print(f"Initial loss: {history.loss_history[0]:.4f}")
 print(f"Final loss: {history.loss_history[-1]:.4f}")

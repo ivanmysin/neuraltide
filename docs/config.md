@@ -135,7 +135,6 @@ class NetworkConfig:
     synapses: List[SynapseConfig]             # Список синапсов
     inputs: List[InputConfig]                  # Список входов
     stability_penalty_weight: float = 0.0      # Вес штрафа за стабильность
-    return_hidden_states: bool = False        # Возвращать скрытые состояния
 ```
 
 ### build_network_from_config(config)
@@ -328,7 +327,6 @@ config_dict = {
     'dt': config.dt,
     'integrator': config.integrator,
     'stability_penalty_weight': config.stability_penalty_weight,
-    'return_hidden_states': config.return_hidden_states,
     'inputs': [
         {'name': i.name, 'generator_class': i.generator_class, 'params': i.params}
         for i in config.inputs
@@ -362,7 +360,6 @@ config = NetworkConfig(
     dt=config_dict['dt'],
     integrator=config_dict['integrator'],
     stability_penalty_weight=config_dict.get('stability_penalty_weight', 0.0),
-    return_hidden_states=config_dict.get('return_hidden_states', False),
     inputs=[InputConfig(**i) for i in config_dict['inputs']],
     populations=[PopulationConfig(**p) for p in config_dict['populations']],
     synapses=[SynapseConfig(**s) for s in config_dict['synapses']],

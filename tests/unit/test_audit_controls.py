@@ -1,13 +1,14 @@
 """
 Контрольные варианты к test_audit_regressions.py (написаны при запуске
-регрессионных тестов аудита, 3 ноября 2026).
+регрессионных тестов аудита, 3 ноября 2026; диагностика В6 расширена
+после исправления В6, ноябрь 2026).
 
 - К2: тот же сценарий с include_syn_states=False и True. С True склейка
   совпадает со свободным прогоном; с False состояния синапсов сбрасываются
   на узлах, и finalize обязан вернуть consistent=False.
-- В6: диагностика порядка сходимости. Ничего не утверждает, печатает
-  порядки (запускать с -s). На dev: Эйлер 1.0; RK4 4.0 без связи и 2.0
-  со связью.
+- В6: диагностика порядка сходимости с контрольными окнами: Эйлер ~1 во
+  всех режимах; RK4 со связью: split ~2 (расщеплённый шаг), network-wide
+  > 3.5 (согласованный шаг); RK4 без связи (gsyn = 0): ~4 в обоих режимах.
 """
 
 import numpy as np
@@ -68,27 +69,37 @@ def test_ms_tm_synapse_control(include_syn):
 
 
 # ---------------------------------------------------------------------------
-# В6: измеренный порядок сети (в ревью было написано «1», на деле 2).
+# В6: измеренный порядок сети с контрольными окнами. Эйлер ~1 везде;
+# RK4 со связью: split ~2, network-wide > 3.5; RK4 без связи: ~4 в обоих.
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize("integ", ["euler", "rk4"])
+@pytest.mark.parametrize("mode", ["split", "network"])
 @pytest.mark.parametrize("coupled", [True, False])
-def test_network_order_diagnostic(integ, coupled):
+def test_network_order_diagnostic(integ, mode, coupled):
     neuraltide.config.set_dtype(tf.float64)
     t_end = 20.0
     make = {"euler": EulerIntegrator, "rk4": RK4Integrator}[integ]
 
     def final_E(dt):
-        net = _ee_tm_network(dt, make(), gsyn=0.5 if coupled else 0.0)
+        net = _ee_tm_network(dt, make(), gsyn=0.5 if coupled else 0.0, mode=mode)
         out = net(_t_seq(int(round(t_end / dt)), dt))
         return float(np.asarray(out.final_state[0][0]).ravel()[0])
 
-    ref = final_E(0.5 / 128)
-    dts = (0.5, 0.25, 0.125, 0.0625)
+    ref = final_E(0.5 / 64)
+    dts = (0.5, 0.25, 0.125)
     errs = [abs(final_E(dt) - ref) for dt in dts]
     orders = [np.log2(errs[i] / errs[i + 1]) for i in range(len(errs) - 1)]
     print(
-        f"\n{integ} coupled={coupled}: errs={['%.2e' % e for e in errs]} "
-        f"orders={['%.2f' % o for o in orders]}"
+        f"\n{integ} mode={mode} coupled={coupled}: "
+        f"errs={['%.2e' % e for e in errs]} orders={['%.2f' % o for o in orders]}"
     )
+    order = orders[-1]
+    if integ == "euler":
+        lo, hi = 0.8, 1.3
+    elif coupled and mode == "split":
+        lo, hi = 1.5, 2.6  # расщеплённый шаг: частота в начале, ток в конце
+    else:
+        lo, hi = 3.5, 4.6  # согласованный шаг (network) или связь выключена
+    assert lo < order < hi, (integ, mode, coupled, order, errs)

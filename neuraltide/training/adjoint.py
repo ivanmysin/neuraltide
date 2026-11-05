@@ -14,13 +14,25 @@ Two modes:
   - Analytical adjoint (use_analytical_adjoint=True): uses explicit
     adjoint_derivatives() + parameter_jacobian() — no GradientTape in the loop
 
+Integration modes (network.integration_mode):
+  - 'split' (default): отдельные шаги синапсов и популяций; оба adjoint-режима
+    поддерживаются.
+  - 'network': единый network-wide шаг интегратора (step_network). Discrete
+    adjoint работает (дифференцирует тот же _step_fn, что и прямой прогон).
+    Analytical adjoint НЕ поддерживается (NotImplementedError при создании
+    solver'а). Ограничение stability-штрафа: step_network не аккумулирует
+    per-step local error, поэтому градиенты StabilityPenalty в этом режиме
+    тождественно нулевые (см. AdjointSolver._stability_gradients).
+
 Loss convention: per_step_loss возвращает аддитивный вклад временного шага,
 полная loss ≡ sum_t per_step_loss (нормировка 1/T внутри per_step_loss
 потерь, а не в adjoint-циклах).
 """
 
-import tensorflow as tf
+import warnings
 from typing import Dict, List, Tuple, Optional
+
+import tensorflow as tf
 
 import neuraltide
 import neuraltide.config
@@ -89,6 +101,15 @@ class AdjointSolver(tf.Module):
         integrator: integrator to use (defaults to network's integrator).
         use_analytical_adjoint: if True, use explicit adjoint_derivatives()
             and parameter_jacobian() instead of tf.GradientTape.
+
+    Raises:
+        NotImplementedError: if use_analytical_adjoint=True and the network
+            uses integration_mode='network' (analytical adjoint is wired for
+            split stepping only; use the discrete adjoint or split mode).
+
+    The solver captures network.integration_mode (default 'split') and
+    replays it in every _step_fn call of the backward loops, so discrete
+    adjoint differentiates exactly the step used by the forward pass.
     """
 
     def __init__(
@@ -102,6 +123,16 @@ class AdjointSolver(tf.Module):
         self._graph = network._graph
         self._integrator = integrator if integrator is not None else network._integrator
         self._use_analytical_adjoint = use_analytical_adjoint
+        self._integration_mode = getattr(network, "integration_mode", "split")
+
+        if use_analytical_adjoint and self._integration_mode == "network":
+            raise NotImplementedError(
+                "Analytical adjoint does not support integration_mode='network' "
+                "(network-wide stepping via step_network); it is wired for "
+                "split stepping only. Use the discrete adjoint "
+                "(use_analytical_adjoint=False) or build the network with "
+                "integration_mode='split'."
+            )
 
         self._trainable = [v for v in network.trainable_variables if v.trainable]
         for v in self._trainable:
@@ -276,12 +307,16 @@ class AdjointSolver(tf.Module):
         Dict[str, TensorType],
         TensorType,
     ]:
+        # integration_mode захвачен из self при трейсе (Python-константа):
+        # сигнатура tf.function не меняется, backward дифференцирует тот же
+        # шаг, что и прямой прогон сети.
         new_pop, new_syn, _ = _step_fn(
             (pop_tup, syn_tup, tf.constant([0.0], dtype=dtype)),
             t_val,
             input_rates_step,
             self._graph,
             self._integrator,
+            integration_mode=self._integration_mode,
         )
         npl = list(new_pop)
         nsl = list(new_syn)
@@ -815,6 +850,14 @@ class AdjointSolver(tf.Module):
         t_val: TensorType,
         dtype: tf.DType,
     ) -> Tuple[Tuple[TensorType, ...], Tuple[TensorType, ...], TensorType]:
+        """Один шаг короткого прогона для градиентов stability-штрафа.
+
+        Идёт через тот же integration_mode, что и основной adjoint. В режиме
+        'network' _step_fn возвращает stab_acc неизменным (step_network не
+        аккумулирует per-step local error), поэтому stability_loss такого
+        прогона тождественно ноль и градиенты вырождаются в нули — ограничение
+        документировано в _stability_gradients.
+        """
         # Provide zero input rates for all external inputs
         input_step = {}
         for name in self._graph._input_names:
@@ -826,6 +869,7 @@ class AdjointSolver(tf.Module):
             input_step,
             self._graph,
             self._integrator,
+            integration_mode=self._integration_mode,
         )
 
     # ── Compute gradients ────────────────────────────────────────────────────
@@ -858,7 +902,10 @@ class AdjointSolver(tf.Module):
             Градиенты StabilityPenalty вычисляются отдельным коротким
             прогоном и всегда стартуют из состояния по умолчанию сети
             (self._network.get_initial_state) — initial_state на них не
-            влияет.
+            влияет. Шаг этого прогона идёт через integration_mode сети;
+            в режиме 'network' step_network не аккумулирует per-step local
+            error, поэтому градиенты stability-штрафа тождественно нулевые
+            (с предупреждением UserWarning, см. _stability_gradients).
         """
         output, _, state_info = self.forward_pass(
             t_sequence, inputs, initial_state=initial_state
@@ -914,8 +961,29 @@ class AdjointSolver(tf.Module):
         return CompositeLoss(main_terms), stab_terms
 
     def _stability_gradients(self) -> List[TensorType]:
+        """
+        Градиенты StabilityPenalty отдельным коротким прогоном.
+
+        Прямой прогон идёт через integration_mode сети (тот же режим, что и
+        в основном adjoint). Ограничение режима 'network': step_network не
+        возвращает per-step local error, _step_fn пробрасывает stab_acc
+        неизменным, поэтому stability_loss прогона тождественно ноль и все
+        градиенты вырождаются в нули (штраф не даёт градиентного сигнала).
+        Это честное поведение — фиктивный градиент не выдумывается; выдаётся
+        UserWarning. В режиме 'split' поведение прежнее.
+        """
         variables = self._network.trainable_variables
         dtype = neuraltide.config.get_dtype()
+
+        if self._integration_mode == "network":
+            warnings.warn(
+                "integration_mode='network': step_network does not accumulate "
+                "per-step local errors, so stability gradients are identically "
+                "zero and the stability penalty contributes no gradient signal. "
+                "Use integration_mode='split' for stability-penalty gradients.",
+                UserWarning,
+                stacklevel=2,
+            )
 
         batch_size = 1
         init_pop, init_syn = self._network.get_initial_state(batch_size)

@@ -12,7 +12,7 @@
 |---:|---|---|---|
 | 1 | `fix_first_segment` в multiple shooting | Локальное API-расширение | Реализовано (ожидает ревью) |
 | 2 | Свой начальный вектор `x0` для каждого эксперимента | Расширение `MultiExperimentProblem` | Реализовано (ожидает ревью) |
-| 3 | Интегрирование связанной сети целиком | Архитектурный этап | Запланировано |
+| 3 | Интегрирование связанной сети целиком | Архитектурный этап | Реализовано (ожидает ревью) |
 
 Остальные открытые вопросы пока не трогаем.
 
@@ -98,6 +98,53 @@
 ---
 
 ## 3. Интегрирование связанной сети целиком
+
+> **Статус: реализовано (ожидает ревью).** Реализация — в
+> `neuraltide/core/network.py` (`NetworkRNN(integration_mode='split'|
+> 'network')`, `_JointNetworkRHS`) и `neuraltide/integrators/` (`step_network`
+> у Euler/Heun/RK4/Rosenbrock, флаг `supports_network_step`;
+> `stiffness_report(scope=...)`); adjoint — `neuraltide/training/adjoint.py`.
+> Тесты — `tests/unit/test_network_wide.py`, `test_integrators_network_wide.py`,
+> `test_network_wide_adjoint.py`, регрессионный
+> `test_audit_regressions.py::test_rk4_network_order_with_tm_coupling`
+> (бывший строгий xfail В6, снят) и контроль split-понижения
+> `test_audit_controls.py::test_network_order_diagnostic`; бенчмарк —
+> `benchmarks/b6_network_wide.py`.
+
+**Итоги:**
+
+- `integration_mode='split'` (по умолчанию) сохранён без изменений;
+  `integration_mode='network'` даёт единый согласованный шаг интегратора по
+  объединённым состояниям популяций и синапсов (`step_network` поверх
+  `_JointNetworkRHS`). Поддержаны Euler, Heun, RK4 и Rosenbrock (ROS2);
+  AdaptiveRK/IMEX/Exponential не поддерживают network-wide шаг — конструктор
+  `NetworkRNN` бросает `ValueError`.
+- Порядок на связанной E–E сети Уилсона–Коуэна с синапсом Цодыкса–Маркрама
+  (float64, автономная): RK4 network-wide ≈ 4.02 против ≈ 2.01 у split;
+  ROS2 network-wide устойчив на жёсткой связанной задаче (плотный [D, D]
+  якобиан, синаптическая связность входит в J).
+- BPTT и discrete adjoint поддержаны в обоих режимах (solver захватывает
+  `network.integration_mode` и дифференцирует ровно тот шаг, что и прямой
+  прогон); float32/float64 и существующие интеграторные тесты согласованы.
+- `stiffness_report(scope='network')` строит полный спектр связанной системы
+  (входы заморожены ZOH).
+
+**Оставшиеся ограничения:**
+
+- `stability_loss` в network-режиме не оценивается (== 0): `step_network` не
+  возвращает per-step `local_error`; stability-штрафы и их градиенты —
+  только в split-режиме.
+- Аналитический adjoint (`use_analytical_adjoint=True`) в network-режиме —
+  `NotImplementedError` (привязан к split-шагу); доступен discrete adjoint.
+- Порядок 4 заявляется для автономной/константной части: внешние входы
+  внутри шага — ZOH, быстро меняющиеся входы ограничивают точность.
+- `InputPopulation` внутри полного scan по-прежнему не поддержан (оба
+  режима); `BrunelFokkerPlanck` — split Euler/Heun с ν-буфером.
+- Стоимость network-wide шага выше split (полный joint RHS на каждой
+  стадии; ROS2 — плотные [D, D] solve на субшаг) — см.
+  `benchmarks/b6_network_wide.py`.
+
+### Исходная постановка
 
 **Цель:** устранить архитектурное ограничение В6: сейчас популяции и
 синапсы интегрируются раздельно, из-за чего формальный порядок RK4/ROS2 на

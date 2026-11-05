@@ -289,12 +289,129 @@ def get_firing_rates(
     return all_rates
 
 
+class _JointNetworkRHS:
+    """
+    Согласованная правая часть (joint RHS) связанной сети.
+
+    Используется в режиме integration_mode='network': интегратор с
+    supports_network_step=True вызывает step_network(rhs, pop_states,
+    syn_states, dt), а этот объект вычисляет производные всех популяций
+    и синапсов по их состояниям на начало шага.
+
+    Семантика (__call__):
+        1. Распаковка плоских списков состояний по кэшам graph
+           (_pop_info_cache / _syn_info_cache).
+        2. Для каждой популяции кэшируются firing rate и observables;
+           'v_mean' отсутствует → нулевой fallback формы [1, n_units].
+        3. Для каждого синапса: pre_rate из input_rates, если src —
+           внешний вход (значение на текущем шаге, zero-order hold),
+           иначе из кэшированных firing rates; post_v — 'v_mean' цели
+           (или нулевой fallback). dsyn = model.derivatives(syn_state,
+           pre_rate, post_v); current = model.compute_current(syn_state,
+           pre_rate, post_v).
+        4. Токи всех синапсов аккумулируются в syn_I/syn_g целевых
+           популяций.
+        5. dpop = pop.derivatives(pop_state, {'I_syn', 'g_syn'}).
+
+    Возвращает плоские списки производных в кэшированном порядке
+    (популяции, затем синапсы). Блоки моделей без динамики
+    (InputPopulation, StaticSynapse) дают пустые списки производных —
+    их состояние интегратор оставляет неизменным.
+
+    Args:
+        graph: NetworkGraph с построенными кэшами (validate()).
+        input_rates: {name: tensor[batch, n_units]} — частоты разрядов
+            внешних входов на текущем шаге. None эквивалентен {}.
+    """
+
+    def __init__(
+        self,
+        graph: NetworkGraph,
+        input_rates: Optional[Dict[str, TensorType]],
+    ):
+        self._graph = graph
+        self._input_rates = input_rates if input_rates is not None else {}
+
+    def __call__(
+        self,
+        pop_states: StateList,
+        syn_states: StateList,
+    ) -> Tuple[StateList, StateList]:
+        graph = self._graph
+        dtype = neuraltide.config.get_dtype()
+        input_rates = self._input_rates
+
+        # Распаковка состояний по кэшированным оффсетам
+        pop_states_dict = {}
+        idx = 0
+        for name, pop, n in graph._pop_info_cache:
+            pop_states_dict[name] = pop_states[idx : idx + n]
+            idx += n
+
+        syn_states_dict = {}
+        idx = 0
+        for name, entry, n in graph._syn_info_cache:
+            syn_states_dict[name] = syn_states[idx : idx + n]
+            idx += n
+
+        # Инициализация синаптических токов для динамических популяций
+        syn_I: Dict[str, TensorType] = {}
+        syn_g: Dict[str, TensorType] = {}
+        for name in graph.dynamic_population_names:
+            n = graph._populations[name].n_units
+            syn_I[name] = tf.zeros([1, n], dtype=dtype)
+            syn_g[name] = tf.zeros([1, n], dtype=dtype)
+
+        # Кэширование firing_rates и observables для каждой популяции
+        cached_rates: Dict[str, TensorType] = {}
+        cached_obs: Dict[str, Dict[str, TensorType]] = {}
+        for pop_name in graph._populations:
+            pop = graph._populations[pop_name]
+            pop_state = pop_states_dict[pop_name]
+            cached_rates[pop_name] = pop.get_firing_rate(pop_state)
+            cached_obs[pop_name] = pop.observables(pop_state)
+
+        # Производные синапсов и аккумуляция токов
+        dsyn_flat: StateList = []
+        for syn_name, entry, _ in graph._syn_info_cache:
+            syn_state = syn_states_dict[syn_name]
+            tgt_pop = graph._populations[entry.tgt]
+
+            if entry.src in graph._external_inputs:
+                pre_rate = input_rates[entry.src]
+            else:
+                pre_rate = cached_rates[entry.src]
+
+            post_v = cached_obs[entry.tgt].get("v_mean")
+            if post_v is None:
+                post_v = tf.zeros([1, tgt_pop.n_units], dtype=dtype)
+
+            dsyn = entry.model.derivatives(syn_state, pre_rate, post_v)
+            dsyn_flat.extend(dsyn)
+
+            current_dict = entry.model.compute_current(syn_state, pre_rate, post_v)
+            syn_I[entry.tgt] = syn_I[entry.tgt] + current_dict["I_syn"]
+            syn_g[entry.tgt] = syn_g[entry.tgt] + current_dict["g_syn"]
+
+        # Производные популяций по суммарному синаптическому входу
+        dpop_flat: StateList = []
+        for name, pop, _ in graph._pop_info_cache:
+            pop_state = pop_states_dict[name]
+            total_syn = {"I_syn": syn_I[name], "g_syn": syn_g[name]}
+            dpop = pop.derivatives(pop_state, total_syn)
+            dpop_flat.extend(dpop)
+
+        return dpop_flat, dsyn_flat
+
+
 def _step_fn(
     states: Tuple[StateList, StateList, TensorType],
     t: TensorType,
     input_rates: Optional[Dict[str, TensorType]],
     graph: NetworkGraph,
     integrator: BaseIntegrator,
+    *,
+    integration_mode: str = "split",
 ) -> Tuple[StateList, StateList, TensorType]:
     """
     Один шаг симуляции сети. Используется с tf.scan.
@@ -306,12 +423,34 @@ def _step_fn(
             частоты разрядов для внешних входов на данном шаге.
         graph: NetworkGraph
         integrator: BaseIntegrator
+        integration_mode: 'split' — отдельные шаги синапсов и популяций
+            (как раньше); 'network' — единый шаг интегратора по всей
+            связанной сети через _JointNetworkRHS + step_network
+            (требует supports_network_step=True у интегратора).
 
     Returns:
         (new_pop_states, new_syn_states, new_stability_error)
     """
     pop_states, syn_states, stability_acc = states
     dtype = neuraltide.config.get_dtype()
+
+    if integration_mode == "network":
+        rhs = _JointNetworkRHS(graph, input_rates)
+        new_pop_list, new_syn_list = integrator.step_network(
+            rhs, pop_states, syn_states, graph.dt
+        )
+        new_pop_list = list(new_pop_list)
+        new_syn_list = list(new_syn_list)
+        if neuraltide.config.get_debug_numerics():
+            for i, s in enumerate(new_pop_list):
+                new_pop_list[i] = tf.debugging.check_numerics(
+                    s, f"NaN in population state[{i}]"
+                )
+            for i, s in enumerate(new_syn_list):
+                new_syn_list[i] = tf.debugging.check_numerics(
+                    s, f"NaN in synapse state[{i}]"
+                )
+        return (tuple(new_pop_list), tuple(new_syn_list), stability_acc)
 
     # Распаковка состояний популяций с использованием кэшированных оффсетов
     pop_states_dict = {}
@@ -430,6 +569,16 @@ class NetworkRNN(tf.keras.layers.Layer):
 
     Использует пошаговое интегрирование для каждого временного шага,
     что позволяет избежать проблем с variable scoping в Keras RNN.
+
+    Режимы интегрирования (integration_mode):
+        'split' (по умолчанию): синапсы и популяции интегрируются
+            отдельно через integrator.step_synapse()/step(); токи
+            вычисляются по уже обновлённым состояниям синапсов.
+        'network': интегратор получает согласованную правую часть всей
+            связанной сети (_JointNetworkRHS) через step_network(rhs,
+            pop_states, syn_states, graph.dt) — требует интегратор с
+            supports_network_step=True. Токи и производные вычисляются
+            по состояниям на начало шага.
     """
 
     def __init__(
@@ -437,6 +586,8 @@ class NetworkRNN(tf.keras.layers.Layer):
         graph: NetworkGraph,
         integrator: BaseIntegrator,
         stability_penalty_weight: float = 0.0,
+        *,
+        integration_mode: str = "split",
         **kwargs,
     ):
         super().__init__(**kwargs)
@@ -444,10 +595,24 @@ class NetworkRNN(tf.keras.layers.Layer):
         # в глобальном neuraltide.config.get_dtype() (аналогично
         # BaseInputGenerator), чтобы float64-путь работал без потери точности.
         self.autocast = False
+        if integration_mode not in ("split", "network"):
+            raise ValueError(
+                f"Unknown integration_mode '{integration_mode}'; "
+                f"expected 'split' or 'network'."
+            )
+        if integration_mode == "network" and not getattr(
+            integrator, "supports_network_step", False
+        ):
+            raise ValueError(
+                f"integration_mode='network' requires an integrator with "
+                f"supports_network_step=True; got "
+                f"{type(integrator).__name__}."
+            )
         graph.validate()
         self._graph = graph
         self._integrator = integrator
         self._stability_penalty_weight = stability_penalty_weight
+        self._integration_mode = integration_mode
 
         self._build()
 
@@ -580,6 +745,7 @@ class NetworkRNN(tf.keras.layers.Layer):
                 input_step,
                 self._graph,
                 self._integrator,
+                integration_mode=self._integration_mode,
             )
             for j in range(self._pop_state_count):
                 pop_arrs[j] = pop_arrs[j].write(i, new_pop[j])
@@ -710,6 +876,15 @@ class NetworkRNN(tf.keras.layers.Layer):
             stability_loss=stability_loss,
             final_state=(final_pop, final_syn),
         )
+
+    @property
+    def integration_mode(self) -> str:
+        """
+        Режим интегрирования связанной сети: 'split' (по умолчанию)
+        или 'network' (единый шаг интегратора по всей сети через
+        step_network, требует supports_network_step=True у интегратора).
+        """
+        return self._integration_mode
 
     @property
     def pop_state_offsets(self) -> Dict[str, Tuple[int, int]]:

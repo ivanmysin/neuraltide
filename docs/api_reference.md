@@ -171,25 +171,32 @@ class NetworkRNN(tf.keras.layers.Layer):
 NetworkRNN(
     graph: NetworkGraph,
     integrator: BaseIntegrator,
-    return_hidden_states: bool = False,
-    stability_penalty_weight: float = 0.0
+    stability_penalty_weight: float = 0.0,
+    *,
+    integration_mode: str = "split",
+    **kwargs,
 )
 ```
 
+- `integration_mode`: `'split'` (по умолчанию) — расщеплённый шаг
+  (синапсы, затем популяции); `'network'` — единый согласованный шаг
+  интегратора по связанной сети через `step_network` (требует
+  `integrator.supports_network_step=True`, иначе `ValueError`).
+  См. `docs/integrators.md` («Network-wide интегрирование»).
+
 **Методы**:
-- `call(t_sequence, inputs=None, initial_state=None, training=False) -> NetworkOutput`
+- `call(t_sequence, inputs=None, initial_state=None) -> NetworkOutput`
 - `get_initial_state(batch_size=1) -> Tuple[StateList, StateList]`
 
 **Свойства**:
 - `trainable_variables -> List[tf.Variable]`
+- `integration_mode -> str` — режим интегрирования ('split' | 'network')
 
 ### NetworkOutput
 
 ```python
-@dataclass
-class NetworkOutput:
+class NetworkOutput(NamedTuple):
     firing_rates: Dict[str, TensorType]
-    hidden_states: Optional[Dict[str, Dict[str, TensorType]]]
     stability_loss: TensorType
     final_state: Tuple[StateList, StateList]
 ```
@@ -493,8 +500,47 @@ VonMisesGenerator(
 class BaseIntegrator(ABC):
 ```
 
+**Атрибуты**:
+- `supports_network_step: bool` — поддержка единого шага по связанной сети
+  (`integration_mode='network'`). `True` у `EulerIntegrator`,
+  `HeunIntegrator`, `RK4Integrator` и `RosenbrockIntegrator`; `False` у
+  `AdaptiveRKIntegrator`, `IMEXEulerIntegrator` и
+  `ExponentialEulerIntegrator` (конструктор `NetworkRNN` в network-режиме
+  бросит `ValueError`).
+
 **Методы**:
 - `step(population, state, total_synaptic_input) -> (StateList, TensorType)`
+- `step_synapse(synapse, state, pre_firing_rate, post_voltage, dt) -> (StateList, TensorType)`
+- `step_network(rhs, pop_states, syn_states, dt) -> (StateList, StateList)`
+  — один согласованный шаг по связанной сети (режим
+  `integration_mode='network'`): `rhs` — `_JointNetworkRHS`,
+  `rhs(pop_states, syn_states) -> (dpop_flat, dsyn_flat)`. Возвращает
+  `(new_pop_states, new_syn_states)`; оценка локальной ошибки не
+  возвращается (`stability_loss` в network-режиме равен 0). При
+  `supports_network_step=False` — `NotImplementedError`. Блоки без
+  динамики (`InputPopulation`, `StaticSynapse`) возвращаются неизменными.
+
+### stiffness_report
+
+```python
+def stiffness_report(
+    network_or_problem,
+    phi=None,
+    t_points: int = 8,
+    method: str = "jvp",
+    scope: str = "populations",
+) -> Dict[str, Any]
+```
+
+- `scope='populations'` (по умолчанию) — блочно-диагональные якобианы
+  динамических популяций при нулевом синаптическом входе;
+  `report['populations'][name]['eigenvalues']` — [P, n, d];
+- `scope='network'` — полный якобиан [D, D] связанной сети через
+  `_JointNetworkRHS`; `report['network']['eigenvalues']` — [P, D]
+  (синаптическая связность входит в спектр);
+- в обоих scope внешние входы заморожены (zero-order hold); общие ключи
+  `stiffness_ratio`, `explicit_dt_limit`, `euler_stable` (в scope='network'
+  лимит относится к полной связанной системе).
 
 ### EulerIntegrator
 
@@ -591,7 +637,6 @@ class NetworkConfig:
     synapses: List[SynapseConfig]
     inputs: List[InputConfig]
     stability_penalty_weight: float = 0.0
-    return_hidden_states: bool = False
 ```
 
 ### build_network_from_config

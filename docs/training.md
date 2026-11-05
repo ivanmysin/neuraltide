@@ -211,6 +211,26 @@ print(report['max_grad_abs_diff'])  # максимальная разница г
 print(report['cosine_similarity'])  # косинусная близость векторов градиентов
 ```
 
+### Adjoint и режим интегрирования (integration_mode)
+
+`AdjointSolver` захватывает `network.integration_mode` (по умолчанию
+`'split'`) и проигрывает его во всех шагах backward-циклов, поэтому
+**discrete adjoint** (по умолчанию, `use_analytical_adjoint=False`) и BPTT
+поддержаны в обоих режимах и дифференцируют ровно тот шаг, который сделан
+в прямом прогоне — включая network-wide шаг `step_network`
+(`integration_mode='network'`).
+
+**Analytical adjoint** (`use_analytical_adjoint=True`) привязан к
+split-шагу (`adjoint_derivatives()`/`parameter_jacobian()` моделей): в
+network-режиме конструктор `AdjointSolver` бросает `NotImplementedError`.
+Используйте discrete adjoint или соберите сеть с
+`integration_mode='split'`.
+
+**Ограничение stability-штрафа**: `step_network` не возвращает per-step
+`local_error`, поэтому в network-режиме `stability_loss` равен нулю и
+`StabilityPenalty` не даёт ни сигнала, ни градиента — штрафы за
+стабильность работают только в split-режиме.
+
 ---
 
 ## Пример: Полное обучение с adjoint
@@ -291,3 +311,5 @@ print(f"Final loss: {history.loss_history[-1]:.4f}")
 1. **Adjoint работает только для моделей с дискретным временем** — непрерывные методы (CTNG) не поддерживаются
 2. **Точность градиентов ~1e-7** — достаточна для обучения, но не для теоретических исследований
 3. **Медленнее BPTT** — из-за Python loop, рекомендуется для длинных последовательностей где память важнее скорости
+4. **Analytical adjoint — только split-режим** — с `integration_mode='network'` используйте discrete adjoint (или BPTT)
+5. **Stability-штрафы — только split-режим** — в network-режиме `stability_loss == 0` и `StabilityPenalty` не оценивается

@@ -28,6 +28,9 @@ IMEX-Euler (Implicit-Explicit) интегратор с аддитивным ра
 недоступны — warnings пропускаются, вычислительный путь идентичен.
 
 Синапсы в P2 остаются явными: step_synapse делегирует явному Эйлеру.
+
+Network-wide шаг (integration_mode='network') не поддерживается
+(supports_network_step=False): NetworkRNN в этом режиме бросит ValueError.
 """
 
 from typing import Dict, Tuple

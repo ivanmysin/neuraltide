@@ -29,6 +29,9 @@ on_large_block='raise' (по умолчанию) бросает ValueError; 'eul
 
 Градиенты — через развёртку шагов (BPTT/AD, tf.linalg.expm дифференцируем);
 аналитический while_loop-adjoint не поддерживается. Синапсы в P2 явные.
+
+Network-wide шаг (integration_mode='network') не поддерживается
+(supports_network_step=False): NetworkRNN в этом режиме бросит ValueError.
 """
 
 from typing import Dict, Optional, Tuple
