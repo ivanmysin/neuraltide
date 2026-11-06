@@ -142,6 +142,11 @@ class BandpassReadout(BaseReadout):
     Каналы фильтруются независимо (без смешивания). Частоты задаются в Гц,
     шаг dt — в мс.
 
+    build() вызывает scipy.signal.firwin (Python/NumPy), поэтому слой
+    обязан быть построен в eager-режиме до попадания внутрь трассируемого
+    графа: __call__ форсирует build() при первом eager-вызове, а попытка
+    трассировки непостроенного слоя даёт понятную ошибку.
+
     Args:
         f_low: нижняя частота среза (Hz).
         f_high: верхняя частота среза (Hz).
@@ -158,6 +163,20 @@ class BandpassReadout(BaseReadout):
         self.dt = dt
         self.n_taps = n_taps
 
+    def __call__(self, x: TensorType, *args, **kwargs) -> TensorType:
+        # scipy-вызов в build() не трейсуем: построение только в eager.
+        if not self.built:
+            if not tf.executing_eagerly():
+                raise RuntimeError(
+                    "BandpassReadout попал внутрь трассируемого графа до "
+                    "построения (build() не вызывался). build() использует "
+                    "scipy.signal.firwin и должен выполниться в eager-режиме: "
+                    "вызовите слой один раз снаружи tf.function (например, при "
+                    "подготовке target/predict) до компиляции обучения."
+                )
+            self.build(x.shape)
+        return super().__call__(x, *args, **kwargs)
+
     def build(self, input_shape):
         from scipy.signal import firwin
 
@@ -166,6 +185,7 @@ class BandpassReadout(BaseReadout):
         self._kernel = tf.constant(
             coeffs[:, None, None], dtype=neuraltide.config.get_dtype()
         )
+        super().build(input_shape)
 
     def call(self, x: TensorType) -> TensorType:
         kernel = cast_if_needed(self._kernel, x.dtype)

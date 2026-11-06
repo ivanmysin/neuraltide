@@ -662,14 +662,56 @@ finally:
 - tensor candidate-batch (batch>1 через NetworkRNN в одном прогоне) не
   поддержан — параллелится только «один кандидат = один прогон».
 
+## Компилируемый режим (tf.function)
+
+По умолчанию всё считается в eager TensorFlow — удобно для отладки, но
+каждая итерация оптимизатора платит Python-оверхед за построение графа
+операций. Два независимых механизма компиляции снимают большую его часть
+(оба опциональны; eager остаётся fallback):
+
+**1. Keras-путь: `NetworkRNN(jit_compile=...)` / `Trainer(jit_compile=...)`.**
+Скан симуляции и train step всегда исполняются через `tf.function` с
+закреплёнными сигнатурами (см. `core/network.py`); `jit_compile=True`
+дополнительно компилирует их через XLA. Ограничения XLA (TF 2.21, CPU):
+прямой прогон компилируется для всех встроенных интеграторов; градиент
+(train step) — для всех, кроме `AdaptiveRKIntegrator` и
+`ExponentialEulerIntegrator` (InvalidArgumentError «fixed tensor list
+size»). `run_eagerly=True` и `jit_compile=True` несовместимы (ValueError);
+`grad_method='adjoint'` с `jit_compile=True` пока не поддержан
+(NotImplementedError).
+
+**2. Optimization-путь: `CalibrationProblem(..., compiled=True)` /
+`MultiExperimentProblem(..., compiled=True)`.**
+`value_and_gradient` / `evaluate` / `residual` выполняются через
+скомпилированное ядро (`_CompiledCore`, `optimization/_compiled.py`):
+граф прогона сети + GradientTape + градиента по φ трассируется один раз
+на комбинацию (эксперимент × objective × протокол) и кэшируется; ядро
+без XLA по умолчанию. Снаружи в eager остаются: мутация модели
+(`assign` φ → θ), счётчики, numpy-сборка `Evaluation`, `simulate()` и
+`validate()`. Ключ кэша — id объектов (задача держит ссылки): view-хелперы
+(`time_slice` / `with_objective` / `with_inputs` / `with_initial_state`)
+создают новые ядра лениво; явное `initial_state` протокола — аргумент
+ядра, in-place смена отражается немедленно; мутирование objective по
+месту ядром не отслеживается.
+
+**Когда включать.** Длинные горизонты T и много итераций (L-BFGS-B,
+DE, мультистарт): compiled/jit убирают Python-оверхед за итерацию
+(замеры — `benchmarks/g0_graph_mode.py`). **Когда не включать.** Отладка
+(стеки ошибок внутри графа менее читабельны); FD/Taylor-диагностика и
+forward-чувствительности (forward-AD несовместим с предшествующими
+gradient-прогонами на одном экземпляре сети — см. ограничения ниже);
+сценарии с частой сменой objective по месту.
+
 ## Ограничения
 
-- **Eager-режим**: все методы работают в eager TensorFlow; `tf.function`
-  вокруг методов задачи не поддерживается;
+- **Eager по умолчанию**: методы задач работают в eager TensorFlow;
+  компилируемый режим (`compiled=True`) — опция, см. раздел
+  «Компилируемый режим (tf.function)» выше;
 - **batch=1**: контракт NetworkRNN; прогоны и `predictive_intervals` —
   по одному кандидату за раз;
 - **TF forward-AD против GradientTape в пределах одного NetworkRNN**:
-  `_scan_forward_states` — `@tf.function`; после gradient-прогона
+  скан — закреплённый `tf.function` (`_scan_compiled`, см.
+  `core/network.py`); после gradient-прогона
   (value_and_gradient/локальные решатели/балансировка) forward-режим
   чувствительностей (`residual_jvp`/`residual_jacobian` внутри Laplace)
   в этом экземпляре падает (`variant/int64` в while_loop). Порядок

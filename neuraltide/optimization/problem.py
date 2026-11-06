@@ -71,8 +71,11 @@ phi != None: модель явно переводится в состояние 
 сети за единицу n_forward; MultiExperimentProblem — каждый прогон
 каждого эксперимента.
 
-Ограничения: eager-режим (без tf.function вокруг методов задачи);
-batch=1 (контракт NetworkRNN); записи ParameterSpace kind 'model_var'
+Ограничения: по умолчанию eager-режим (compiled=False — прежнее
+поведение без изменений); compiled=True — value_and_gradient/evaluate/
+residual идут через скомпилированное tf.function-ядро (см. CalibrationProblem,
+этап 1b), мутация модели/счётчики/Evaluation/simulate/validate остаются
+eager; batch=1 (контракт NetworkRNN); записи ParameterSpace kind 'model_var'
 без привязанной переменной не включаются в градиент — их вклад
 тождественно нулевой. Все φ-операции задач (bounds_phi/search_box_phi,
 материализация x0, FrozenProblem) работают только с trainable-записями
@@ -92,6 +95,22 @@ import tensorflow as tf
 import neuraltide.config
 from neuraltide.core.network import NetworkOutput, NetworkRNN
 from neuraltide.core.types import TensorType, cast_if_needed
+from neuraltide.optimization._compiled import _CompiledCore
+from neuraltide.optimization._state import (
+    InitialState,
+    _TENSOR_KINDS,
+    _materialize_initial_state,
+    _phi_gradient,
+    _x0_experiment,
+)
+
+# Реэкспорты для обратной совместимости: sensitivities/shooting/robust и
+# тесты импортируют эти имена из problem (явный alias — намеренный
+# реэкспорт).
+from neuraltide.optimization._state import (
+    _X0_OUTSIDE_CONTEXT_WARNED as _X0_OUTSIDE_CONTEXT_WARNED,
+)
+from neuraltide.optimization._state import _chain_gradient as _chain_gradient
 from neuraltide.optimization.parameters import ParameterSpace
 from neuraltide.optimization.results import Evaluation
 
@@ -103,15 +122,6 @@ __all__ = [
 ]
 
 _GRAD_MODES = ("assign", "chain")
-_TENSOR_KINDS = ("initial_state", "shooting_state")
-
-InitialState = Optional[Tuple[Sequence[TensorType], Sequence[TensorType]]]
-
-# «One-time» защита от спама предупреждением о пропуске эксперимент-
-# специфичных x0-записей вне экспериментного контекста: наборы имён,
-# по которым предупреждение уже выданы (materialize вызывается на каждый
-# прогон — без дедупликации оптимизатор получил бы тысячи копий).
-_X0_OUTSIDE_CONTEXT_WARNED: set = set()
 
 
 # ---------------------------------------------------------------------------
@@ -151,216 +161,6 @@ class Experiment:
 # ---------------------------------------------------------------------------
 # Модульные хелперы (общие для Calibration/Multi/Frozen)
 # ---------------------------------------------------------------------------
-
-
-def _tensor_entries(space: ParameterSpace):
-    """
-    Trainable tensor-записи (kind 'initial_state'/'shooting_state').
-
-    Только они участвуют в материализации x0: non-trainable записи —
-    реестровые константы вне вектора φ, их слоты состояния сохраняют
-    base/network initial state.
-    """
-    return [(n, e) for n, e in space.phi_entries.items() if e.kind in _TENSOR_KINDS]
-
-
-def _x0_experiment(entry) -> Optional[str]:
-    """experiment записи x0 (None — common); locator=None трактуем как common."""
-    return entry.locator.experiment if entry.locator is not None else None
-
-
-def _materialize_initial_state(
-    network: NetworkRNN,
-    space: ParameterSpace,
-    theta: Mapping[str, tf.Tensor],
-    base_initial_state: InitialState,
-    experiment: Optional[str] = None,
-) -> Tuple[InitialState, Dict[str, tf.Tensor]]:
-    """
-    Строит начальное состояние для network.call с подставленными x0.
-
-    theta — физические значения из space.unpack (дифференцируемы по φ,
-    если построены внутри GradientTape). base_initial_state — начальное
-    состояние протокола (pop, syn) или None → сетевое по умолчанию.
-    Материализуются только trainable tensor-записи: non-trainable записи
-    пропускаются (без валидации locator), их слоты сохраняют значения
-    base/network initial state.
-
-    Подстановка двухпроходная с явным приоритетом эксперимент-специфичных
-    записей (kind 'initial_state'/'shooting_state' с
-    locator.experiment != None, см. ParameterSpace.
-    add_experiment_initial_state_entries):
-
-    * pass 1 — common-записи (locator.experiment is None) заполняют
-      свои слоты начального состояния;
-    * pass 2 — записи с locator.experiment == experiment перезаписывают
-      те же слоты (перезаписанная common-запись удаляется из x0_map —
-      её тензор больше не участвует в состоянии);
-    * записи с другим locator.experiment пропускаются.
-
-    experiment=None — внеэкспериментный контекст (CalibrationProblem,
-    shooting, sensitivities, robust): применяются только common-записи,
-    trainable exp-specific записи пропускаются с одноразовым UserWarning
-    (предупреждение выдаётся один раз на набор имён, а не на каждый
-    прогон).
-
-    Returns:
-        (initial_state, x0_map): initial_state — None, если нет ни
-        применимых записей, ни base (сеть возьмёт своё дефолтное); иначе
-        (init_pop, init_syn). x0_map: full_name → тензор, фактически
-        подставленный в состояние (источник для chain-градиента).
-    """
-    entries = _tensor_entries(space)
-    common = [(n, e) for n, e in entries if _x0_experiment(e) is None]
-    if experiment is None:
-        skipped = sorted(n for n, e in entries if _x0_experiment(e) is not None)
-        if skipped:
-            key = tuple(skipped)
-            if key not in _X0_OUTSIDE_CONTEXT_WARNED:
-                _X0_OUTSIDE_CONTEXT_WARNED.add(key)
-                warnings.warn(
-                    "Эксперимент-специфичные начальные состояния "
-                    f"{skipped} пропущены вне экспериментного контекста "
-                    "(experiment=None): они материализуются только в "
-                    "MultiExperimentProblem у эксперимента с совпадающим "
-                    "именем.",
-                    UserWarning,
-                    stacklevel=2,
-                )
-        applicable = common
-    else:
-        applicable = common + [
-            (n, e) for n, e in entries if _x0_experiment(e) == experiment
-        ]
-    if not applicable:
-        return base_initial_state, {}
-    dtype = neuraltide.config.get_dtype()
-    if base_initial_state is not None:
-        init_pop = list(base_initial_state[0])
-        init_syn = list(base_initial_state[1])
-    else:
-        pop, syn = network.get_initial_state(batch_size=1)
-        init_pop = list(pop)
-        init_syn = list(syn)
-    offsets = network.pop_state_offsets
-    x0_map: Dict[str, tf.Tensor] = {}
-    slot_owner: Dict[int, str] = {}
-    for name, entry in applicable:
-        locator = entry.locator
-        if locator is None or locator.population not in offsets:
-            raise ValueError(
-                f"CalibrationProblem: locator записи '{name}' ссылается на "
-                f"неизвестную популяцию "
-                f"'{locator.population if locator else None}'."
-            )
-        start, count = offsets[locator.population]
-        if not (0 <= locator.slot < count):
-            raise ValueError(
-                f"CalibrationProblem: locator slot {locator.slot} вне "
-                f"[0, {count}) для популяции '{locator.population}'."
-            )
-        flat = start + locator.slot
-        x0 = cast_if_needed(tf.convert_to_tensor(theta[name]), dtype)
-        x0 = tf.reshape(x0, entry.shape)
-        # Exp-запись перезаписывает слот common-записи: прежний тензор
-        # выходит из состояния — убираем его из x0_map (chain-градиент
-        # не должен получать вклад по уже не подставленному тензору).
-        prev = slot_owner.get(flat)
-        if prev is not None:
-            x0_map.pop(prev, None)
-        init_pop[flat] = x0
-        x0_map[name] = x0
-        slot_owner[flat] = name
-    return (init_pop, init_syn), x0_map
-
-
-def _chain_gradient(
-    space: ParameterSpace,
-    tape: tf.GradientTape,
-    loss_t: tf.Tensor,
-    phi_t: tf.Tensor,
-    x0_map: Mapping[str, Any],
-) -> tf.Tensor:
-    """
-    dloss/dφ = dloss/dисточник × dисточник/dφ (поэлементно × jacobian).
-
-    model_var: dloss/dθ по переменным модели × transform.jacobian;
-    tensor-записи: dloss/dx0 по подставленному тензору × transform.jacobian.
-    x0_map[name] может быть списком тензоров — по одному на эксперимент,
-    в котором подставлялась запись (MultiExperimentProblem): вклады
-    суммируются, поэтому градиент по общему x0 аккумулирует вклады всех
-    экспериментов, а эксперимент-специфичные x0-записи попадают в x0_map
-    только своего эксперимента и между экспериментами не смешиваются.
-    Записи без доступного источника дают нулевой вклад.
-    """
-    dtype = neuraltide.config.get_dtype()
-    # Смещения по trainable-записям — в согласии с ParameterSpace.unpack
-    # и длиной phi_t (non-trainable записи вне φ).
-    entries = space.phi_entries
-    sources: List[tf.Tensor] = []
-    source_names: List[str] = []
-    for name, entry in entries.items():
-        if entry.kind == "model_var":
-            if entry.variable is not None:
-                sources.append(entry.variable)
-                source_names.append(name)
-        else:
-            x0 = x0_map.get(name)
-            if x0 is None:
-                continue
-            for tensor in x0 if isinstance(x0, (list, tuple)) else [x0]:
-                sources.append(tensor)
-                source_names.append(name)
-    grads = tape.gradient(loss_t, sources) if sources else []
-    grad_by_name: Dict[str, tf.Tensor] = {}
-    for name, g in zip(source_names, grads):
-        if g is None:
-            continue
-        grad_by_name[name] = g if name not in grad_by_name else grad_by_name[name] + g
-
-    pieces = []
-    start = 0
-    for name, entry in entries.items():
-        numel = entry.numel
-        phi_piece = phi_t[start : start + numel]
-        g_src = grad_by_name.get(name)
-        if g_src is None:
-            contrib = tf.zeros([numel], dtype=dtype)
-        else:
-            jac = entry.transform.jacobian(tf.reshape(phi_piece, entry.shape))
-            contrib = tf.reshape(g_src, [-1]) * tf.reshape(jac, [-1])
-        pieces.append(contrib)
-        start += numel
-    if not pieces:
-        return tf.zeros([0], dtype=dtype)
-    return tf.concat(pieces, axis=0)
-
-
-def _phi_gradient(
-    space: ParameterSpace,
-    grad_mode: str,
-    tape: tf.GradientTape,
-    loss_t: tf.Tensor,
-    phi_t: tf.Tensor,
-    x0_map: Mapping[str, tf.Tensor],
-) -> tf.Tensor:
-    """
-    Градиент dloss/dφ в выбранном режиме.
-
-    'assign': literal-путь корректен только без model_var-записей с
-        переменными — при них градиент через variable.assign недоступен,
-        а literal вернул бы неполный градиент (только x0-часть).
-    'chain': всегда цепное вычисление.
-    """
-    has_model_vars = any(
-        entry.kind == "model_var" and entry.variable is not None
-        for entry in space.phi_entries.values()
-    )
-    if grad_mode == "assign" and not has_model_vars:
-        g = tape.gradient(loss_t, phi_t)
-        if g is not None:
-            return g
-    return _chain_gradient(space, tape, loss_t, phi_t, x0_map)
 
 
 def _bounds_phi_from_space(space: ParameterSpace) -> Tuple[np.ndarray, np.ndarray]:
@@ -508,6 +308,20 @@ class CalibrationProblem:
             документацию.
         held_out: опциональная последовательность Experiment —
             отложенные протоколы только для validate().
+        compiled: если True, value_and_gradient / evaluate / residual
+            выполняются через скомпилированное tf.function-ядро
+            (этап 1b): граф прогона+ленты+градиента трассируется один
+            раз на (objective × протокол времени/входов) и кэшируется.
+            Мутация модели (assign φ → θ), счётчики и numpy-сборка
+            Evaluation остаются снаружи в eager; simulate() и
+            validate() — eager в обоих режимах. Явное initial_state
+            протокола — аргумент ядра, материализуется снаружи при
+            каждом вызове: in-place смена problem.initial_state
+            отражается немедленно; view-хелперы
+            (time_slice/with_objective/...) по-прежнему создают новые
+            ядра лениво. Ключ кэша ядер — id объектов (задача держит
+            ссылки); мутирование objective по месту ядром не
+            отслеживается.
 
     Счётчики n_forward / n_gradient и накопленный wall_time хранятся в
     разделяемом self._counters и копируются в каждый Evaluation.
@@ -523,6 +337,7 @@ class CalibrationProblem:
         initial_state: InitialState = None,
         grad_mode: str = "assign",
         held_out: Optional[Sequence[Experiment]] = None,
+        compiled: bool = False,
     ):
         if grad_mode not in _GRAD_MODES:
             raise ValueError(
@@ -543,6 +358,11 @@ class CalibrationProblem:
         self.initial_state = initial_state
         self.grad_mode = grad_mode
         self.held_out: List[Experiment] = list(held_out or [])
+        self.compiled = bool(compiled)
+        # Кэш compiled-ядер: ключ (experiment, id(objective), id(t),
+        # id(inputs)) — см. _get_compiled_core. Начальное состояние
+        # протокола — аргумент ядра, материализуется при каждом вызове.
+        self._core_cache: Dict[Any, _CompiledCore] = {}
 
         self._counters: Dict[str, Any] = {
             "n_forward": 0,
@@ -651,6 +471,82 @@ class CalibrationProblem:
         return phi_t, output
 
     # ------------------------------------------------------------------
+    # compiled-ядро (compiled=True, см. __init__)
+    # ------------------------------------------------------------------
+    def _materialized_base_init(self) -> Tuple[Tuple, Tuple]:
+        """Протокольное начальное состояние полными (pop, syn) кортежами.
+
+        Без кэша (eager-конструирование тензоров, дёшево): пересоздаётся
+        при каждом вызове, поэтому in-place смена problem.initial_state
+        отражается немедленно. x0-записи ParameterSpace подставляются
+        поверх внутри ядра — здесь только база.
+        """
+        if self.initial_state is None:
+            pop, syn = self.network.get_initial_state(batch_size=1)
+            return (tuple(pop), tuple(syn))
+        return (tuple(self.initial_state[0]), tuple(self.initial_state[1]))
+
+    def _get_compiled_core(
+        self,
+        *,
+        objective,
+        t_sequence,
+        inputs,
+        experiment: Optional[str] = None,
+    ) -> _CompiledCore:
+        """Ленивое (построение при первом вызове) получение ядра из кэша.
+
+        Ключ — id объектов (задача держит ссылки на objective/протокол,
+        поэтому id стабилен); view-хелперы заменяют объекты → новый ключ
+        → новое ядро. Начальное состояние протокола НЕ входит в ключ —
+        оно аргумент ядра и материализуется снаружи при каждом вызове.
+        Мутирование objective по месту ядром не отслеживается.
+        """
+        key = (experiment, id(objective), id(t_sequence), id(inputs))
+        core = self._core_cache.get(key)
+        if core is None:
+            core = _CompiledCore(
+                self.network,
+                self.parameter_space,
+                t_sequence,
+                inputs,
+                objective,
+                experiment_name=experiment,
+                grad_mode=self.grad_mode,
+            )
+            core.build()
+            self._core_cache[key] = core
+        return core
+
+    def _build_compiled_evaluation(
+        self,
+        loss_t: tf.Tensor,
+        comps: Dict[str, tf.Tensor],
+        residual_t: tf.Tensor,
+        grad: Optional[tf.Tensor],
+        t0: float,
+    ) -> Evaluation:
+        """numpy-сборка Evaluation из тензорных выходов ядра (eager)."""
+        has_residual = getattr(self.objective, "residual", None) is not None
+        components = {k: float(v) for k, v in comps.items()}
+        if has_residual:
+            residuals = np.asarray(residual_t)
+            status = "ok"
+        else:
+            residuals = np.zeros(0)
+            status = "no_residual_interface"
+        return _make_evaluation(
+            loss=float(loss_t),
+            components=components,
+            residuals=residuals,
+            grad=grad,
+            status=status,
+            counters=self._counters,
+            elapsed=time.perf_counter() - t0,
+            dt=float(self.network._graph.dt),
+        )
+
+    # ------------------------------------------------------------------
     # Публичные операции
     # ------------------------------------------------------------------
     def simulate(self, phi: Optional[Any] = None) -> NetworkOutput:
@@ -668,6 +564,18 @@ class CalibrationProblem:
         """Скалярная потеря, компоненты и невязки (без градиента)."""
         self._require_objective()
         t0 = time.perf_counter()
+        if self.compiled:
+            phi_t = self._prepare(phi)
+            base_init = self._materialized_base_init()
+            core = self._get_compiled_core(
+                objective=self.objective,
+                t_sequence=self.t_sequence,
+                inputs=self.inputs,
+            )
+            loss_t, comps, residual_t = core.eval_core(phi_t, *base_init)
+            return self._build_compiled_evaluation(
+                loss_t, comps, residual_t, grad=None, t0=t0
+            )
         _, output = self._forward(phi)
         eval_result = self._build_evaluation(output, grad=None, t0=t0)
         return eval_result
@@ -686,6 +594,20 @@ class CalibrationProblem:
         """
         self._require_objective()
         t0 = time.perf_counter()
+        if self.compiled:
+            phi_t = self._prepare(phi)
+            base_init = self._materialized_base_init()
+            core = self._get_compiled_core(
+                objective=self.objective,
+                t_sequence=self.t_sequence,
+                inputs=self.inputs,
+            )
+            loss_t, grad_t, comps, residual_t = core.grad_core(phi_t, *base_init)
+            self._counters["n_gradient"] += 1
+            eval_result = self._build_compiled_evaluation(
+                loss_t, comps, residual_t, grad=grad_t, t0=t0
+            )
+            return eval_result, grad_t
         phi_t = self._prepare(phi)
         # persistent: assign-режим сначала пробует literal-путь по phi,
         # и при None переиспользует ту же ленту для цепного вычисления.
@@ -729,6 +651,16 @@ class CalibrationProblem:
                 "используйте ResidualLoss; иначе ограничьтесь evaluate / "
                 "value_and_gradient."
             )
+        if self.compiled:
+            phi_t = self._prepare(phi)
+            base_init = self._materialized_base_init()
+            core = self._get_compiled_core(
+                objective=self.objective,
+                t_sequence=self.t_sequence,
+                inputs=self.inputs,
+            )
+            _, _, residual_t = core.eval_core(phi_t, *base_init)
+            return np.asarray(residual_t)
         _, output = self._forward(phi)
         r = residual_fn(output)
         return np.asarray(r)
@@ -786,6 +718,7 @@ class CalibrationProblem:
             initial_state=self.initial_state,
             grad_mode=self.grad_mode,
             held_out=self.held_out,
+            compiled=self.compiled,
         )
         kwargs.update(overrides)
         view = CalibrationProblem(**kwargs)
@@ -922,6 +855,14 @@ class MultiExperimentProblem:
             дублироваться внутри held_out и пересекаться с обучающими
             (иначе ValueError); objective у held-out эксперимента
             обязателен (иначе validate поднимет ValueError).
+        compiled: если True, value_and_gradient / evaluate / residual
+            выполняются через скомпилированное ядро (см.
+            CalibrationProblem): отдельное ядро на каждый обучающий
+            эксперимент (ключ — имя эксперимента), суммы потерь/градиентов
+            — eager-сложение тензоров снаружи (d/dφ Σ = Σ d/dφ);
+            начальное состояние эксперимента — аргумент ядра
+            (in-place смена exp.initial_state отражается немедленно).
+            simulate() и validate() — eager в обоих режимах.
     """
 
     def __init__(
@@ -931,6 +872,7 @@ class MultiExperimentProblem:
         experiments: Sequence[Experiment],
         grad_mode: str = "assign",
         held_out: Optional[Sequence[Experiment]] = None,
+        compiled: bool = False,
     ):
         if grad_mode not in _GRAD_MODES:
             raise ValueError(
@@ -1002,6 +944,42 @@ class MultiExperimentProblem:
             "n_gradient": 0,
             "wall_time": 0.0,
         }
+        self.compiled = bool(compiled)
+        # Кэш compiled-ядер: ключ (experiment_name, id(objective), id(t),
+        # id(inputs)) — та же семантика, что у
+        # CalibrationProblem._get_compiled_core. Начальное состояние
+        # эксперимента — аргумент ядра, материализуется при каждом вызове.
+        self._core_cache: Dict[Any, _CompiledCore] = {}
+
+    def _exp_base_init(self, exp: Experiment) -> Tuple[Tuple, Tuple]:
+        """Начальное состояние протокола эксперимента полными кортежами.
+
+        Без кэша: пересоздаётся при каждом вызове, поэтому in-place смена
+        exp.initial_state отражается немедленно.
+        """
+        if exp.initial_state is None:
+            pop, syn = self.network.get_initial_state(batch_size=1)
+            return (tuple(pop), tuple(syn))
+        return (tuple(exp.initial_state[0]), tuple(exp.initial_state[1]))
+
+    def _get_compiled_core(self, exp: Experiment) -> _CompiledCore:
+        """Ленивое получение ядра эксперимента из кэша."""
+
+        key = (exp.name, id(exp.objective), id(exp.t_sequence), id(exp.inputs))
+        core = self._core_cache.get(key)
+        if core is None:
+            core = _CompiledCore(
+                self.network,
+                self.parameter_space,
+                exp.t_sequence,
+                exp.inputs,
+                exp.objective,
+                experiment_name=exp.name,
+                grad_mode=self.grad_mode,
+            )
+            core.build()
+            self._core_cache[key] = core
+        return core
 
     # ------------------------------------------------------------------
     # Счётчики
@@ -1160,6 +1138,40 @@ class MultiExperimentProblem:
         """Суммарная потеря обучающих экспериментов (без градиента)."""
         t0 = time.perf_counter()
         phi_t = self._prepare(phi)
+        if self.compiled:
+            total: Optional[tf.Tensor] = None
+            components: Dict[str, float] = {}
+            residuals: List[np.ndarray] = []
+            has_residual = True
+            for exp in self.experiments:
+                core = self._get_compiled_core(exp)
+                loss_e, comps_e, residual_e = core.eval_core(
+                    phi_t, *self._exp_base_init(exp)
+                )
+                total = loss_e if total is None else total + loss_e
+                components.update(
+                    {f"{exp.name}/{k}": float(v) for k, v in comps_e.items()}
+                )
+                if getattr(exp.objective, "residual", None) is None:
+                    has_residual = False
+                else:
+                    residuals.append(np.asarray(residual_e))
+            if not has_residual:
+                residuals_np, status = np.zeros(0), "no_residual_interface"
+            elif not residuals:
+                residuals_np, status = np.zeros(0), "ok"
+            else:
+                residuals_np, status = np.concatenate(residuals), "ok"
+            return _make_evaluation(
+                loss=float(total),
+                components=components,
+                residuals=residuals_np,
+                grad=None,
+                status=status,
+                counters=self._counters,
+                elapsed=time.perf_counter() - t0,
+                dt=float(self.network._graph.dt),
+            )
         theta = self.parameter_space.unpack(phi_t)
         total: Optional[tf.Tensor] = None
         outputs: List[NetworkOutput] = []
@@ -1186,11 +1198,54 @@ class MultiExperimentProblem:
         """
         Суммарная потеря и градиент по φ (все прогоны в одной ленте).
 
+        compiled=True: отдельное ядро на эксперимент, суммы потерь и
+        градиентов — eager-сложение тензоров снаружи (d/dφ Σ = Σ d/dφ).
+
         Returns:
             (Evaluation, grad — tf.Tensor формы [size]).
         """
         t0 = time.perf_counter()
         phi_t = self._prepare(phi)
+        if self.compiled:
+            losses: List[tf.Tensor] = []
+            grads: List[tf.Tensor] = []
+            components: Dict[str, float] = {}
+            residuals: List[np.ndarray] = []
+            has_residual = True
+            for exp in self.experiments:
+                core = self._get_compiled_core(exp)
+                loss_e, grad_e, comps_e, residual_e = core.grad_core(
+                    phi_t, *self._exp_base_init(exp)
+                )
+                losses.append(loss_e)
+                grads.append(grad_e)
+                components.update(
+                    {f"{exp.name}/{k}": float(v) for k, v in comps_e.items()}
+                )
+                if getattr(exp.objective, "residual", None) is None:
+                    has_residual = False
+                else:
+                    residuals.append(np.asarray(residual_e))
+            loss_t = tf.add_n(losses)
+            grad_t = tf.add_n(grads)
+            self._counters["n_gradient"] += 1
+            if not has_residual:
+                residuals_np, status = np.zeros(0), "no_residual_interface"
+            elif not residuals:
+                residuals_np, status = np.zeros(0), "ok"
+            else:
+                residuals_np, status = np.concatenate(residuals), "ok"
+            eval_result = _make_evaluation(
+                loss=float(loss_t),
+                components=components,
+                residuals=residuals_np,
+                grad=grad_t,
+                status=status,
+                counters=self._counters,
+                elapsed=time.perf_counter() - t0,
+                dt=float(self.network._graph.dt),
+            )
+            return eval_result, grad_t
         with tf.GradientTape(persistent=True) as tape:
             tape.watch(phi_t)
             theta = self.parameter_space.unpack(phi_t)
@@ -1228,6 +1283,21 @@ class MultiExperimentProblem:
         """Конкатенированные невязки обучающих экспериментов (numpy)."""
         t0 = time.perf_counter()
         phi_t = self._prepare(phi)
+        if self.compiled:
+            for exp in self.experiments:
+                if getattr(exp.objective, "residual", None) is None:
+                    raise TypeError(
+                        "MultiExperimentProblem: objective "
+                        f"'{type(exp.objective).__name__}' эксперимента "
+                        f"'{exp.name}' не предоставляет residual(predictions)."
+                    )
+            residuals: List[np.ndarray] = []
+            for exp in self.experiments:
+                core = self._get_compiled_core(exp)
+                _, _, residual_e = core.eval_core(phi_t, *self._exp_base_init(exp))
+                residuals.append(np.asarray(residual_e))
+            self._counters["wall_time"] += time.perf_counter() - t0
+            return np.concatenate(residuals)
         theta = self.parameter_space.unpack(phi_t)
         residuals: List[np.ndarray] = []
         for exp in self.experiments:

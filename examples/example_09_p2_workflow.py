@@ -278,10 +278,11 @@ problem.evaluate(phi_map)  # вернуть модель в MAP-точку по�
 # --- 4. Лаплас-аппроксимация постериора в MAP-точке ---
 # Forward-режим чувствительностей (residual_jacobian внутри laplace) в
 # пределах одного экземпляра NetworkRNN несовместим с предшествующими
-# gradient-прогонами: @tf.function _scan_forward_states кэширует граф, и
-# TF forward-AD падает после GradientTape (см. «Ограничения этапа P2» в
-# docs/optimization.md). Поэтому UQ-блок запускаем на свежем экземпляре
-# задачи из той же фабрики (те же theta*, протокол и цели).
+# gradient-прогонами: закреплённый tf.function скана (_scan_compiled)
+# кэширует граф, и TF forward-AD падает после GradientTape
+# (см. «Ограничения этапа P2» в docs/optimization.md). Поэтому UQ-блок
+# запускаем на свежем экземпляре задачи из той же фабрики (те же theta*,
+# протокол и цели).
 problem_uq = build_problem()
 lap = laplace_approximation(problem_uq, phi_map, method="gn")
 print("\n[laplace_approximation]")

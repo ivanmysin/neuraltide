@@ -174,6 +174,7 @@ NetworkRNN(
     stability_penalty_weight: float = 0.0,
     *,
     integration_mode: str = "split",
+    jit_compile: bool = False,
     **kwargs,
 )
 ```
@@ -183,6 +184,9 @@ NetworkRNN(
   интегратора по связанной сети через `step_network` (требует
   `integrator.supports_network_step=True`, иначе `ValueError`).
   См. `docs/integrators.md` («Network-wide интегрирование»).
+- `jit_compile`: если `True` — скан сети компилируется через XLA
+  (`tf.function(jit_compile=True)`). Проверено на TF 2.21 (CPU):
+  прямой прогон компилируется для всех встроенных интеграторов.
 
 **Методы**:
 - `call(t_sequence, inputs=None, initial_state=None) -> NetworkOutput`
@@ -191,6 +195,7 @@ NetworkRNN(
 **Свойства**:
 - `trainable_variables -> List[tf.Variable]`
 - `integration_mode -> str` — режим интегрирования ('split' | 'network')
+- `jit_compile -> bool` — компилируется ли скан через XLA
 
 ### NetworkOutput
 
@@ -800,13 +805,26 @@ class Trainer:
 **Конструктор**:
 ```python
 Trainer(
-    model: tf.keras.Model,
-    loss_fn: callable,
+    network: NetworkRNN,
+    loss_fn: CompositeLoss,
     optimizer: tf.keras.optimizers.Optimizer,
-    callbacks: Optional[List] = None,
-    grad_method: str = "bptt"
+    grad_method: str = "bptt",
+    grad_clip_norm: float = 0.0,
+    run_eagerly: bool = False,
+    jit_compile: bool = False,
 )
 ```
+
+- `run_eagerly=True` и `jit_compile=True` несовместимы (`ValueError`).
+- `jit_compile=True` с `grad_method='adjoint'` пока не поддержан
+  (`NotImplementedError`): дискретный adjoint внутри скомпилированного
+  `tf.function` не проверен.
+- `jit_compile=True` оборачивает train step в `tf.function(
+  jit_compile=True)` (XLA). Градиент под XLA не компилируется для
+  интеграторов `AdaptiveRKIntegrator` и `ExponentialEulerIntegrator`
+  (InvalidArgumentError «fixed tensor list size») — прямой прогон
+  (`network(...)`, в т.ч. с `NetworkRNN(jit_compile=True)`) под XLA
+  работает для всех встроенных интеграторов.
 
 **Методы**:
 - `fit(t_sequence, inputs=None, epochs, verbose=1) -> History`
@@ -1051,8 +1069,18 @@ CalibrationProblem(
     objective: Optional[Callable] = None,   # (predictions, network) -> scalar
     initial_state: Optional[tuple] = None,  # (pop, syn)
     grad_mode: str = "assign",              # "assign" | "chain"
+    held_out: Optional[Sequence[Experiment]] = None,
+    compiled: bool = False,
 )
 ```
+
+- `compiled=True`: `value_and_gradient` / `evaluate` / `residual`
+  выполняются через скомпилированное tf.function-ядро (одна трассировка
+  на objective × протокол времени/входов, кэш по id объектов; view-хелперы
+  создают новые ядра лениво). Мутация модели (assign φ → θ), счётчики и
+  numpy-сборка Evaluation остаются снаружи в eager; явное initial_state
+  протокола — аргумент ядра (in-place смена отражается немедленно);
+  `simulate()` и `validate()` — eager в обоих режимах.
 
 **Методы**:
 - `simulate(phi=None) -> NetworkOutput` — прямой прогон сети
@@ -1185,7 +1213,10 @@ class MultiExperimentProblem:
     # одна сеть + один ParameterSpace; сумма потерь в одной GradientTape,
     # residual — конкатенация, компоненты с префиксом '{name}/'
     def __init__(self, network, parameter_space, experiments,
-                 grad_mode="assign", held_out=None): ...
+                 grad_mode="assign", held_out=None, compiled=False): ...
+    # compiled=True: отдельное скомпилированное ядро на обучающий
+    # эксперимент (см. CalibrationProblem), суммы потерь/градиентов —
+    # eager-сложение снаружи; simulate/validate — eager в обоих режимах
     # duck parity с CalibrationProblem: size/pack/unpack/bounds_phi/
     # evaluate/value_and_gradient/residual/simulate/validate/counters
     # начальные состояния: общие 'x0/<pop>/<slot>' — во всех экспериментах;

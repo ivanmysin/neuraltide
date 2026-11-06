@@ -43,6 +43,14 @@ class Trainer:
         grad_method: метод вычисления градиентов: "bptt" (по умолчанию) или "adjoint".
         grad_clip_norm: максимальная норма градиента (0.0 — без клиппинга).
         run_eagerly: отключить tf.function для отладки.
+        jit_compile: компилировать train step через XLA
+            (tf.function(jit_compile=True) вокруг _compute_and_apply_grads).
+            Несовместим с run_eagerly=True (ValueError) и пока не поддержан
+            при grad_method='adjoint' (NotImplementedError: дискретный
+            adjoint внутри скомпилированного tf.function не проверен).
+            Градиент под XLA не компилируется для интеграторов
+            AdaptiveRK/ExponentialEuler — ошибка при первом train_step
+            (см. ограничения NetworkRNN.jit_compile).
     """
 
     def __init__(
@@ -53,13 +61,27 @@ class Trainer:
         grad_method: Literal["bptt", "adjoint"] = "bptt",
         grad_clip_norm: float = 0.0,
         run_eagerly: bool = False,
+        jit_compile: bool = False,
     ):
+        if run_eagerly and jit_compile:
+            raise ValueError(
+                "run_eagerly=True и jit_compile=True несовместимы: "
+                "eager-режим отключает компиляцию train step."
+            )
+        if jit_compile and grad_method == "adjoint":
+            raise NotImplementedError(
+                "jit_compile=True с grad_method='adjoint' пока не поддержан: "
+                "дискретный adjoint внутри скомпилированного tf.function "
+                "не проверен. Используйте jit_compile=False "
+                "или grad_method='bptt'."
+            )
         self.network = network
         self.loss_fn = loss_fn
         self.optimizer = optimizer
         self.grad_method = grad_method
         self.grad_clip_norm = grad_clip_norm
         self.run_eagerly = run_eagerly
+        self.jit_compile = jit_compile
         self._adjoint_solver = None
 
         if grad_method == "adjoint" and AdjointSolver is None:
@@ -69,7 +91,9 @@ class Trainer:
             None
         )
         if grad_method != "adjoint" and not run_eagerly:
-            self._compiled_train_step = tf.function(self._compute_and_apply_grads)
+            self._compiled_train_step = tf.function(
+                self._compute_and_apply_grads, jit_compile=jit_compile
+            )
 
     @staticmethod
     def _extract_targets(loss_fn) -> Dict[str, TensorType]:

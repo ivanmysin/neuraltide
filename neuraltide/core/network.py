@@ -579,6 +579,24 @@ class NetworkRNN(tf.keras.layers.Layer):
             pop_states, syn_states, graph.dt) — требует интегратор с
             supports_network_step=True. Токи и производные вычисляются
             по состояниям на начало шага.
+
+    Графовое ядро скана закреплено сигнатурами: self._scan_compiled
+    (tf.function с input_signature) строится в _build() и не
+    ретрейсится при смене длины T. Публичный call() — eager-обёртка:
+    нормализует ранг t_sequence, материализует inputs=None и
+    initial_state=None до входа в скомпилированное ядро. Batch=1 в
+    сигнатуре зафиксирован статически (батчирование — отдельный этап).
+
+    Args:
+        jit_compile: если True, скан компилируется через XLA
+            (tf.function(jit_compile=True)). По умолчанию выключено.
+            Проверено на TF 2.21 (CPU): прямой прогон компилируется для
+            всех встроенных интеграторов; train step с градиентами
+            (Trainer(jit_compile=True)) компилируется для всех, КРОМЕ
+            AdaptiveRKIntegrator (вложенный while_loop адаптивного шага)
+            и ExponentialEulerIntegrator (tf.linalg.expm): их градиент
+            не компилируется под XLA и падает при первом вызове с
+            InvalidArgumentError о tensor list size.
     """
 
     def __init__(
@@ -588,6 +606,7 @@ class NetworkRNN(tf.keras.layers.Layer):
         stability_penalty_weight: float = 0.0,
         *,
         integration_mode: str = "split",
+        jit_compile: bool = False,
         **kwargs,
     ):
         super().__init__(**kwargs)
@@ -613,6 +632,7 @@ class NetworkRNN(tf.keras.layers.Layer):
         self._integrator = integrator
         self._stability_penalty_weight = stability_penalty_weight
         self._integration_mode = integration_mode
+        self._jit_compile = bool(jit_compile)
 
         self._build()
 
@@ -635,6 +655,9 @@ class NetworkRNN(tf.keras.layers.Layer):
             entry = self._graph._synapses[name]
             self._syn_state_offsets[name] = len(self._init_syn_states)
             self._init_syn_states.extend(entry.model.get_initial_state(batch_size))
+        self._syn_state_shapes: List[tf.TensorShape] = [
+            tf.TensorShape(t.shape) for t in self._init_syn_states
+        ]
 
         self._total_dynamic_units = sum(
             pop.n_units for name, pop in self._graph._populations.items()
@@ -648,6 +671,32 @@ class NetworkRNN(tf.keras.layers.Layer):
         )
 
         self._cached_trainable_vars = self._collect_trainable_vars()
+        self._scan_compiled = self._make_scan_function()
+
+    def _make_scan_function(self):
+        """Строит скомпилированное графовое ядро скана.
+
+        input_signature фиксирует аргументы: смена длины T, чередование
+        initial_state=None/тензоры и ранга t_sequence больше не порождают
+        ретрейсинг (нормализация выполняется в eager-обёртке call()).
+        dtype и batch=1 фиксируются на момент построения сети: при смене
+        global dtype нужен новый экземпляр сети (существующий контракт).
+        """
+        dtype = neuraltide.config.get_dtype()
+        self._scan_dtype = dtype
+        # Порядок элементов — как у параметров _scan_forward_states
+        # (t_sequence, init_pop, init_syn, inputs).
+        input_signature = [
+            tf.TensorSpec([1, None, 1], dtype=dtype),
+            tuple(tf.TensorSpec(s, dtype=dtype) for s in self._pop_state_shapes),
+            tuple(tf.TensorSpec(s, dtype=dtype) for s in self._syn_state_shapes),
+            tf.TensorSpec([1, None, self._graph.total_input_units], dtype=dtype),
+        ]
+        return tf.function(
+            self._scan_forward_impl,
+            input_signature=input_signature,
+            jit_compile=self._jit_compile,
+        )
 
     def _collect_trainable_vars(self) -> List[tf.Variable]:
         vars_ = list(super().trainable_variables)
@@ -657,44 +706,63 @@ class NetworkRNN(tf.keras.layers.Layer):
             vars_.extend(entry.model.trainable_variables)
         return vars_
 
-    def _scan_forward(
-        self,
-        t_sequence: TensorType,
-        inputs: TensorType,
-        init_pop: Tuple[TensorType, ...],
-        init_syn: Tuple[TensorType, ...],
-    ) -> Tuple[Dict[str, TensorType], TensorType, StateList, StateList]:
-        """Сканирует временну́ю ось (обёртка над _scan_forward_states)."""
-        all_rates, stability_loss, final_pop, final_syn, _, _ = (
-            self._scan_forward_states(t_sequence, init_pop, init_syn, inputs=inputs)
-        )
-        return all_rates, stability_loss, list(final_pop), list(final_syn)
-
-    @tf.function
     def _scan_forward_states(
         self,
         t_sequence: TensorType,
         init_pop: Tuple[TensorType, ...],
         init_syn: Tuple[TensorType, ...],
-        *,
         inputs: Optional[TensorType] = None,
     ) -> Tuple[
         Dict[str, TensorType],
         TensorType,
         Tuple[TensorType, ...],
         Tuple[TensorType, ...],
-        List[TensorType],
-        List[TensorType],
+        Tuple[TensorType, ...],
+        Tuple[TensorType, ...],
     ]:
-        """Same as _scan_forward but also returns stacked state tensors."""
+        """Скан с возвратом stacked-тензоров состояний.
+
+        Единая точка входа в скан для прямых вызовов (в т.ч.
+        AdjointSolver.forward_pass): делегирует в _scan_compiled, поэтому
+        значения совпадают с network(...) побитово. Чисто eager-исполнение
+        тела скана (для сверок и отладки) — _scan_forward_impl.
+
+        Внутренний контракт: входы должны быть нормализованы публичным
+        call — t формы [1, T, 1] в dtype сети; inputs либо None (==
+        нулевая ширина), либо тензор точной ширины; чужой dtype теперь
+        даёт TypeError на биндинге сигнатуры.
+        """
+        if inputs is None:
+            inputs = tf.zeros(
+                [tf.shape(t_sequence)[0], tf.shape(t_sequence)[1], 0],
+                dtype=self._scan_dtype,
+            )
+        return self._scan_compiled(t_sequence, init_pop, init_syn, inputs)
+
+    def _scan_forward_impl(
+        self,
+        t_sequence: TensorType,
+        init_pop: Tuple[TensorType, ...],
+        init_syn: Tuple[TensorType, ...],
+        inputs: TensorType,
+    ) -> Tuple[
+        Dict[str, TensorType],
+        TensorType,
+        Tuple[TensorType, ...],
+        Tuple[TensorType, ...],
+        Tuple[TensorType, ...],
+        Tuple[TensorType, ...],
+    ]:
+        """Тело скана (tf.while_loop + TensorArray). Трассируется внутри
+        self._scan_compiled (см. _make_scan_function); при прямом вызове
+        исполняется в eager-режиме. inputs здесь всегда материализованный
+        тензор [batch, T, total_input_units] (нулевой ширины при отсутствии
+        объявленных входов) — ветвления по None нет, ширина валидируется
+        сигнатурой.
+        """
         dtype = neuraltide.config.get_dtype()
         T = tf.shape(t_sequence)[1]
         elems = tf.transpose(t_sequence, [1, 0, 2])
-
-        if inputs is None:
-            inputs = tf.zeros(
-                [tf.shape(t_sequence)[0], tf.shape(t_sequence)[1], 0], dtype=dtype
-            )
 
         # Pre-transpose inputs: [batch, T, total] -> [T, batch, total]
         inputs_T = tf.transpose(inputs, [1, 0, 2])
@@ -778,11 +846,16 @@ class NetworkRNN(tf.keras.layers.Layer):
             tf.TensorShape(None),
         )
 
+        # maximum_iterations=T нужен XLA-градиенту: обратный проход while_loop
+        # с TensorArray иначе не компилируется (требуется фиксированный
+        # размер tensor list). На семантику не влияет: _cond всё равно
+        # останавливается на i == T.
         (*_, final_pop, final_syn, _, pop_arrs, syn_arrs, stab_arr) = tf.while_loop(
             _cond,
             _body,
             loop_vars,
             parallel_iterations=1,
+            maximum_iterations=T,
             shape_invariants=shape_inv,
         )
 
@@ -814,39 +887,71 @@ class NetworkRNN(tf.keras.layers.Layer):
             all_syn_stacked,
         )
 
-    @tf.function
     def call(
         self,
         t_sequence: TensorType,
         inputs: Optional[TensorType] = None,
         initial_state: Optional[Tuple[StateList, StateList]] = None,
+        training: Optional[bool] = None,
     ) -> NetworkOutput:
         """
         Симулирует сеть на протяжении временно́й последовательности.
+
+        Eager-обёртка над скомпилированным графовым ядром (self._scan_compiled
+        с закреплёнными input_signature): здесь нормализуются ранги и
+        материализуются None-аргументы, поэтому смена длины T, чередование
+        initial_state=None/заданным состоянием и ранг 2 vs 3 у t_sequence
+        не вызывают ретрейсинга. При вызове изнутри tf.function эта
+        нормализация трассируется как обычные ops внешнего графа.
 
         Args:
             t_sequence: tf.Tensor shape [batch, T, 1] или [batch, T]
                 Временная последовательность в мс.
             inputs: tf.Tensor shape [batch, T, total_input_units]
                 Предвычисленные частоты разрядов внешних входов,
-                сложенные через pack_inputs().
+                сложенные через pack_inputs(). None допустим только при
+                отсутствии объявленных входов (материализуется тензор
+                нулевой ширины).
             initial_state: Optional[Tuple[pop_states, syn_states]]
-                Начальное состояние. Если None, используется нулевое.
+                Начальное состояние. Если None, используется начальное
+                состояние популяций/синапсов сети.
+            training: игнорируется (симуляция не зависит от фазы обучения).
 
         Returns:
             NetworkOutput с firing_rates, final_state и stability_loss.
         """
         if t_sequence.shape.rank == 2:
             t_sequence = t_sequence[:, :, tf.newaxis]
+        if t_sequence.dtype != self._scan_dtype:
+            # До закрепления сигнатур чужой dtype у t_sequence проходил
+            # незамеченным (t не участвует в шаге скана); сохраняем
+            # совместимость явным приведением к dtype сети.
+            t_sequence = tf.cast(t_sequence, self._scan_dtype)
 
-        # Validate inputs
-        if self._graph.total_input_units > 0:
-            if inputs is None:
+        # Контракт batch=1 проверяем статически до биндинга сигнатуры
+        # (этап 2 расширит сигнатуры до произвольного batch).
+        if t_sequence.shape[0] is not None and t_sequence.shape[0] != 1:
+            raise ValueError(
+                f"NetworkRNN supports batch=1 only (got t_sequence batch "
+                f"{t_sequence.shape[0]}); multi-batch is a separate stage."
+            )
+        if inputs is not None and inputs.shape[0] is not None and inputs.shape[0] != 1:
+            raise ValueError(
+                f"NetworkRNN supports batch=1 only (got inputs batch "
+                f"{inputs.shape[0]}); multi-batch is a separate stage."
+            )
+
+        batch = tf.shape(t_sequence)[0]
+        T = tf.shape(t_sequence)[1]
+        if inputs is None:
+            if self._graph.total_input_units > 0:
                 raise ValueError(
                     f"Network has {len(self._graph._external_inputs)} "
                     f"declared inputs ({self._graph._input_names}) "
                     f"but no inputs provided."
                 )
+            inputs = tf.zeros([batch, T, 0], dtype=self._scan_dtype)
+        else:
             expected_last = self._graph.total_input_units
             if inputs.shape[-1] != expected_last:
                 raise ValueError(
@@ -854,21 +959,27 @@ class NetworkRNN(tf.keras.layers.Layer):
                     f"expected {expected_last} "
                     f"(total_input_units from declare_input calls)"
                 )
-        else:
-            if inputs is None:
-                inputs = tf.zeros(
-                    [tf.shape(t_sequence)[0], tf.shape(t_sequence)[1], 0],
-                    dtype=neuraltide.config.get_dtype(),
-                )
 
-        if initial_state is not None:
+        if initial_state is None:
+            init_pop = tuple(self._init_pop_states)
+            init_syn = tuple(self._init_syn_states)
+        else:
             init_pop, init_syn = initial_state
-        else:
-            init_pop = list(self._init_pop_states)
-            init_syn = list(self._init_syn_states)
+            if len(init_pop) != self._pop_state_count:
+                raise ValueError(
+                    f"initial_state[0] has {len(init_pop)} population state "
+                    f"tensors, expected {self._pop_state_count}."
+                )
+            if len(init_syn) != self._syn_state_count:
+                raise ValueError(
+                    f"initial_state[1] has {len(init_syn)} synapse state "
+                    f"tensors, expected {self._syn_state_count}."
+                )
+            init_pop = tuple(init_pop)
+            init_syn = tuple(init_syn)
 
-        all_rates, stability_loss, final_pop, final_syn = self._scan_forward(
-            t_sequence, inputs, tuple(init_pop), tuple(init_syn)
+        all_rates, stability_loss, final_pop, final_syn, _, _ = self._scan_compiled(
+            t_sequence, init_pop, init_syn, inputs
         )
 
         return NetworkOutput(
@@ -885,6 +996,11 @@ class NetworkRNN(tf.keras.layers.Layer):
         step_network, требует supports_network_step=True у интегратора).
         """
         return self._integration_mode
+
+    @property
+    def jit_compile(self) -> bool:
+        """True, если скан сети компилируется через XLA (jit_compile=True)."""
+        return self._jit_compile
 
     @property
     def pop_state_offsets(self) -> Dict[str, Tuple[int, int]]:
