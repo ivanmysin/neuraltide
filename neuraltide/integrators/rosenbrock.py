@@ -90,14 +90,33 @@ class RosenbrockIntegrator(BaseIntegrator):
         state: StateList,
         total_synaptic_input: Dict[str, TensorType],
     ) -> Tuple[StateList, TensorType]:
+        # Пошаговый якобиан строится per-unit ([n_units, d, d]) — батч-ось
+        # должна быть 1. Проверка через assert_equal (а не статическую
+        # форму): внутри графа скана батч-оси динамические, статическая
+        # проверка shape[0] их пропускала бы. Для batch>1 используйте
+        # Euler/Heun/RK4 (split) или integration_mode='network'
+        # (step_network — батч-агностичен).
+        for s in state:
+            tf.debugging.assert_equal(
+                tf.shape(s)[0],
+                1,
+                message=(
+                    "RosenbrockIntegrator.step supports batch=1 only "
+                    "(population jacobian is per-unit); got state batch "
+                    "!= 1. Use Euler/Heun/RK4 or integration_mode="
+                    "'network' for batch > 1."
+                ),
+            )
         dtype = neuraltide.config.get_dtype()
         dt = float(population.dt)
         h = dt / self.n_substeps
         h_t = tf.constant(h, dtype=dtype)
 
-        n = int(state[0].shape[1])
         d = len(state)
-        eye = tf.eye(d, batch_shape=[n], dtype=dtype)
+        # Динамическая батч-ось: при статическом [1, d, d] solve вставил
+        # бы BroadcastTo с неизвестной формой (градиент под XLA падает).
+        batch = tf.shape(state[0])[0]
+        eye = tf.eye(d, batch_shape=[batch], dtype=dtype)
 
         y = state
         err_acc = tf.zeros([], dtype=dtype)
@@ -182,16 +201,18 @@ class RosenbrockIntegrator(BaseIntegrator):
         dyn_idx = list(pop_idx) + [n_pop + i for i in syn_idx]
 
         flat0 = flatten_joint_state(pop_states, syn_states)
-        shapes = [s.shape for s in list(pop_states) + list(syn_states)]
-        sizes = [int(sh.num_elements()) for sh in shapes]
-        dyn_sizes = [sizes[i] for i in dyn_idx]
-        flat_pieces = tf.split(flat0, sizes)
+        # Динамические sizes: батч-оси состояний внутри скана неизвестны
+        # статически (tf.split принимает 1-D тензор размеров).
+        all_states = list(pop_states) + list(syn_states)
+        sizes_t = tf.stack([tf.size(s) for s in all_states])
+        dyn_sizes_t = tf.stack([sizes_t[i] for i in dyn_idx])
+        flat_pieces = tf.split(flat0, sizes_t)
         z0 = tf.concat([flat_pieces[i] for i in dyn_idx], axis=0)
 
         def scatter_z(z: TensorType) -> TensorType:
             """Вставляет динамические компоненты z в полный плоский вектор."""
             upd = list(flat_pieces)
-            z_pieces = tf.split(z, dyn_sizes)
+            z_pieces = tf.split(z, dyn_sizes_t)
             for k, i in enumerate(dyn_idx):
                 upd[i] = z_pieces[k]
             return tf.concat(upd, axis=0)
@@ -204,10 +225,13 @@ class RosenbrockIntegrator(BaseIntegrator):
             fp, fs = rhs(new_pop, new_syn)
             return tf.concat([tf.reshape(t, [-1]) for t in list(fp) + list(fs)], axis=0)
 
-        d = len(dyn_idx)
         h = float(dt) / self.n_substeps
         h_t = tf.constant(h, dtype=dtype)
-        eye = tf.eye(d, dtype=dtype)
+        # Единичная матрица ПЛОСКОГО вектора [D, D]: D — суммарная
+        # размерность динамических слотов с батч-осью (B·per-slot), а не
+        # число слотов. tf.eye по числу слотов бродкастился бы до матрицы
+        # из единиц (корректно только при B=1, где D == len(dyn_idx)).
+        eye = tf.eye(tf.size(z0), dtype=dtype)
 
         z = z0
         for _ in range(self.n_substeps):

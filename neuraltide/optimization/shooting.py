@@ -397,7 +397,12 @@ class MultipleShootingProblem:
                         )
                     model = graph._synapses[syn_name].model
                     for slot in range(count):
-                        shape = tf.TensorShape(model.state_size[slot])
+                        # Per-sample форма синапса [n_pre, n_post] без батч-оси;
+                        # состояния сети батчированы ([B, n_pre, n_post]), поэтому
+                        # батч-ось дописываем вперёд (число элементов не меняется).
+                        shape = tf.TensorShape([1]).concatenate(
+                            tf.TensorShape(model.state_size[slot])
+                        )
                         if shape.num_elements() == 0:
                             continue
                         name = f"x0s/{k}/{syn_name}/{slot}"

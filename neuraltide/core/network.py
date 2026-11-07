@@ -11,8 +11,18 @@ from neuraltide.core.types import TensorType, StateList
 from neuraltide.integrators.base import BaseIntegrator
 
 
-def _tensorarr_shape(t: TensorType) -> List[Optional[int]]:
-    return [d if d is not None else None for d in t.shape.as_list()]
+def _with_free_batch(shape: tf.TensorShape) -> tf.TensorShape:
+    """Форма состояния популяции с незакреплённой батч-осью: [None, *rest].
+
+    state_size популяций — per-sample формы [1, n] (первая ось — батч);
+    заменяем её на None. Батчированные состояния синапсов строятся иначе —
+    первая ось дописывается вперёд (см. _build).
+    """
+    dims = shape.as_list()
+    if not dims:
+        return tf.TensorShape(shape)
+    dims[0] = None
+    return tf.TensorShape(dims)
 
 
 @dataclass
@@ -289,6 +299,14 @@ def get_firing_rates(
     return all_rates
 
 
+def _infer_batch_size(states: StateList) -> tf.Tensor:
+    """Батч-ось из первого доступного тензора состояния (динамический int)."""
+    for s in states:
+        if isinstance(s, tf.Tensor):
+            return tf.shape(s)[0]
+    return tf.constant(1, dtype=tf.int32)
+
+
 class _JointNetworkRHS:
     """
     Согласованная правая часть (joint RHS) связанной сети.
@@ -302,7 +320,7 @@ class _JointNetworkRHS:
         1. Распаковка плоских списков состояний по кэшам graph
            (_pop_info_cache / _syn_info_cache).
         2. Для каждой популяции кэшируются firing rate и observables;
-           'v_mean' отсутствует → нулевой fallback формы [1, n_units].
+           'v_mean' отсутствует → нулевой fallback формы [batch, n_units].
         3. Для каждого синапса: pre_rate из input_rates, если src —
            внешний вход (значение на текущем шаге, zero-order hold),
            иначе из кэшированных firing rates; post_v — 'v_mean' цели
@@ -316,7 +334,8 @@ class _JointNetworkRHS:
     Возвращает плоские списки производных в кэшированном порядке
     (популяции, затем синапсы). Блоки моделей без динамики
     (InputPopulation, StaticSynapse) дают пустые списки производных —
-    их состояние интегратор оставляет неизменным.
+    их состояние интегратор оставляет неизменным. Батч-ось выводится
+    из формы состояний (произвольное B, состояния [B, ...]).
 
     Args:
         graph: NetworkGraph с построенными кэшами (validate()).
@@ -354,13 +373,15 @@ class _JointNetworkRHS:
             syn_states_dict[name] = syn_states[idx : idx + n]
             idx += n
 
+        batch = _infer_batch_size(list(pop_states) + list(syn_states))
+
         # Инициализация синаптических токов для динамических популяций
         syn_I: Dict[str, TensorType] = {}
         syn_g: Dict[str, TensorType] = {}
         for name in graph.dynamic_population_names:
             n = graph._populations[name].n_units
-            syn_I[name] = tf.zeros([1, n], dtype=dtype)
-            syn_g[name] = tf.zeros([1, n], dtype=dtype)
+            syn_I[name] = tf.zeros([batch, n], dtype=dtype)
+            syn_g[name] = tf.zeros([batch, n], dtype=dtype)
 
         # Кэширование firing_rates и observables для каждой популяции
         cached_rates: Dict[str, TensorType] = {}
@@ -384,7 +405,7 @@ class _JointNetworkRHS:
 
             post_v = cached_obs[entry.tgt].get("v_mean")
             if post_v is None:
-                post_v = tf.zeros([1, tgt_pop.n_units], dtype=dtype)
+                post_v = tf.zeros([batch, tgt_pop.n_units], dtype=dtype)
 
             dsyn = entry.model.derivatives(syn_state, pre_rate, post_v)
             dsyn_flat.extend(dsyn)
@@ -429,7 +450,9 @@ def _step_fn(
             (требует supports_network_step=True у интегратора).
 
     Returns:
-        (new_pop_states, new_syn_states, new_stability_error)
+        (new_pop_states, new_syn_states, new_stability_error) —
+        stability-аккумулятор скалярный (per-step local_err интеграторов
+        [1] усредняется до скаляра при накоплении).
     """
     pop_states, syn_states, stability_acc = states
     dtype = neuraltide.config.get_dtype()
@@ -466,13 +489,16 @@ def _step_fn(
         syn_states_dict[name] = syn_states[idx : idx + n]
         idx += n
 
+    # Батч-ось из формы состояний (произвольное B; состояния [B, ...])
+    batch = _infer_batch_size(list(pop_states) + list(syn_states))
+
     # Инициализация синаптических токов для динамических популяций
     syn_I: Dict[str, TensorType] = {}
     syn_g: Dict[str, TensorType] = {}
     for name in graph.dynamic_population_names:
         n = graph._populations[name].n_units
-        syn_I[name] = tf.zeros([1, n], dtype=dtype)
-        syn_g[name] = tf.zeros([1, n], dtype=dtype)
+        syn_I[name] = tf.zeros([batch, n], dtype=dtype)
+        syn_g[name] = tf.zeros([batch, n], dtype=dtype)
 
     # Кэширование firing_rates и observables для каждой популяции (T1)
     # Вычисляем один раз, а не на каждый синапс
@@ -500,7 +526,7 @@ def _step_fn(
 
         post_v = cached_obs[entry.tgt].get("v_mean")
         if post_v is None:
-            post_v = tf.zeros([1, tgt_pop.n_units], dtype=dtype)
+            post_v = tf.zeros([batch, tgt_pop.n_units], dtype=dtype)
 
         new_syn_state, local_err = integrator.step_synapse(
             entry.model, syn_state, pre_rate, post_v, entry.model.dt
@@ -521,7 +547,8 @@ def _step_fn(
         total_syn = {"I_syn": syn_I[name], "g_syn": syn_g[name]}
         new_pop_state, local_err = integrator.step(pop, pop_state, total_syn)
         new_pop_states_list.extend(new_pop_state)
-        stability_error = stability_error + local_err
+        # local_err интеграторов — [1] (конвенция RK); аккумулятор скалярный.
+        stability_error = stability_error + tf.reduce_mean(local_err)
 
     # Сборка списка состояний синапсов
     new_syn_states_list = []
@@ -582,10 +609,13 @@ class NetworkRNN(tf.keras.layers.Layer):
 
     Графовое ядро скана закреплено сигнатурами: self._scan_compiled
     (tf.function с input_signature) строится в _build() и не
-    ретрейсится при смене длины T. Публичный call() — eager-обёртка:
-    нормализует ранг t_sequence, материализует inputs=None и
-    initial_state=None до входа в скомпилированное ядро. Batch=1 в
-    сигнатуре зафиксирован статически (батчирование — отдельный этап).
+    ретрейсится при смене длины T и батча B (батч-оси сигнатур —
+    динамические). Публичный call() — eager-обёртка: нормализует ранг
+    t_sequence, материализует inputs=None и initial_state=None
+    (per-sample состояние broadcast'ится на B) до входа в скомпилированное
+    ядро. Поддержан произвольный batch B ≥ 1: состояния [B, n], токи
+    [B, n_post]; батч-прогон эквивалентен B индивидуальным прогонам с
+    одинаковым протоколом.
 
     Args:
         jit_compile: если True, скан компилируется через XLA
@@ -593,10 +623,16 @@ class NetworkRNN(tf.keras.layers.Layer):
             Проверено на TF 2.21 (CPU): прямой прогон компилируется для
             всех встроенных интеграторов; train step с градиентами
             (Trainer(jit_compile=True)) компилируется для всех, КРОМЕ
-            AdaptiveRKIntegrator (вложенный while_loop адаптивного шага)
-            и ExponentialEulerIntegrator (tf.linalg.expm): их градиент
-            не компилируется под XLA и падает при первом вызове с
-            InvalidArgumentError о tensor list size.
+            AdaptiveRKIntegrator (вложенный while_loop адаптивного шага),
+            ExponentialEulerIntegrator (tf.linalg.expm) и split-шага
+            RosenbrockIntegrator (динамические батч-оси скана —
+            BroadcastGradientArgs; на статических формах компилируется):
+            их градиент не компилируется под XLA и падает при первом
+            вызове с InvalidArgumentError. Не сочетайте jit_compile=True у
+            сети с Trainer по умолчанию (графовый train step без XLA):
+            TensorArray-градиент не пересекает границу XLA/TF
+            (UnimplementedError «TensorList crossing the XLA/TF boundary»)
+            — используйте jit_compile у обоих или ни у кого.
     """
 
     def __init__(
@@ -637,7 +673,14 @@ class NetworkRNN(tf.keras.layers.Layer):
         self._build()
 
     def _build(self) -> None:
-        """Собирает начальные состояния и вычисляет размерности."""
+        """Собирает кэшированные (per-sample, batch=1) начальные состояния
+        и вычисляет размерности.
+
+        Кэш хранит состояния формы [1, ...] (per-sample); при вызове с
+        batch B>1 call() broadcast'ит их до [B, ...]. Батч-агностичные
+        формы ([None, ...] — первая ось состояний) используются в
+        сигнатуре скана и element_shape TensorArray.
+        """
         batch_size = 1
 
         self._init_pop_states: StateList = []
@@ -651,12 +694,25 @@ class NetworkRNN(tf.keras.layers.Layer):
 
         self._init_syn_states: StateList = []
         self._syn_state_offsets: Dict[str, int] = {}
+        self._syn_state_shapes: List[tf.TensorShape] = []
         for name in self._graph.synapse_names:
             entry = self._graph._synapses[name]
             self._syn_state_offsets[name] = len(self._init_syn_states)
             self._init_syn_states.extend(entry.model.get_initial_state(batch_size))
-        self._syn_state_shapes: List[tf.TensorShape] = [
-            tf.TensorShape(t.shape) for t in self._init_syn_states
+            # Per-sample формы из публичного state_size ([n_pre, n_post] —
+            # без батч-оси; кэшированные состояния — [1, n_pre, n_post]).
+            self._syn_state_shapes.extend(entry.model.state_size)
+
+        # Батч-агностичные формы состояний — для input_signature скана и
+        # element_shape TensorArray: одна сигнатура на любой B, ретрейсинга
+        # при смене батча нет. state_size популяций уже содержит батч-ось
+        # ([1, n] → [None, n]); у синапсов per-sample форма [n_pre, n_post]
+        # без батч-оси — она дописывается вперёд ([None, n_pre, n_post]).
+        self._pop_state_elem_shapes: List[tf.TensorShape] = [
+            _with_free_batch(s) for s in self._pop_state_shapes
+        ]
+        self._syn_state_elem_shapes: List[tf.TensorShape] = [
+            tf.TensorShape([None]).concatenate(s) for s in self._syn_state_shapes
         ]
 
         self._total_dynamic_units = sum(
@@ -676,21 +732,22 @@ class NetworkRNN(tf.keras.layers.Layer):
     def _make_scan_function(self):
         """Строит скомпилированное графовое ядро скана.
 
-        input_signature фиксирует аргументы: смена длины T, чередование
-        initial_state=None/тензоры и ранга t_sequence больше не порождают
-        ретрейсинг (нормализация выполняется в eager-обёртке call()).
-        dtype и batch=1 фиксируются на момент построения сети: при смене
-        global dtype нужен новый экземпляр сети (существующий контракт).
+        input_signature фиксирует аргументы: смена длины T, смена батча B,
+        чередование initial_state=None/тензоры и ранг t_sequence больше не
+        порождают ретрейсинг (нормализация выполняется в eager-обёртке
+        call()). Батч-ось всех тензоров — None (произвольное B).
+        dtype фиксируется на момент построения сети: при смене global
+        dtype нужен новый экземпляр сети (существующий контракт).
         """
         dtype = neuraltide.config.get_dtype()
         self._scan_dtype = dtype
         # Порядок элементов — как у параметров _scan_forward_states
         # (t_sequence, init_pop, init_syn, inputs).
         input_signature = [
-            tf.TensorSpec([1, None, 1], dtype=dtype),
-            tuple(tf.TensorSpec(s, dtype=dtype) for s in self._pop_state_shapes),
-            tuple(tf.TensorSpec(s, dtype=dtype) for s in self._syn_state_shapes),
-            tf.TensorSpec([1, None, self._graph.total_input_units], dtype=dtype),
+            tf.TensorSpec([None, None, 1], dtype=dtype),
+            tuple(tf.TensorSpec(s, dtype=dtype) for s in self._pop_state_elem_shapes),
+            tuple(tf.TensorSpec(s, dtype=dtype) for s in self._syn_state_elem_shapes),
+            tf.TensorSpec([None, None, self._graph.total_input_units], dtype=dtype),
         ]
         return tf.function(
             self._scan_forward_impl,
@@ -728,9 +785,10 @@ class NetworkRNN(tf.keras.layers.Layer):
         тела скана (для сверок и отладки) — _scan_forward_impl.
 
         Внутренний контракт: входы должны быть нормализованы публичным
-        call — t формы [1, T, 1] в dtype сети; inputs либо None (==
-        нулевая ширина), либо тензор точной ширины; чужой dtype теперь
-        даёт TypeError на биндинге сигнатуры.
+        call — t формы [B, T, 1] в dtype сети (батч-ось динамическая);
+        inputs либо None (== нулевая ширина), либо тензор [B, T, total]
+        точной ширины; чужой dtype теперь даёт TypeError на биндинге
+        сигнатуры.
         """
         if inputs is None:
             inputs = tf.zeros(
@@ -774,14 +832,14 @@ class NetworkRNN(tf.keras.layers.Layer):
             size = self._graph._external_inputs[name]
             input_seqs[name] = inputs_T[:, :, offset : offset + size]
 
-        init_stability = tf.zeros([1], dtype=dtype)
+        init_stability = tf.zeros([], dtype=dtype)
 
         pop_arrays = [
             tf.TensorArray(
                 dtype,
                 size=T,
                 clear_after_read=False,
-                element_shape=self._pop_state_shapes[i],
+                element_shape=self._pop_state_elem_shapes[i],
             )
             for i in range(self._pop_state_count)
         ]
@@ -790,12 +848,12 @@ class NetworkRNN(tf.keras.layers.Layer):
                 dtype,
                 size=T,
                 clear_after_read=False,
-                element_shape=_tensorarr_shape(init_syn[i]),
+                element_shape=self._syn_state_elem_shapes[i],
             )
             for i in range(self._syn_state_count)
         ]
         stab_array = tf.TensorArray(
-            dtype, size=T, clear_after_read=False, element_shape=[1]
+            dtype, size=T, clear_after_read=False, element_shape=[]
         )
 
         i0 = tf.constant(0)
@@ -834,13 +892,17 @@ class NetworkRNN(tf.keras.layers.Layer):
 
         pop_state_inv = tuple(
             tf.TensorShape(s) if not isinstance(s, tf.TensorShape) else s
-            for s in self._pop_state_shapes
+            for s in self._pop_state_elem_shapes
+        )
+        syn_state_inv = tuple(
+            tf.TensorShape(s) if not isinstance(s, tf.TensorShape) else s
+            for s in self._syn_state_elem_shapes
         )
         shape_inv = (
             tf.TensorShape([]),
             pop_state_inv,
-            tuple(t.shape for t in init_syn),
-            tf.TensorShape([1]),
+            syn_state_inv,
+            tf.TensorShape([]),
             [tf.TensorShape(None)] * len(pop_arrays),
             [tf.TensorShape(None)] * len(syn_arrays),
             tf.TensorShape(None),
@@ -899,10 +961,17 @@ class NetworkRNN(tf.keras.layers.Layer):
 
         Eager-обёртка над скомпилированным графовым ядром (self._scan_compiled
         с закреплёнными input_signature): здесь нормализуются ранги и
-        материализуются None-аргументы, поэтому смена длины T, чередование
-        initial_state=None/заданным состоянием и ранг 2 vs 3 у t_sequence
-        не вызывают ретрейсинга. При вызове изнутри tf.function эта
+        материализуются None-аргументы, поэтому смена длины T, смена батча,
+        чередование initial_state=None/заданным состоянием и ранг 2 vs 3 у
+        t_sequence не вызывают ретрейсинга. При вызове изнутри tf.function эта
         нормализация трассируется как обычные ops внешнего графа.
+
+        Поддерживается произвольный batch B ≥ 1 (состояния [B, n], токи
+        [B, n]): один батч-прогон эквивалентен B индивидуальным прогонам
+        с одинаковым протоколом; initial_state=None broadcast'ит
+        per-sample начальное состояние сети на все слоты батча. Все слоты
+        батча исполняют один и тот же протокол (t_sequence/inputs одни
+        на всех). InputPopulation внутри полного скана не поддержан.
 
         Args:
             t_sequence: tf.Tensor shape [batch, T, 1] или [batch, T]
@@ -911,10 +980,12 @@ class NetworkRNN(tf.keras.layers.Layer):
                 Предвычисленные частоты разрядов внешних входов,
                 сложенные через pack_inputs(). None допустим только при
                 отсутствии объявленных входов (материализуется тензор
-                нулевой ширины).
+                нулевой ширины). Батч должен совпадать с t_sequence.
             initial_state: Optional[Tuple[pop_states, syn_states]]
-                Начальное состояние. Если None, используется начальное
-                состояние популяций/синапсов сети.
+                Начальное состояние: тензоры формы [B, *state_shape] с
+                единым B по всем слотам (хвосты форм — как у state_size
+                моделей). Если None, используется per-sample начальное
+                состояние популяций/синапсов сети, broadcast'нутое на B.
             training: игнорируется (симуляция не зависит от фазы обучения).
 
         Returns:
@@ -927,19 +998,6 @@ class NetworkRNN(tf.keras.layers.Layer):
             # незамеченным (t не участвует в шаге скана); сохраняем
             # совместимость явным приведением к dtype сети.
             t_sequence = tf.cast(t_sequence, self._scan_dtype)
-
-        # Контракт batch=1 проверяем статически до биндинга сигнатуры
-        # (этап 2 расширит сигнатуры до произвольного batch).
-        if t_sequence.shape[0] is not None and t_sequence.shape[0] != 1:
-            raise ValueError(
-                f"NetworkRNN supports batch=1 only (got t_sequence batch "
-                f"{t_sequence.shape[0]}); multi-batch is a separate stage."
-            )
-        if inputs is not None and inputs.shape[0] is not None and inputs.shape[0] != 1:
-            raise ValueError(
-                f"NetworkRNN supports batch=1 only (got inputs batch "
-                f"{inputs.shape[0]}); multi-batch is a separate stage."
-            )
 
         batch = tf.shape(t_sequence)[0]
         T = tf.shape(t_sequence)[1]
@@ -959,10 +1017,35 @@ class NetworkRNN(tf.keras.layers.Layer):
                     f"expected {expected_last} "
                     f"(total_input_units from declare_input calls)"
                 )
+            # Дешёвая статическая сверка батчей (динамическое несовпадение
+            # отловит broadcast внутри графа).
+            if (
+                t_sequence.shape[0] is not None
+                and inputs.shape[0] is not None
+                and int(t_sequence.shape[0]) != int(inputs.shape[0])
+            ):
+                raise ValueError(
+                    f"t_sequence batch {int(t_sequence.shape[0])} != "
+                    f"inputs batch {int(inputs.shape[0])}."
+                )
 
         if initial_state is None:
-            init_pop = tuple(self._init_pop_states)
-            init_syn = tuple(self._init_syn_states)
+            # Per-sample кэш [1, ...] -> broadcast на [B, ...]. При
+            # статическом B=1 broadcast не нужен (и вреден под XLA:
+            # градиент BroadcastTo требует константных аргументов формы).
+            static_batch = t_sequence.shape[0]
+            if static_batch == 1:
+                init_pop = tuple(self._init_pop_states)
+                init_syn = tuple(self._init_syn_states)
+            else:
+                init_pop = tuple(
+                    tf.broadcast_to(t, [batch] + t.shape[1:].as_list())
+                    for t in self._init_pop_states
+                )
+                init_syn = tuple(
+                    tf.broadcast_to(t, [batch] + t.shape[1:].as_list())
+                    for t in self._init_syn_states
+                )
         else:
             init_pop, init_syn = initial_state
             if len(init_pop) != self._pop_state_count:
@@ -975,6 +1058,41 @@ class NetworkRNN(tf.keras.layers.Layer):
                     f"initial_state[1] has {len(init_syn)} synapse state "
                     f"tensors, expected {self._syn_state_count}."
                 )
+            # Хвосты форм должны совпадать с per-sample формами слотов;
+            # батч — единый по всем тензорам (статически, где известен).
+            user_batch = None
+            for t in list(init_pop) + list(init_syn):
+                b = t.shape[0] if isinstance(t, tf.Tensor) else None
+                if b is not None:
+                    user_batch = int(b) if user_batch is None else user_batch
+                    if int(b) != user_batch:
+                        raise ValueError(
+                            "initial_state tensors must share one batch "
+                            f"dimension, got {user_batch} and {int(b)}."
+                        )
+            if (
+                user_batch is not None
+                and t_sequence.shape[0] is not None
+                and user_batch != int(t_sequence.shape[0])
+            ):
+                raise ValueError(
+                    f"initial_state batch {user_batch} != t_sequence batch "
+                    f"{int(t_sequence.shape[0])}."
+                )
+            for t, ref in zip(init_pop, self._pop_state_shapes):
+                if t.shape.rank is not None and t.shape.rank != len(ref):
+                    raise ValueError(
+                        f"initial_state pop tensor rank {t.shape.rank} != "
+                        f"expected {len(ref)} (per-sample shape {ref} with "
+                        "batch axis)."
+                    )
+            for t, ref in zip(init_syn, self._syn_state_shapes):
+                if t.shape.rank is not None and t.shape.rank != len(ref) + 1:
+                    raise ValueError(
+                        f"initial_state synapse tensor rank {t.shape.rank} != "
+                        f"expected {len(ref) + 1} (per-sample shape {ref} "
+                        "with batch axis)."
+                    )
             init_pop = tuple(init_pop)
             init_syn = tuple(init_syn)
 
@@ -1023,7 +1141,12 @@ class NetworkRNN(tf.keras.layers.Layer):
         return self._cached_trainable_vars
 
     def get_initial_state(self, batch_size: int = 1) -> Tuple[StateList, StateList]:
-        """Возвращает начальное состояние сети (по умолчанию нулевое)."""
+        """Возвращает начальное состояние сети для батча batch_size.
+
+        Популяции — тензоры [batch_size, n_i], синапсы —
+        [batch_size, n_pre, n_post]. batch_size=1 — per-sample формы
+        прежнего поведения.
+        """
         init_pop = []
         for pop in self._graph._populations.values():
             init_pop.extend(pop.get_initial_state(batch_size))

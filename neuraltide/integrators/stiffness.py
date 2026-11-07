@@ -42,18 +42,24 @@ if TYPE_CHECKING:  # циклический импорт: core.network -> integr
 
 def flatten_state(state: StateList) -> tf.Tensor:
     """
-    Уплощает StateList ([1, n_units] × d тензоров) в матрицу [n_units, d].
+    Уплощает StateList ([B, n_units] × d тензоров) в матрицу [B·n_units, d].
 
-    Столбец j соответствует state[j]. Юниты независимы внутри популяции
-    (связность только через синапсы), поэтому такое уплощение — естественный
-    базис для блочного якобиана [n_units, d, d].
+    Столбец j соответствует state[j]; батч-ось и ось юнитов сливаются
+    без потерь (unflatten_state восстанавливает формы по эталонам).
+    Юниты независимы внутри популяции (связность только через синапсы),
+    поэтому такое уплощение — естественный базис для блочного якобиана
+    [B·n_units, d, d].
     """
     return tf.stack([tf.reshape(s, [-1]) for s in state], axis=1)
 
 
 def unflatten_state(flat: tf.Tensor, like: StateList) -> StateList:
-    """Обратное к flatten_state преобразование; формы берутся из `like`."""
-    return [tf.reshape(flat[:, i], s.shape) for i, s in enumerate(like)]
+    """Обратное к flatten_state преобразование; формы берутся из `like`.
+
+    Батч-оси форм могут быть неизвестны (трассировка внутри скана), поэтому
+    reshape идёт по динамической форме тензора-эталона.
+    """
+    return [tf.reshape(flat[:, i], tf.shape(s)) for i, s in enumerate(like)]
 
 
 def flatten_joint_state(pop_states: StateList, syn_states: StateList) -> tf.Tensor:
@@ -62,8 +68,9 @@ def flatten_joint_state(pop_states: StateList, syn_states: StateList) -> tf.Tens
 
     Конкатенация reshape(-1) всех тензоров pop_states и syn_states
     (популяции, затем синапсы) — тот же порядок, в котором
-    _JointNetworkRHS возвращает плоские списки производных. Батч всегда 1,
-    поэтому ведущая ось [1, n] стирается без потерь.
+    _JointNetworkRHS возвращает плоские списки производных. Батч-ось
+    (произвольное B) сливается в плоский вектор без потерь; обратное
+    разбиение (unflatten_joint_state) восстанавливает формы по эталонам.
     """
     all_states = list(pop_states) + list(syn_states)
     if not all_states:
@@ -83,12 +90,19 @@ def unflatten_joint_state(
     вектора flat должна равняться сумме их элементов.
     """
     all_states = list(pop_states) + list(syn_states)
-    shapes = [s.shape for s in all_states]
-    sizes = [int(shape.num_elements()) for shape in shapes]
-    pieces = tf.split(flat, sizes)
+    # Динамические sizes: батч-оси состояний внутри скана неизвестны
+    # статически (tf.split принимает 1-D тензор размеров).
+    sizes_t = tf.stack([tf.size(s) for s in all_states])
+    pieces = tf.split(flat, sizes_t)
     n_pop = len(pop_states)
-    new_pop = [tf.reshape(p, sh) for p, sh in zip(pieces[:n_pop], shapes[:n_pop])]
-    new_syn = [tf.reshape(p, sh) for p, sh in zip(pieces[n_pop:], shapes[n_pop:])]
+    # reshape по динамическим формам эталонов: батч-оси внутри скана
+    # неизвестны статически.
+    new_pop = [
+        tf.reshape(p, tf.shape(ref)) for p, ref in zip(pieces[:n_pop], pop_states)
+    ]
+    new_syn = [
+        tf.reshape(p, tf.shape(ref)) for p, ref in zip(pieces[n_pop:], syn_states)
+    ]
     return new_pop, new_syn
 
 
@@ -190,39 +204,74 @@ def flat_vector_field_jacobian(
     Используется RosenbrockIntegrator.step_network(): f_flat — замыкание
     над _JointNetworkRHS, отображающее вектор динамических компонент
     состояния сети [D] в плоскую правую часть [D] того же размера.
+    D может быть динамическим (батч-оси состояний внутри скана неизвестны
+    статически) — тогда столбцы J накапливаются в tf.while_loop (один
+    ForwardAccumulator на столбец, eye как тангентсы) либо через
+    tf.map_fn для fd, без Python-цикла по D.
 
     Args:
         f_flat: callable(z) -> [D].
         z: точка линеаризации, вектор [D].
-        method: 'jvp' (D JVP-вызовов через ForwardAccumulator, точно,
-            по умолчанию) или 'fd' (центральные разности).
+        method: 'jvp' (точно, по умолчанию; цикл по столбцам eye через
+            ForwardAccumulator) или 'fd' (центральные разности).
         fd_eps: шаг разности для method='fd' (по умолчанию sqrt(eps)).
 
     Returns:
         tf.Tensor [D, D] в dtype вектора z.
     """
-    d = int(z.shape[0])
-    if d == 0:
+    d_static = z.shape[0]
+    if d_static == 0:
         return tf.zeros([0, 0], dtype=z.dtype)
+    dtype = z.dtype
 
     if method == "jvp":
-        columns = []
-        for j in range(d):
-            tangents = tf.one_hot(j, d, dtype=z.dtype)
-            with tf.autodiff.ForwardAccumulator(primals=z, tangents=tangents) as acc:
+        if d_static is not None:
+            columns = []
+            for j in range(d_static):
+                tangents = tf.one_hot(j, d_static, dtype=dtype)
+                with tf.autodiff.ForwardAccumulator(
+                    primals=z, tangents=tangents
+                ) as acc:
+                    out = f_flat(z)
+                columns.append(acc.jvp(out))
+            return tf.stack(columns, axis=1)
+        # Динамический D (батч-оси состояний внутри скана неизвестны
+        # статически): столбцы J накапливаются в tf.while_loop —
+        # ForwardAccumulator корректен в теле цикла, включая градиент
+        # второго порядка (BPTT через step_network).
+        d = tf.size(z)
+        eye = tf.eye(d, dtype=dtype)
+        cols = tf.TensorArray(dtype, size=d, element_shape=[None])
+
+        def _cond(j, cols_):
+            return j < d
+
+        def _body(j, cols_):
+            with tf.autodiff.ForwardAccumulator(primals=z, tangents=eye[j]) as acc:
                 out = f_flat(z)
-            columns.append(acc.jvp(out))
-        return tf.stack(columns, axis=1)
+            cols_ = cols_.write(j, acc.jvp(out))
+            return j + 1, cols_
+
+        _, cols = tf.while_loop(_cond, _body, (tf.constant(0, tf.int32), cols))
+        return tf.transpose(cols.stack())  # [D, D], столбец j = ∂f/∂z_j
 
     if method == "fd":
         eps = fd_eps
         if eps is None:
             eps = float(np.sqrt(np.finfo(z.dtype.as_numpy_dtype).eps))
-        columns = []
-        for j in range(d):
-            e = tf.one_hot(j, d, dtype=z.dtype) * eps
-            columns.append((f_flat(z + e) - f_flat(z - e)) / (2.0 * eps))
-        return tf.stack(columns, axis=1)
+        if d_static is not None:
+            columns = []
+            for j in range(d_static):
+                e = tf.one_hot(j, d_static, dtype=dtype) * eps
+                columns.append((f_flat(z + e) - f_flat(z - e)) / (2.0 * eps))
+            return tf.stack(columns, axis=1)
+        eye = tf.eye(tf.size(z), dtype=dtype)
+
+        def _column(e: tf.Tensor) -> tf.Tensor:
+            return (f_flat(z + eps * e) - f_flat(z - eps * e)) / (2.0 * eps)
+
+        # map_fn отдаёт строки (столбец j на строке j) — транспонируем.
+        return tf.transpose(tf.map_fn(_column, eye, fn_output_signature=dtype))
 
     raise ValueError(f"Unknown jacobian method '{method}', expected 'jvp' or 'fd'.")
 
@@ -284,11 +333,11 @@ def state_vector_field_jacobian(
         flat_state = [tf.reshape(s, [-1]) for s in state]
         for j in range(d):
             plus = [
-                tf.reshape(flat_state[i] + (eps if i == j else 0.0), s.shape)
+                tf.reshape(flat_state[i] + (eps if i == j else 0.0), tf.shape(s))
                 for i, s in enumerate(state)
             ]
             minus = [
-                tf.reshape(flat_state[i] - (eps if i == j else 0.0), s.shape)
+                tf.reshape(flat_state[i] - (eps if i == j else 0.0), tf.shape(s))
                 for i, s in enumerate(state)
             ]
             f_plus = flatten_state(population.derivatives(plus, total_synaptic_input))
@@ -602,6 +651,14 @@ def stiffness_report(
                 Re λ >= 0 — устойчивого шага Эйлера не существует);
             'dt_network': шаг сети graph.dt;
             'euler_stable': True если dt_network <= explicit_dt_limit.
+
+    Batch (B>1): формы результата НЕ меняются по смыслу, но ось юнитов
+    разворачивается по слотам батча — scope='populations' даёт
+    'eigenvalues' [P, B·n, d] (спектр строится для каждого слота батча;
+    при идентичных слотах строки дублируются), scope='network' — [P, D]
+    с D, включающим батч-размерность. Метрики lambda_max / stiffness_ratio
+    / explicit_dt_limit — по всем слотам (как и при B=1 — по всем
+    точкам и блокам).
     """
     if method not in ("jvp", "fd"):
         raise ValueError(f"Unknown method '{method}', expected 'jvp' or 'fd'.")

@@ -82,8 +82,8 @@
 | `stability_loss == 0` неожиданно | Либо штраф не включён, либо режим прогона его не оценивает | Проверьте `stability_penalty_weight` в конструкторе `NetworkRNN` (по умолчанию 0.0); проверьте `integration_mode` | Задайте `stability_penalty_weight > 0`; учтите, что в режиме `integration_mode='network'` штраф стабильности не оценивается (единый шаг `step_network` не возвращает локальную ошибку) — оценивайте точность через `dt_convergence` и `stiffness_report` |
 | Предупреждение про «осиротевшие» записи начального состояния (orphan x0) | Записи `x0/<experiment>/<pop>/<slot>`, добавленные через `ParameterSpace.add_experiment_initial_state_entries`, используются вне многоэкспериментной задачи | Текст `UserWarning`: записи существуют, но не материализованы | Создавайте такие записи только для `MultiExperimentProblem` (приоритет: эксперимент → общие → умолчание); в обычной `CalibrationProblem` используйте общие записи `x0/<pop>/<slot>` через `add_initial_state_entries` и `StateLocator` |
 | Итерации оптимизатора медленные, CPU недогружен | Python-оверхед: граф операций строится заново на каждую итерацию eager-прогона | Сравните `Trainer(run_eagerly=True)` с режимом по умолчанию (`tf.function`) и `CalibrationProblem(..., compiled=True)` с `compiled=False` на одном φ; замеры — `benchmarks/g0_graph_mode.py` | Длинные T и много итераций — включайте `compiled=True` / `Trainer(jit_compile=True)`; если после включения появилось предупреждение TF о retracing — между вызовами меняются формы или объекты (см. view-хелперы: каждый view строит новое ядро) |
-| `InvalidArgumentError: XLA compilation requires a fixed tensor list size` | `Trainer(jit_compile=True)` с интегратором, чей градиент не компилируется под XLA (`AdaptiveRKIntegrator`, `ExponentialEulerIntegrator`) | Текст ошибки; исчезает при `jit_compile=False` | Снимите `jit_compile` (граф без XLA остаётся) или смените интегратор; прямой прогон под XLA у всех встроенных интеграторов работает |
-| Ошибка/некорректный результат при batch > 1 | Последовательный цикл `NetworkRNN` поддерживает только ведущий batch-размер 1 | Форма состояний `[1, n_units]` из `get_initial_state(batch_size=1)`; все состояния имеют ведущую единицу | Прогоняйте образцы по одному (цикл по batch с общими параметрами); для пакетной оценки кандидатов используйте `evaluate_candidates`/`make_evaluator` — пакетирование там реализовано на уровне задач, а не тензоров |
+| `InvalidArgumentError: XLA compilation requires a fixed tensor list size` | `Trainer(jit_compile=True)` с интегратором, чей градиент не компилируется под XLA (`AdaptiveRKIntegrator`, `ExponentialEulerIntegrator`; split-шаг `RosenbrockIntegrator` при динамических батч-осях скана) | Текст ошибки; исчезает при `jit_compile=False` | Снимите `jit_compile` (граф без XLA остаётся) или смените интегратор/режим (`integration_mode='network'`); прямой прогон под XLA у всех интеграторов работает. Не сочетайте `NetworkRNN(jit_compile=True)` с `Trainer` по умолчанию — TensorList-градиент не пересекает границу XLA/TF (UnimplementedError): `jit_compile` включайте у обоих или ни у кого |
+| Разные протоколы по слотам батча | `NetworkRNN` поддерживает батч B>1 только с ОДИНАКОВЫМ протоколом для всех слотов (общие `t_sequence`/`inputs`); разные T/входы по слотам не поддержаны | Прогон с `inputs`/`t_sequence` формы `[B, T, ...]` даёт одинаковую траекторию протокола во всех слотах | Прогоняйте разнопротокольные образцы по одному (цикл с общими параметрами); для пакетной оценки кандидатов используйте `evaluate_candidates`/`make_evaluator` — пакетирование там реализовано на уровне задач, а не тензоров |
 
 ## Ограничения платформы
 
@@ -96,11 +96,13 @@
   (граф прогона+градиента без XLA, см. «Компилируемый режим» в
   [optimization.md](optimization.md)). Экономия памяти при обратном проходе
   при этом ограничена (см. строку про OOM в таблице).
-- **Batch равен 1.** Все состояния популяций и синапсов имеют форму
-  `[1, n_units]`; `NetworkRNN` прогоняет временную последовательность
-  последовательно. Множественные образцы прогоняются по одному; пакетная
-  оценка кандидатов реализована через `evaluate_candidates`, а не тензорный
-  batch.
+- **Batch сети.** `NetworkRNN` поддерживает произвольный batch B
+  (состояния `[B, n_units]`, синапсы `[B, n_pre, n_post]`; один
+  батч-прогон == B индивидуальным с общим протоколом). Все слоты батча
+  исполняют один и тот же протокол; split-шаги жёстких интеграторов
+  (`Rosenbrock`/`IMEX`/`Exponential` population step) — только batch=1.
+  Пакетная оценка кандидатов optimization-слоя реализована через
+  `evaluate_candidates`, а не тензорный batch.
 - **`InputPopulation` устарел.** Класс помечен deprecated и при создании
   выдаёт `DeprecationWarning`. Внешние входы подключайте через
   `NetworkGraph.declare_input()` и предвычисленные входы `graph.pack_inputs()`,

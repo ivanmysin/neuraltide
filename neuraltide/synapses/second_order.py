@@ -37,8 +37,8 @@ class SecondOrderSynapse(SynapseModel):
     def get_initial_state(self, batch_size: int = 1) -> StateList:
         dtype = neuraltide.config.get_dtype()
         return [
-            tf.zeros([self.n_pre, self.n_post], dtype=dtype),
-            tf.zeros([self.n_pre, self.n_post], dtype=dtype),
+            tf.zeros([batch_size, self.n_pre, self.n_post], dtype=dtype),
+            tf.zeros([batch_size, self.n_pre, self.n_post], dtype=dtype),
         ]
 
     def forward(
@@ -57,8 +57,8 @@ class SecondOrderSynapse(SynapseModel):
         pconn = tf.cast(self.pconn, dtype)
         e_r = tf.cast(self.e_r, dtype)
 
-        firing_probs_T = tf.transpose(dt * pre_firing_rate / 1000.0)
-        s_input = pconn * firing_probs_T
+        firing_probs = dt * pre_firing_rate / 1000.0
+        s_input = pconn * firing_probs[:, :, tf.newaxis]  # [B, n_pre, n_post]
 
         tau12 = tau1 * tau2
         t12_sum = tau1 + tau2
@@ -66,10 +66,10 @@ class SecondOrderSynapse(SynapseModel):
         dg_s_new = dg_s + dt * (s_input - t12_sum * dg_s - g_s) / tau12
         g_s_new = g_s + dt * dg_s_new
 
-        post_v_flat = tf.reshape(post_voltage, [self.n_post])
-        I_pair = gsyn_max * g_s_new * (e_r - post_v_flat)
-        I_syn = tf.reduce_sum(I_pair, axis=0, keepdims=True)
-        g_syn = tf.reduce_sum(gsyn_max * g_s_new, axis=0, keepdims=True)
+        post_v = post_voltage[:, tf.newaxis, :]  # [B, 1, n_post]
+        I_pair = gsyn_max * g_s_new * (e_r - post_v)
+        I_syn = tf.reduce_sum(I_pair, axis=-2)  # [B, n_post]
+        g_syn = tf.reduce_sum(gsyn_max * g_s_new, axis=-2)
 
         return ({"I_syn": I_syn, "g_syn": g_syn}, [g_s_new, dg_s_new])
 
@@ -86,8 +86,8 @@ class SecondOrderSynapse(SynapseModel):
         tau1 = tf.maximum(tf.cast(self.tau1, dtype), 1e-6)
         tau2 = tf.maximum(tf.cast(self.tau2, dtype), 1e-6)
 
-        firing_probs_T = tf.transpose(pre_firing_rate / 1000.0)
-        s_input = pconn * firing_probs_T
+        firing_probs = pre_firing_rate / 1000.0
+        s_input = pconn * firing_probs[:, :, tf.newaxis]  # [B, n_pre, n_post]
 
         tau12 = tau1 * tau2
         t12_sum = tau1 + tau2
@@ -116,10 +116,10 @@ class SecondOrderSynapse(SynapseModel):
 
         g_s = state[0]
 
-        post_v_flat = tf.reshape(post_voltage, [-1])
-        I_pair = gsyn_max * g_s * (e_r - post_v_flat)
-        I_syn = tf.reduce_sum(I_pair, axis=0, keepdims=True)
-        g_syn = tf.reduce_sum(gsyn_max * g_s, axis=0, keepdims=True)
+        post_v = post_voltage[:, tf.newaxis, :]  # [B, 1, n_post]
+        I_pair = gsyn_max * g_s * (e_r - post_v)
+        I_syn = tf.reduce_sum(I_pair, axis=-2)  # [B, n_post]
+        g_syn = tf.reduce_sum(gsyn_max * g_s, axis=-2)
 
         return {"I_syn": I_syn, "g_syn": g_syn}
 
@@ -174,8 +174,8 @@ class SecondOrderSynapse(SynapseModel):
             dtype = neuraltide.config.get_dtype()
             tau1 = tf.maximum(tf.cast(self.tau1, dtype), 1e-6)
             tau2 = tf.maximum(tf.cast(self.tau2, dtype), 1e-6)
-            firing_probs_T = tf.transpose(pre_firing_rate / 1000.0)
-            s_input = tf.cast(self.pconn, dtype) * firing_probs_T
+            firing_probs = pre_firing_rate / 1000.0
+            s_input = tf.cast(self.pconn, dtype) * firing_probs[:, :, tf.newaxis]
             tau12 = tau1 * tau2
             t12_sum = tau1 + tau2
 
@@ -206,10 +206,11 @@ class SecondOrderSynapse(SynapseModel):
         gsyn_max = tf.cast(self.gsyn_max, dtype)
         e_r = tf.cast(self.e_r, dtype)
 
-        lam_I_sum = tf.reduce_sum(lam_I, axis=0)
-        lam_g_sum = tf.reduce_sum(lam_g, axis=0)
+        post_v = post_voltage[:, tf.newaxis, :]  # [B, 1, n_post]
+        lam_I_b = lam_I[:, tf.newaxis, :]
+        lam_g_b = lam_g[:, tf.newaxis, :]
 
-        dg_s_contrib = gsyn_max * (lam_I_sum * (e_r - post_voltage) + lam_g_sum)
+        dg_s_contrib = gsyn_max * (lam_I_b * (e_r - post_v) + lam_g_b)
 
         return [dg_s_contrib, tf.zeros_like(dg_s)]
 
@@ -226,11 +227,12 @@ class SecondOrderSynapse(SynapseModel):
         dtype = neuraltide.config.get_dtype()
         e_r = tf.cast(self.e_r, dtype)
 
-        lam_I_sum = tf.reduce_sum(lam_I, axis=0)
-        lam_g_sum = tf.reduce_sum(lam_g, axis=0)
+        post_v = post_voltage[:, tf.newaxis, :]  # [B, 1, n_post]
+        lam_I_b = lam_I[:, tf.newaxis, :]
+        lam_g_b = lam_g[:, tf.newaxis, :]
 
         if self.gsyn_max.trainable:
-            dgsyn_max = g_s * (lam_I_sum * (e_r - post_voltage) + lam_g_sum)
+            dgsyn_max = g_s * (lam_I_b * (e_r - post_v) + lam_g_b)
         else:
             dgsyn_max = tf.zeros_like(g_s)
 

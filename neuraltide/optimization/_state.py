@@ -28,6 +28,42 @@ InitialState = Optional[Tuple[Sequence[TensorType], Sequence[TensorType]]]
 _X0_OUTSIDE_CONTEXT_WARNED: set = set()
 
 
+def _broadcast_or_validate_init(initial_state, batch, what="initial_state"):
+    """Приводит (pop, syn) начального состояния к батчу протокола.
+
+    Единая семантика для eager-веток задач и compiled-ядра:
+    ведущая ось 1 (per-sample форма) broadcast'ится на batch; ведущая
+    ось, статически не равная batch, — ValueError с понятным текстом.
+    Динамические формы проходят как есть (несовпадение отловит граф
+    сети). initial_state None возвращается как None.
+
+    Args:
+        initial_state: None или (init_pop, init_syn) — кортежи тензоров.
+        batch: батч протокола (int или скалярный тензор).
+        what: имя контекста для текста ошибки.
+
+    Returns:
+        (init_pop, init_syn) с тензорами батча batch, либо None.
+    """
+    if initial_state is None:
+        return None
+    init_pop, init_syn = initial_state
+
+    def _one(t):
+        lead = t.shape[0] if isinstance(t, tf.Tensor) else None
+        if lead is not None:
+            if int(lead) == 1:
+                return tf.broadcast_to(t, [batch] + t.shape[1:].as_list())
+            if isinstance(batch, int) and int(lead) != batch:
+                raise ValueError(
+                    f"{what}: initial state leading batch {int(lead)} != "
+                    f"protocol batch {batch}."
+                )
+        return t
+
+    return tuple(_one(t) for t in init_pop), tuple(_one(t) for t in init_syn)
+
+
 def _tensor_entries(space: ParameterSpace):
     """
     Trainable tensor-записи (kind 'initial_state'/'shooting_state').

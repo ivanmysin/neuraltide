@@ -54,7 +54,13 @@ RTOL64, ATOL64 = 1e-9, 1e-11
 
 # Интеграторы, чей ГРАДИЕНТ (train step) не компилируется под XLA на
 # TF 2.21 (CPU): InvalidArgumentError «XLA compilation requires a fixed
-# tensor list size». Прямой прогон под XLA у всех интеграторов работает.
+# tensor list size» (AdaptiveRK — вложенный while_loop; ExponentialEuler —
+# tf.linalg.expm) либо «BroadcastGradientArgs must be a compile-time
+# constant» (Rosenbrock split — динамические батч-оси скана после этапа 2;
+# на статических формах этапа 1 этот комбо компилировался). Прямой прогон
+# под XLA у всех интеграторов работает; Rosenbrock network-wide
+# (step_network) с градиентом под XLA не проверен — при batch>1 split-путь
+# отклоняется guard'ом.
 KNOWN_XLA_GRADIENT_LIMITATIONS = {
     "adaptiverk": (
         "вложенный tf.while_loop адаптивного шага: обратный проход "
@@ -63,6 +69,12 @@ KNOWN_XLA_GRADIENT_LIMITATIONS = {
     "exponential": (
         "tf.linalg.expm в шаге: обратный проход matrix_exponential/while "
         "требует tensor list фиксированного размера"
+    ),
+    "rosenbrock": (
+        "split-шаг population: динамические батч-оси скана дают "
+        "BroadcastTo с неизвестной формой (BroadcastGradientArgs под XLA); "
+        "используйте Trainer(jit_compile=False) или integration_mode="
+        "'network'"
     ),
 }
 
@@ -425,7 +437,7 @@ class TestJitCompile:
 
     @pytest.mark.parametrize(
         "integrator_name",
-        ["euler", "heun", "rk4", "rosenbrock", "imex", "adaptiverk", "exponential"],
+        ["euler", "heun", "rk4", "imex", "adaptiverk", "rosenbrock", "exponential"],
     )
     def test_jit_compile_integrators(self, integrator_name):
         integrators = {

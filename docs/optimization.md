@@ -707,7 +707,14 @@ gradient-прогонами на одном экземпляре сети — с
 - **Eager по умолчанию**: методы задач работают в eager TensorFlow;
   компилируемый режим (`compiled=True`) — опция, см. раздел
   «Компилируемый режим (tf.function)» выше;
-- **batch=1**: контракт NetworkRNN; прогоны и `predictive_intervals` —
+- **Batch сети B>1 (этап 2)**: `NetworkRNN` поддерживает произвольный
+  батч (состояния `[B, n]`, синапсы `[B, n_pre, n_post]`); один батч-прогон
+  эквивалентен B индивидуальным с общим протоколом (значения и градиенты).
+  Все слоты батча исполняют один и тот же протокол; `InputPopulation`
+  внутри полного скана не поддержан; split-шаги жёстких интеграторов
+  (`Rosenbrock`/`IMEX`/`Exponential` population step) — только batch=1.
+  Пакетная оценка кандидатов optimization-слоя по-прежнему послойная
+  (`evaluate_candidates`), не тензорный batch; `predictive_intervals` —
   по одному кандидату за раз;
 - **TF forward-AD против GradientTape в пределах одного NetworkRNN**:
   скан — закреплённый `tf.function` (`_scan_compiled`, см.

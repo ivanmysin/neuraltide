@@ -189,7 +189,10 @@ NetworkRNN(
   прямой прогон компилируется для всех встроенных интеграторов.
 
 **Методы**:
-- `call(t_sequence, inputs=None, initial_state=None) -> NetworkOutput`
+- `call(t_sequence, inputs=None, initial_state=None) -> NetworkOutput` —
+  поддерживается произвольный batch B ≥ 1 (состояния `[B, n]`, токи
+  `[B, n_post]`; один батч-прогон == B индивидуальным с общим протоколом;
+  `initial_state=None` broadcast'ит per-sample состояние на B)
 - `get_initial_state(batch_size=1) -> Tuple[StateList, StateList]`
 
 **Свойства**:
@@ -822,9 +825,13 @@ Trainer(
 - `jit_compile=True` оборачивает train step в `tf.function(
   jit_compile=True)` (XLA). Градиент под XLA не компилируется для
   интеграторов `AdaptiveRKIntegrator` и `ExponentialEulerIntegrator`
-  (InvalidArgumentError «fixed tensor list size») — прямой прогон
-  (`network(...)`, в т.ч. с `NetworkRNN(jit_compile=True)`) под XLA
-  работает для всех встроенных интеграторов.
+  (InvalidArgumentError «fixed tensor list size») и split-шага
+  `RosenbrockIntegrator` (BroadcastGradientArgs при динамических
+  батч-осях скана) — прямой прогон (`network(...)`, в т.ч. с
+  `NetworkRNN(jit_compile=True)`) под XLA работает для всех встроенных
+  интеграторов. `NetworkRNN(jit_compile=True)` не сочетайте с `Trainer`
+  по умолчанию (TensorList-градиент не пересекает границу XLA/TF) —
+  включайте `jit_compile` у обоих или ни у кого.
 
 **Методы**:
 - `fit(t_sequence, inputs=None, epochs, verbose=1) -> History`
@@ -852,6 +859,24 @@ class MSELoss:
 ```python
 MSELoss(target: Dict[str, TensorType])
 ```
+
+### AntiPhaseLoss
+
+```python
+class AntiPhaseLoss:
+```
+
+**Конструктор**:
+```python
+AntiPhaseLoss(pop_pairs, target_correlation=-1.0, correlation_weight=1.0,
+              activity_target=20.0, activity_weight=0.5,
+              transient_steps=0, eps=1e-8)
+```
+
+Корреляционный член — per-batch-item: Pearson по свёртке `[T·N]` внутри
+каждого слота батча, вклад усредняется по B (слоты не смешиваются; при
+B=1 тождественно прежней пуловой корреляции). Activity-член — mean rate
+per-item, усреднение по B.
 
 ### StabilityPenalty
 

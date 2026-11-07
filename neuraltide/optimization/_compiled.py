@@ -20,6 +20,7 @@ import tensorflow as tf
 import neuraltide.config
 from neuraltide.core.network import NetworkRNN
 from neuraltide.optimization._state import (
+    _broadcast_or_validate_init,
     _materialize_initial_state,
     _phi_gradient,
 )
@@ -104,7 +105,14 @@ class _CompiledCore:
             # x0-записи ParameterSpace подставляются поверх явного
             # начального состояния тем же материализатором, что в
             # eager-ветках (evaluate/residual идентичны
-            # value_and_gradient без ленты).
+            # value_and_gradient без ленты). Батч-семантика начального
+            # состояния — общая с eager: _broadcast_or_validate_init.
+            batch = tf.shape(t_sequence)[0]
+            init_pop, init_syn = _broadcast_or_validate_init(
+                (init_pop, init_syn),
+                batch,
+                what="compiled core initial_state",
+            )
             theta = space.unpack(phi)
             initial_state, _ = _materialize_initial_state(
                 network, space, theta, (init_pop, init_syn), experiment=experiment
@@ -115,6 +123,12 @@ class _CompiledCore:
             return loss, comps, residual
 
         def _grad_fn(phi, init_pop, init_syn):
+            batch = tf.shape(t_sequence)[0]
+            init_pop, init_syn = _broadcast_or_validate_init(
+                (init_pop, init_syn),
+                batch,
+                what="compiled core initial_state",
+            )
             with tf.GradientTape(persistent=True) as tape:
                 tape.watch(phi)
                 theta = space.unpack(phi)

@@ -49,8 +49,9 @@ class CompositeSynapse(SynapseModel):
         dt: float,
     ) -> Tuple[Dict[str, TensorType], StateList]:
         dtype = neuraltide.config.get_dtype()
-        total_I_syn = tf.zeros([1, self.n_post], dtype=dtype)
-        total_g_syn = tf.zeros([1, self.n_post], dtype=dtype)
+        batch = tf.shape(pre_firing_rate)[0]
+        total_I_syn = tf.zeros([batch, self.n_post], dtype=dtype)
+        total_g_syn = tf.zeros([batch, self.n_post], dtype=dtype)
 
         new_states = []
         state_idx = 0
@@ -102,8 +103,9 @@ class CompositeSynapse(SynapseModel):
         Compute total synaptic current as sum of all components.
         """
         dtype = neuraltide.config.get_dtype()
-        total_I_syn = tf.zeros([1, self.n_post], dtype=dtype)
-        total_g_syn = tf.zeros([1, self.n_post], dtype=dtype)
+        batch = tf.shape(pre_firing_rate)[0]
+        total_I_syn = tf.zeros([batch, self.n_post], dtype=dtype)
+        total_g_syn = tf.zeros([batch, self.n_post], dtype=dtype)
 
         state_idx = 0
 
@@ -169,7 +171,9 @@ class CompositeSynapse(SynapseModel):
                 )
             state_idx += n
         dtype = neuraltide.config.get_dtype()
-        return tf.zeros([self.n_pre, self.n_post], dtype=dtype)
+        # Fallback — per-sample форма с батч-осью (как у состояний синапсов).
+        batch = tf.shape(state[0])[0] if state else 1
+        return tf.zeros([batch, self.n_pre, self.n_post], dtype=dtype)
 
     def compute_current_state_vjp(
         self,

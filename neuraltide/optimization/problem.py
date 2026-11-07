@@ -99,6 +99,7 @@ from neuraltide.optimization._compiled import _CompiledCore
 from neuraltide.optimization._state import (
     InitialState,
     _TENSOR_KINDS,
+    _broadcast_or_validate_init,
     _materialize_initial_state,
     _phi_gradient,
     _x0_experiment,
@@ -463,6 +464,11 @@ class CalibrationProblem:
         initial_state, _ = _materialize_initial_state(
             self.network, self.parameter_space, theta, self.initial_state
         )
+        initial_state = _broadcast_or_validate_init(
+            initial_state,
+            tf.shape(self.t_sequence)[0],
+            what="CalibrationProblem",
+        )
         output = self.network(
             self.t_sequence,
             inputs=self.inputs,
@@ -617,6 +623,11 @@ class CalibrationProblem:
             initial_state, x0_map = _materialize_initial_state(
                 self.network, self.parameter_space, theta, self.initial_state
             )
+            initial_state = _broadcast_or_validate_init(
+                initial_state,
+                tf.shape(self.t_sequence)[0],
+                what="CalibrationProblem",
+            )
             output = self.network(
                 self.t_sequence,
                 inputs=self.inputs,
@@ -695,6 +706,11 @@ class CalibrationProblem:
                 )
             initial_state, _ = _materialize_initial_state(
                 self.network, self.parameter_space, theta, exp.initial_state
+            )
+            initial_state = _broadcast_or_validate_init(
+                initial_state,
+                tf.shape(exp.t_sequence)[0],
+                what=f"held-out experiment '{exp.name}'",
             )
             output = self.network(
                 exp.t_sequence, inputs=exp.inputs, initial_state=initial_state
@@ -1082,6 +1098,11 @@ class MultiExperimentProblem:
             theta,
             exp.initial_state,
             experiment=exp.name,
+        )
+        initial_state = _broadcast_or_validate_init(
+            initial_state,
+            tf.shape(exp.t_sequence)[0],
+            what=f"experiment '{exp.name}'",
         )
         output = self.network(
             exp.t_sequence, inputs=exp.inputs, initial_state=initial_state
