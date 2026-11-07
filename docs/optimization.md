@@ -702,6 +702,58 @@ forward-чувствительности (forward-AD несовместим с �
 gradient-прогонами на одном экземпляре сети — см. ограничения ниже);
 сценарии с частой сменой objective по месту.
 
+## Запуск на GPU
+
+Пакет полностью `tf.function`-совместим (этап 1): скан `NetworkRNN`
+исполняется через закреплённый граф с динамическими T и batch — один
+граф на любые длины протокола и размеры батча, ретрейсинга при смене
+размеров нет. На GPU дополнительных изменений кода не требуется.
+
+**Проверка окружения.** TensorFlow должен видеть устройство:
+
+```python
+import tensorflow as tf
+print(tf.config.list_physical_devices("GPU"))
+```
+
+Если список пуст — установлена сборка TF без CUDA-поддержки:
+переустановите по официальной инструкции
+(https://www.tensorflow.org/install/pip, `pip install tensorflow` или
+`tensorflow[and-cuda]` под вашу ОС/драйвер). Пакет сам размещает
+вычисления на GPU (placement по умолчанию TF); при нескольких
+устройствах явное размещение — `with tf.device("/GPU:0"): ...`.
+
+**dtype.** На GPU рекомендуется float32: float64 работает, но в 3–10 и
+больше раз медленнее. Тип задаётся до создания любых объектов:
+
+```python
+import neuraltide
+neuraltide.config.set_dtype(tf.float32)  # до построения сети/задач
+```
+
+**Рекомендуемая связка режимов.** `CalibrationProblem(...,
+compiled=True)` / `MultiExperimentProblem(..., compiled=True)` —
+компилируемое ядро прогона+градиента; `Trainer(jit_compile=True)` —
+XLA-поверх (проверено на TF 2.21: градиент под XLA не компилируется у
+`AdaptiveRKIntegrator`/`ExponentialEulerIntegrator`/split-`Rosenbrock`
+— снимите `jit_compile` для них, прямой прогон под XLA работает у всех);
+батч `B>1` в `NetworkRNN` и `vectorize=True` у многоэкспериментной
+задачи — параллелизм протоколов одним прогоном; чанкинг
+`chunk_length=L` для длинных временных рядов (память градиента O(L)).
+Сочетание `jit_compile` + чанкинг не валидировано — используйте одно из
+двого.
+
+**Память.** Рост памяти GPU по умолчанию — стандартные средства TF:
+`tf.config.experimental.set_memory_growth(device, True)` при
+необходимости совместного использования карты. OOM видеопамяти на
+длинном T: уменьшите `chunk_length`, размер батча, используйте
+`return_rates=False` для predict-only либо отключите `jit_compile`.
+
+**Проверка и замеры.** GPU smoke-тест: `pytest tests/unit/test_graph_mode.py
+-k gpu` (skip, если GPU нет). Бенчмарк режимов:
+`python benchmarks/g0_graph_mode.py` — штатные цифры CPU; на GPU
+перезапустите для своей машины.
+
 ## Чанкинг длинных протоколов (этап 4)
 
 Длинный горизонт T держит активации всех шагов для BPTT (память O(T)).
