@@ -312,6 +312,12 @@ class CalibrationProblem:
             документацию.
         held_out: опциональная последовательность Experiment —
             отложенные протоколы только для validate().
+        chunk_length: None (default) — целый прогон одним сканом; иначе
+            чанкованный прогон сегментами длины chunk_length с памятью
+            градиента O(chunk_length) (см. NetworkRNN.call). Несовместим с
+            grad_mode='adjoint' (adjoint имеет собственную память O(1)).
+        chunk_grad: 'checkpointed' (default, точный BPTT с пересчётом
+            сегментов) | 'truncated' (дёшево, градиент смещён).
         compiled: если True, value_and_gradient / evaluate / residual
             выполняются через скомпилированное tf.function-ядро
             (этап 1b): граф прогона+ленты+градиента трассируется один
@@ -342,11 +348,28 @@ class CalibrationProblem:
         grad_mode: str = "assign",
         held_out: Optional[Sequence[Experiment]] = None,
         compiled: bool = False,
+        chunk_length: Optional[int] = None,
+        chunk_grad: str = "checkpointed",
     ):
         if grad_mode not in _GRAD_MODES:
             raise ValueError(
                 f"CalibrationProblem: unknown grad_mode '{grad_mode}'. "
                 f"Available modes: {list(_GRAD_MODES)}."
+            )
+        if grad_mode == "adjoint" and chunk_length is not None:
+            raise ValueError(
+                "CalibrationProblem: chunk_length с grad_mode='adjoint' "
+                "не поддержан (adjoint имеет собственную память O(1); "
+                "смешение не реализовано). Используйте grad_mode='bptt' "
+                "или chunk_length=None."
+            )
+        if chunk_length is not None and chunk_grad not in (
+            "checkpointed",
+            "truncated",
+        ):
+            raise ValueError(
+                f"CalibrationProblem: unknown chunk_grad '{chunk_grad}'; "
+                "expected 'checkpointed' or 'truncated'."
             )
         if objective is not None and not callable(objective):
             raise TypeError(
@@ -363,9 +386,12 @@ class CalibrationProblem:
         self.grad_mode = grad_mode
         self.held_out: List[Experiment] = list(held_out or [])
         self.compiled = bool(compiled)
+        self.chunk_length = chunk_length
+        self.chunk_grad = chunk_grad
         # Кэш compiled-ядер: ключ (experiment, id(objective), id(t),
-        # id(inputs)) — см. _get_compiled_core. Начальное состояние
-        # протокола — аргумент ядра, материализуется при каждом вызове.
+        # id(inputs), chunk_length, chunk_grad) — см. _get_compiled_core.
+        # Начальное состояние протокола — аргумент ядра, материализуется
+        # при каждом вызове.
         self._core_cache: Dict[Any, _CompiledCore] = {}
 
         self._counters: Dict[str, Any] = {
@@ -476,6 +502,8 @@ class CalibrationProblem:
             self.t_sequence,
             inputs=self.inputs,
             initial_state=initial_state,
+            chunk_length=self.chunk_length,
+            chunk_grad=self.chunk_grad,
         )
         return phi_t, output
 
@@ -511,7 +539,14 @@ class CalibrationProblem:
         оно аргумент ядра и материализуется снаружи при каждом вызове.
         Мутирование objective по месту ядром не отслеживается.
         """
-        key = (experiment, id(objective), id(t_sequence), id(inputs))
+        key = (
+            experiment,
+            id(objective),
+            id(t_sequence),
+            id(inputs),
+            self.chunk_length,
+            self.chunk_grad,
+        )
         core = self._core_cache.get(key)
         if core is None:
             core = _CompiledCore(
@@ -522,6 +557,8 @@ class CalibrationProblem:
                 objective,
                 experiment_name=experiment,
                 grad_mode=self.grad_mode,
+                chunk_length=self.chunk_length,
+                chunk_grad=self.chunk_grad,
             )
             core.build()
             self._core_cache[key] = core
@@ -635,6 +672,8 @@ class CalibrationProblem:
                 self.t_sequence,
                 inputs=self.inputs,
                 initial_state=initial_state,
+                chunk_length=self.chunk_length,
+                chunk_grad=self.chunk_grad,
             )
             loss_t = self.objective(output, self.network)
         grad_t = _phi_gradient(
@@ -716,7 +755,11 @@ class CalibrationProblem:
                 what=f"held-out experiment '{exp.name}'",
             )
             output = self.network(
-                exp.t_sequence, inputs=exp.inputs, initial_state=initial_state
+                exp.t_sequence,
+                inputs=exp.inputs,
+                initial_state=initial_state,
+                chunk_length=self.chunk_length,
+                chunk_grad=self.chunk_grad,
             )
             results[exp.name] = float(objective(output, self.network))
             self._counters["n_forward"] += 1
@@ -738,6 +781,8 @@ class CalibrationProblem:
             grad_mode=self.grad_mode,
             held_out=self.held_out,
             compiled=self.compiled,
+            chunk_length=self.chunk_length,
+            chunk_grad=self.chunk_grad,
         )
         kwargs.update(overrides)
         view = CalibrationProblem(**kwargs)
@@ -996,6 +1041,9 @@ class MultiExperimentProblem:
             _VectorizedObjective.per_step_loss поднимает NotImplementedError).
             compiled=True + vectorize=True — один ядро на весь батч
             (кэш по id objective-обёртки и протоколов экспериментов).
+        chunk_length / chunk_grad: чанкинг каждого прогона (см.
+            CalibrationProblem и NetworkRNN.call): векторный батч чанкуется
+            по времени в каждом слоте; несовместим с grad_mode='adjoint'.
             stability-штраф: stability_loss в батч-режиме — агрегат по
             всем слотам, при stability_penalty_weight > 0 его градиент
             смешивает слоты (кросс-слотовая утечка) — используйте
@@ -1012,11 +1060,28 @@ class MultiExperimentProblem:
         held_out: Optional[Sequence[Experiment]] = None,
         compiled: bool = False,
         vectorize: bool = False,
+        chunk_length: Optional[int] = None,
+        chunk_grad: str = "checkpointed",
     ):
         if grad_mode not in _GRAD_MODES:
             raise ValueError(
                 f"MultiExperimentProblem: unknown grad_mode '{grad_mode}'. "
                 f"Available modes: {list(_GRAD_MODES)}."
+            )
+        if grad_mode == "adjoint" and chunk_length is not None:
+            raise ValueError(
+                "MultiExperimentProblem: chunk_length с grad_method="
+                "'adjoint' не поддержан (adjoint имеет собственную память "
+                "O(1); смешение не реализовано). Используйте grad_mode="
+                "'bptt' или chunk_length=None."
+            )
+        if chunk_length is not None and chunk_grad not in (
+            "checkpointed",
+            "truncated",
+        ):
+            raise ValueError(
+                f"MultiExperimentProblem: unknown chunk_grad '{chunk_grad}'; "
+                "expected 'checkpointed' or 'truncated'."
             )
         self.network = network
         self.parameter_space = parameter_space
@@ -1089,6 +1154,8 @@ class MultiExperimentProblem:
         # CalibrationProblem._get_compiled_core. Начальное состояние
         # эксперимента — аргумент ядра, материализуется при каждом вызове.
         self._core_cache: Dict[Any, _CompiledCore] = {}
+        self.chunk_length = chunk_length
+        self.chunk_grad = chunk_grad
         self.vectorize = bool(vectorize)
         if self.vectorize:
             # Одинаковая длина T (статическая проверка; динамические оси
@@ -1182,6 +1249,8 @@ class MultiExperimentProblem:
             tuple(
                 id(e.inputs) if e.inputs is not None else None for e in self.experiments
             ),
+            self.chunk_length,
+            self.chunk_grad,
         )
         core = self._vcore_cache.get(key)
         if core is None:
@@ -1196,6 +1265,8 @@ class MultiExperimentProblem:
                 x0_substitute=_make_vectorized_x0_substitute(
                     [e.name for e in self.experiments]
                 ),
+                chunk_length=self.chunk_length,
+                chunk_grad=self.chunk_grad,
             )
             core.build()
             self._vcore_cache[key] = core
@@ -1264,7 +1335,13 @@ class MultiExperimentProblem:
                     base_states,
                     names,
                 )
-                output = self.network(t_b, inputs=inputs_b, initial_state=initial_state)
+                output = self.network(
+                    t_b,
+                    inputs=inputs_b,
+                    initial_state=initial_state,
+                    chunk_length=self.chunk_length,
+                    chunk_grad=self.chunk_grad,
+                )
                 loss_t = vobj(output, self.network)
             grad_t = _phi_gradient(
                 self.parameter_space, self.grad_mode, tape, loss_t, phi_t, x0_map
@@ -1280,7 +1357,13 @@ class MultiExperimentProblem:
                 base_states,
                 names,
             )
-            output = self.network(t_b, inputs=inputs_b, initial_state=initial_state)
+            output = self.network(
+                t_b,
+                inputs=inputs_b,
+                initial_state=initial_state,
+                chunk_length=self.chunk_length,
+                chunk_grad=self.chunk_grad,
+            )
             loss_t = vobj(output, self.network)
             grad_t = None
         comps = vobj.components(output, self.network)
@@ -1320,7 +1403,14 @@ class MultiExperimentProblem:
     def _get_compiled_core(self, exp: Experiment) -> _CompiledCore:
         """Ленивое получение ядра эксперимента из кэша."""
 
-        key = (exp.name, id(exp.objective), id(exp.t_sequence), id(exp.inputs))
+        key = (
+            exp.name,
+            id(exp.objective),
+            id(exp.t_sequence),
+            id(exp.inputs),
+            self.chunk_length,
+            self.chunk_grad,
+        )
         core = self._core_cache.get(key)
         if core is None:
             core = _CompiledCore(
@@ -1331,6 +1421,8 @@ class MultiExperimentProblem:
                 exp.objective,
                 experiment_name=exp.name,
                 grad_mode=self.grad_mode,
+                chunk_length=self.chunk_length,
+                chunk_grad=self.chunk_grad,
             )
             core.build()
             self._core_cache[key] = core
@@ -1444,7 +1536,11 @@ class MultiExperimentProblem:
             what=f"experiment '{exp.name}'",
         )
         output = self.network(
-            exp.t_sequence, inputs=exp.inputs, initial_state=initial_state
+            exp.t_sequence,
+            inputs=exp.inputs,
+            initial_state=initial_state,
+            chunk_length=self.chunk_length,
+            chunk_grad=self.chunk_grad,
         )
         return output, x0_map
 
@@ -1503,7 +1599,13 @@ class MultiExperimentProblem:
                 base_states,
                 names,
             )
-            output = self.network(t_b, inputs=inputs_b, initial_state=initial_state)
+            output = self.network(
+                t_b,
+                inputs=inputs_b,
+                initial_state=initial_state,
+                chunk_length=self.chunk_length,
+                chunk_grad=self.chunk_grad,
+            )
             self._counters["n_forward"] += 1
             names = [e.name for e in self.experiments]
             try:
@@ -1772,7 +1874,13 @@ class MultiExperimentProblem:
                 base_states,
                 names,
             )
-            output = self.network(t_b, inputs=inputs_b, initial_state=initial_state)
+            output = self.network(
+                t_b,
+                inputs=inputs_b,
+                initial_state=initial_state,
+                chunk_length=self.chunk_length,
+                chunk_grad=self.chunk_grad,
+            )
             for i, exp in enumerate(self.held_out):
                 results[exp.name] = float(
                     exp.objective(_VectorizedObjective._slice(output, i), self.network)

@@ -44,6 +44,9 @@ class _CompiledCore:
         experiment_name: имя эксперимента для exp-specific x0 (None —
             внеэкспериментный контекст).
         grad_mode: 'assign' | 'chain' — см. _phi_gradient.
+        chunk_length / chunk_grad: параметры чанкинга прогона (см.
+            NetworkRNN.call); входят в семантику ядра — владелец
+            включает их в ключ кэша.
         x0_substitute: опциональная замена материализатора x0 сигнатуры
             (network, space, theta, init_pop, init_syn) ->
             (initial_state, x0_map). По умолчанию — одноэкспериментный
@@ -71,6 +74,8 @@ class _CompiledCore:
         experiment_name: Optional[str] = None,
         grad_mode: str = "chain",
         x0_substitute=None,
+        chunk_length: Optional[int] = None,
+        chunk_grad: str = "checkpointed",
     ):
         self.network = network
         self.parameter_space = parameter_space
@@ -80,6 +85,8 @@ class _CompiledCore:
         self.experiment_name = experiment_name
         self.grad_mode = grad_mode
         self.x0_substitute = x0_substitute
+        self.chunk_length = chunk_length
+        self.chunk_grad = chunk_grad
         self.eval_core = None
         self.grad_core = None
 
@@ -95,6 +102,8 @@ class _CompiledCore:
         experiment = self.experiment_name
         grad_mode = self.grad_mode
         x0_substitute = self.x0_substitute
+        chunk_length = self.chunk_length
+        chunk_grad = self.chunk_grad
         dtype = neuraltide.config.get_dtype()
 
         def _materialize(theta, init_pop, init_syn):
@@ -131,7 +140,13 @@ class _CompiledCore:
             )
             theta = space.unpack(phi)
             initial_state, _ = _materialize(theta, init_pop, init_syn)
-            output = network(t_sequence, inputs=inputs, initial_state=initial_state)
+            output = network(
+                t_sequence,
+                inputs=inputs,
+                initial_state=initial_state,
+                chunk_length=chunk_length,
+                chunk_grad=chunk_grad,
+            )
             loss = objective(output, network)
             comps, residual = _comps_and_residual(output)
             return loss, comps, residual
@@ -147,7 +162,13 @@ class _CompiledCore:
                 tape.watch(phi)
                 theta = space.unpack(phi)
                 initial_state, x0_map = _materialize(theta, init_pop, init_syn)
-                output = network(t_sequence, inputs=inputs, initial_state=initial_state)
+                output = network(
+                    t_sequence,
+                    inputs=inputs,
+                    initial_state=initial_state,
+                    chunk_length=chunk_length,
+                    chunk_grad=chunk_grad,
+                )
                 loss = objective(output, network)
                 comps, residual = _comps_and_residual(output)
             grad = _phi_gradient(space, grad_mode, tape, loss, phi, x0_map)

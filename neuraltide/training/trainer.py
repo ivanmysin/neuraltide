@@ -51,6 +51,13 @@ class Trainer:
             Градиент под XLA не компилируется для интеграторов
             AdaptiveRK/ExponentialEuler — ошибка при первом train_step
             (см. ограничения NetworkRNN.jit_compile).
+        chunk_length: None (default) — целый прогон одним сканом; иначе
+            чанкованный прогон сегментами длины chunk_length с памятью
+            градиента O(chunk_length) (см. NetworkRNN.call). Несовместим
+            с grad_method='adjoint' (ValueError: adjoint имеет собственную
+            память O(1)).
+        chunk_grad: 'checkpointed' (default, точный BPTT с пересчётом
+            сегментов) | 'truncated' (дёшево, градиент смещён).
     """
 
     def __init__(
@@ -62,6 +69,8 @@ class Trainer:
         grad_clip_norm: float = 0.0,
         run_eagerly: bool = False,
         jit_compile: bool = False,
+        chunk_length: Optional[int] = None,
+        chunk_grad: str = "checkpointed",
     ):
         if run_eagerly and jit_compile:
             raise ValueError(
@@ -75,6 +84,21 @@ class Trainer:
                 "не проверен. Используйте jit_compile=False "
                 "или grad_method='bptt'."
             )
+        if grad_method == "adjoint" and chunk_length is not None:
+            raise ValueError(
+                "chunk_length с grad_method='adjoint' не поддержан: "
+                "adjoint имеет собственную память O(1) и смешение с "
+                "чанкингом не реализовано. Используйте grad_method='bptt' "
+                "или chunk_length=None."
+            )
+        if chunk_length is not None and chunk_grad not in (
+            "checkpointed",
+            "truncated",
+        ):
+            raise ValueError(
+                f"Unknown chunk_grad '{chunk_grad}'; expected "
+                "'checkpointed' or 'truncated'."
+            )
         self.network = network
         self.loss_fn = loss_fn
         self.optimizer = optimizer
@@ -82,6 +106,8 @@ class Trainer:
         self.grad_clip_norm = grad_clip_norm
         self.run_eagerly = run_eagerly
         self.jit_compile = jit_compile
+        self.chunk_length = chunk_length
+        self.chunk_grad = chunk_grad
         self._adjoint_solver = None
 
         if grad_method == "adjoint" and AdjointSolver is None:
@@ -140,7 +166,12 @@ class Trainer:
     ) -> Dict[str, Any]:
         with tf.GradientTape() as tape:
             output = self.network(
-                t_sequence, inputs=inputs, training=True, initial_state=initial_state
+                t_sequence,
+                inputs=inputs,
+                training=True,
+                initial_state=initial_state,
+                chunk_length=self.chunk_length,
+                chunk_grad=self.chunk_grad,
             )
             loss = self.loss_fn(output, self.network)
 
@@ -230,9 +261,25 @@ class Trainer:
         self._last_history = history
         return history
 
-    def predict(self, t_sequence: TensorType, inputs: TensorType) -> NetworkOutput:
-        """Предсказание без обучения."""
-        return self.network(t_sequence, inputs=inputs, training=False)
+    def predict(
+        self,
+        t_sequence: TensorType,
+        inputs: TensorType,
+        chunk_length: Optional[int] = None,
+        chunk_grad: str = "checkpointed",
+    ) -> NetworkOutput:
+        """Предсказание без обучения.
+
+        chunk_length: None — целый прогон; иначе чанкованный прогон с
+        сегментами длины chunk_length (см. NetworkRNN.call).
+        """
+        return self.network(
+            t_sequence,
+            inputs=inputs,
+            training=False,
+            chunk_length=chunk_length,
+            chunk_grad=chunk_grad,
+        )
 
     def predict_with_state(
         self,
@@ -240,6 +287,8 @@ class Trainer:
         inputs: TensorType,
         initial_state: Optional[Tuple[StateList, StateList]] = None,
         return_final_state: bool = False,
+        chunk_length: Optional[int] = None,
+        chunk_grad: str = "checkpointed",
     ) -> NetworkOutput:
         """
         Предсказание с заданным начальным состоянием.
@@ -248,6 +297,7 @@ class Trainer:
             t_sequence: tf.Tensor shape [batch, T, 1] — временная последовательность.
             inputs: tf.Tensor shape [batch, T, total_input_units] — входы.
             initial_state: начальное состояние (pop_states, syn_states).
+            chunk_length / chunk_grad: чанкинг прогона (см. NetworkRNN.call).
 
         Returns:
             NetworkOutput с firing_rates.
@@ -257,6 +307,8 @@ class Trainer:
             inputs=inputs,
             initial_state=initial_state,
             training=False,
+            chunk_length=chunk_length,
+            chunk_grad=chunk_grad,
         )
 
     def save_experiment(self, path: str) -> None:

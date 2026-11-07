@@ -955,6 +955,9 @@ class NetworkRNN(tf.keras.layers.Layer):
         inputs: Optional[TensorType] = None,
         initial_state: Optional[Tuple[StateList, StateList]] = None,
         training: Optional[bool] = None,
+        chunk_length: Optional[int] = None,
+        chunk_grad: str = "checkpointed",
+        return_rates: bool = True,
     ) -> NetworkOutput:
         """
         Симулирует сеть на протяжении временно́й последовательности.
@@ -973,6 +976,36 @@ class NetworkRNN(tf.keras.layers.Layer):
         батча исполняют один и тот же протокол (t_sequence/inputs одни
         на всех). InputPopulation внутри полного скана не поддержан.
 
+        Чанкинг длинных протоколов (chunk_length != None) — этап 4:
+        горизонт T разбивается на ceil(T/chunk_length) сегментов, каждый
+        прогоняется ПЕРЕИСПОЛЬЗОВАНИЕМ того же self._scan_compiled на срезе
+        [kL:(k+1)L] с начальным состоянием = carry (final_state предыдущего
+        сегмента); последний сегмент может быть короче L. Прямой проход
+        побайтово совпадает с целым прогоном; память под активации
+        градиента — O(L) вместо O(T). Режимы градиента (прозрачны для
+        внешней ленты):
+          - 'checkpointed' (default): каждый сегмент обёрнут в
+            tf.custom_gradient — граничные carry сохраняются, активации
+            сегмента пересчитываются при backward (точный BPTT; стоимость
+            ~2× прямого прохода на сегмент). Реализация — ручной
+            custom_gradient (tf.recompute_grad на этой конфигурации TF
+            теряет градиенты по переменным сети внутри вложенного
+            tf.function).
+          - 'truncated': carry между сегментами обрывается
+            tf.stop_gradient — дёшево, но градиент смещён (вклад ранних
+            сегментов через динамику теряется).
+        Чанкинг требует СТАТИЧЕСКОЙ длины T. stability_loss чанкованного
+        прогона — взвешенное среднее сегментных итогов
+        sum(stab_k·L_k)/T; при stability_penalty_weight=0 (default)
+        совпадает с нечанкованным ровно; при >0 результат зависит от
+        разбиения (в отличие от целого пути, который берёт накопленный
+        штраф последнего шага) — используйте чанкинг с weight=0.
+        Градиент по inputs/t_sequence в чанкованном пути не вычисляется
+        (сегментные срезы захвачены замыканием); целый путь его даёт.
+        В пакетных потоках входы — константы, различие не проявляется.
+        return_rates=False отдаёт пустой firing_rates
+        (predict-only режим, только final_state).
+
         Args:
             t_sequence: tf.Tensor shape [batch, T, 1] или [batch, T]
                 Временная последовательность в мс.
@@ -987,9 +1020,45 @@ class NetworkRNN(tf.keras.layers.Layer):
                 моделей). Если None, используется per-sample начальное
                 состояние популяций/синапсов сети, broadcast'нутое на B.
             training: игнорируется (симуляция не зависит от фазы обучения).
+            chunk_length: None (default) — целый прогон одним сканом;
+                иначе длина временного сегмента (положительный int).
+            chunk_grad: 'checkpointed' (default) | 'truncated' — режим
+                градиента между сегментами (см. раздел про чанкинг).
+            return_rates: False — не конкатенировать firing_rates
+                (пустой dict; predict-only, экономия памяти).
 
         Returns:
             NetworkOutput с firing_rates, final_state и stability_loss.
+        """
+        if chunk_length is not None:
+            return self._call_chunked(
+                t_sequence,
+                inputs=inputs,
+                initial_state=initial_state,
+                chunk_length=chunk_length,
+                chunk_grad=chunk_grad,
+                return_rates=return_rates,
+            )
+        t_sequence, inputs, init_pop, init_syn = self._normalized_call_args(
+            t_sequence, inputs, initial_state
+        )
+        all_rates, stability_loss, final_pop, final_syn, _, _ = self._scan_compiled(
+            t_sequence, init_pop, init_syn, inputs
+        )
+
+        return NetworkOutput(
+            firing_rates=all_rates,
+            stability_loss=stability_loss,
+            final_state=(final_pop, final_syn),
+        )
+
+    def _normalized_call_args(self, t_sequence, inputs, initial_state):
+        """Нормализация аргументов call: ранги, dtype, материализация
+        inputs=None и initial_state=None (broadcast на батч).
+
+        Единый для целого и чанкованного путей (одинаковый порядок ops —
+        побитово одинаковые значения). Возвращает
+        (t_sequence, inputs, init_pop, init_syn).
         """
         if t_sequence.shape.rank == 2:
             t_sequence = t_sequence[:, :, tf.newaxis]
@@ -1095,15 +1164,156 @@ class NetworkRNN(tf.keras.layers.Layer):
                     )
             init_pop = tuple(init_pop)
             init_syn = tuple(init_syn)
+        return t_sequence, inputs, init_pop, init_syn
 
-        all_rates, stability_loss, final_pop, final_syn, _, _ = self._scan_compiled(
-            t_sequence, init_pop, init_syn, inputs
+    def _checkpointed_segment(self, t_k, inputs_k, carry_pop, carry_syn):
+        """Сегментный прогон с checkpointed-градиентом (tf.custom_gradient).
+
+        Прямой проход — один вызов скана; при backward сегмент
+        пересчитывается под внутренней лентой, градиент собирается через
+        скаляр-заместитель surr = Σ stop_gradient(dy)·out (output_gradients-
+        семантика). Градиенты по carry-входам и по переменным сети
+        (передаются TF через variables=) возвращаются точно — эквивалент
+        полному BPTT с памятью O(L) на сегмент.
+
+        tf.recompute_grad здесь не используется: на этой конфигурации TF
+        он теряет градиенты по переменным сети внутри вложенного
+        tf.function (проверено зондом; см. value_and_gradient_checkpointed
+        в optimization/sensitivities.py — там та же мотивация fallback).
+
+        Returns:
+            Плоский кортеж: (rates популяций в кэшированном порядке...,
+            stability_loss, new_pop..., new_syn...).
+        """
+        n_pop = len(carry_pop)
+        n_syn = len(carry_syn)
+        pop_names = self._graph.dynamic_population_names
+        scan = self._scan_compiled
+
+        @tf.custom_gradient
+        def _seg(*flat):
+            carry_in = flat[: n_pop + n_syn]
+            rates, stab, fp, fs, _, _ = scan(
+                t_k,
+                tuple(carry_in[:n_pop]),
+                tuple(carry_in[n_pop:]),
+                inputs_k,
+            )
+            outs = (
+                tuple(rates[name] for name in pop_names)
+                + (stab,)
+                + tuple(fp)
+                + tuple(fs)
+            )
+
+            def _grad(*dys, variables=None):
+                with tf.GradientTape(persistent=True) as inner:
+                    inner.watch(carry_in)
+                    rates2, stab2, fp2, fs2, _, _ = scan(
+                        t_k,
+                        tuple(carry_in[:n_pop]),
+                        tuple(carry_in[n_pop:]),
+                        inputs_k,
+                    )
+                    outs2 = (
+                        tuple(rates2[name] for name in pop_names)
+                        + (stab2,)
+                        + tuple(fp2)
+                        + tuple(fs2)
+                    )
+                    surr = tf.zeros((), dtype=self._scan_dtype)
+                    for out_t, dy in zip(outs2, dys):
+                        if dy is None:
+                            continue
+                        surr = surr + tf.reduce_sum(
+                            out_t * tf.stop_gradient(tf.cast(dy, out_t.dtype))
+                        )
+                dinputs = inner.gradient(surr, list(carry_in))
+                dvars = inner.gradient(surr, list(variables)) if variables else []
+                del inner
+                return tuple(dinputs), dvars
+
+            return outs, _grad
+
+        return _seg(*(tuple(carry_pop) + tuple(carry_syn)))
+
+    def _call_chunked(
+        self,
+        t_sequence,
+        inputs=None,
+        initial_state=None,
+        chunk_length=None,
+        chunk_grad="checkpointed",
+        return_rates=True,
+    ):
+        """Чанкованный прогон: разбиение на сегменты + carry (см. call)."""
+        if not isinstance(chunk_length, int) or isinstance(chunk_length, bool):
+            raise ValueError(
+                f"chunk_length must be a positive int or None, got {chunk_length!r}."
+            )
+        if chunk_length < 1:
+            raise ValueError(
+                f"chunk_length must be a positive int, got {chunk_length}."
+            )
+        if chunk_grad not in ("checkpointed", "truncated"):
+            raise ValueError(
+                f"Unknown chunk_grad '{chunk_grad}'; expected "
+                "'checkpointed' or 'truncated'."
+            )
+        if t_sequence.shape.rank == 2:
+            t_sequence = t_sequence[:, :, tf.newaxis]
+        t_static = t_sequence.shape[1]
+        if t_static is None:
+            raise ValueError(
+                "Chunking requires a statically known time length T "
+                "(t_sequence.shape[1]); got a dynamic dimension. "
+                "Materialize the protocol with a concrete T."
+            )
+        T = int(t_static)
+        if T < 1:
+            raise ValueError(f"chunking requires T >= 1, got {T}.")
+
+        t_sequence, inputs, init_pop, init_syn = self._normalized_call_args(
+            t_sequence, inputs, initial_state
         )
-
+        pop_names = self._graph.dynamic_population_names
+        n_seg = -(-T // chunk_length)
+        carry_pop, carry_syn = init_pop, init_syn
+        rates_parts: List[Dict[str, TensorType]] = []
+        stab_weighted = tf.zeros((), dtype=self._scan_dtype)
+        for k in range(n_seg):
+            s = k * chunk_length
+            e = min(T, s + chunk_length)
+            t_k = t_sequence[:, s:e]
+            inputs_k = inputs[:, s:e]
+            if chunk_grad == "truncated":
+                carry_pop = tuple(tf.stop_gradient(t) for t in carry_pop)
+                carry_syn = tuple(tf.stop_gradient(t) for t in carry_syn)
+                rates_k, stab_k, fp, fs, _, _ = self._scan_compiled(
+                    t_k, carry_pop, carry_syn, inputs_k
+                )
+            else:
+                flat = self._checkpointed_segment(t_k, inputs_k, carry_pop, carry_syn)
+                n_rates = len(pop_names)
+                rates_k = {name: flat[i] for i, name in enumerate(pop_names)}
+                stab_k = flat[n_rates]
+                fp = tuple(flat[n_rates + 1 : n_rates + 1 + len(carry_pop)])
+                fs = tuple(flat[n_rates + 1 + len(carry_pop) :])
+            rates_parts.append(rates_k)
+            stab_weighted = stab_weighted + stab_k * float(e - s)
+            carry_pop, carry_syn = fp, fs
+        stability_loss = stab_weighted / float(T)
+        if return_rates:
+            firing_rates = {
+                name: tf.concat([part[name] for part in rates_parts], axis=1)
+                for name in pop_names
+            }
+        else:
+            firing_rates = {}
         return NetworkOutput(
-            firing_rates=all_rates,
+            firing_rates=firing_rates,
             stability_loss=stability_loss,
-            final_state=(final_pop, final_syn),
+            final_state=(carry_pop, carry_syn),
         )
 
     @property

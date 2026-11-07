@@ -192,7 +192,12 @@ NetworkRNN(
 - `call(t_sequence, inputs=None, initial_state=None) -> NetworkOutput` —
   поддерживается произвольный batch B ≥ 1 (состояния `[B, n]`, токи
   `[B, n_post]`; один батч-прогон == B индивидуальным с общим протоколом;
-  `initial_state=None` broadcast'ит per-sample состояние на B)
+  `initial_state=None` broadcast'ит per-sample состояние на B);
+  опциональный чанкинг: `chunk_length` (None — целый прогон; иначе
+  сегменты длины chunk_length, carry = final_state, память градиента
+  O(chunk_length)), `chunk_grad` ('checkpointed' — точный BPTT с
+  пересчётом сегментов | 'truncated' — stop_gradient, дёшево, смещён),
+  `return_rates` (False — predict-only, пустой firing_rates)
 - `get_initial_state(batch_size=1) -> Tuple[StateList, StateList]`
 
 **Свойства**:
@@ -815,6 +820,8 @@ Trainer(
     grad_clip_norm: float = 0.0,
     run_eagerly: bool = False,
     jit_compile: bool = False,
+    chunk_length: Optional[int] = None,   # чанкинг прогона (память O(L))
+    chunk_grad: str = "checkpointed",     # "checkpointed" | "truncated"
 )
 ```
 
@@ -1096,6 +1103,8 @@ CalibrationProblem(
     grad_mode: str = "assign",              # "assign" | "chain"
     held_out: Optional[Sequence[Experiment]] = None,
     compiled: bool = False,
+    chunk_length: Optional[int] = None,     # чанкинг прогона (память O(L))
+    chunk_grad: str = "checkpointed",       # "checkpointed" | "truncated"
 )
 ```
 
@@ -1239,7 +1248,7 @@ class MultiExperimentProblem:
     # residual — конкатенация, компоненты с префиксом '{name}/'
     def __init__(self, network, parameter_space, experiments,
                  grad_mode="assign", held_out=None, compiled=False,
-                 vectorize=False): ...
+                 vectorize=False, chunk_length=None, chunk_grad="checkpointed"): ...
     # compiled=True: отдельное скомпилированное ядро на обучающий
     # эксперимент (см. CalibrationProblem), суммы потерь/градиентов —
     # eager-сложение снаружи; simulate/validate — eager в обоих режимах
