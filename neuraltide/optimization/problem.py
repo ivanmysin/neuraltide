@@ -100,6 +100,9 @@ from neuraltide.optimization._state import (
     InitialState,
     _TENSOR_KINDS,
     _broadcast_or_validate_init,
+    _concat_base_states,
+    _make_vectorized_x0_substitute,
+    _materialize_batched_initial_state,
     _materialize_initial_state,
     _phi_gradient,
     _x0_experiment,
@@ -827,6 +830,100 @@ class CalibrationProblem:
 
 
 # ---------------------------------------------------------------------------
+# _VectorizedObjective — objective-обёртка векторного режима MultiExperiment
+# ---------------------------------------------------------------------------
+
+
+class _VectorizedObjective:
+    """
+    Objective-обёртка векторного режима MultiExperimentProblem: батч-выход
+    сети нарезается по слотам, каждый под-объектив получает срез своего
+    эксперимента.
+
+    Семантика потерь — СРЕДНЕЕ по экспериментам (mean_e), в отличие от
+    циклового режима (сумма): loss_vec = (1/E)·Σ_e loss_e. Градиент по
+    общим параметрам — среднее градиентов (эквивалентно весам 1/E в
+    цикловом режиме).
+
+    Args:
+        experiments: обучающие Experiment (порядок = порядок слотов батча).
+        network: NetworkRNN (прокидывается в под-объективы).
+
+    Методы:
+        __call__(output, model) -> mean_e objective_e(slice_e);
+        components(output, model) -> {'{name}/{k}': v};
+        residual(output) -> concat_e residual_e(slice_e); если хотя бы у
+            одного под-объектива нет residual — has_residual=False и
+            residual() поднимает TypeError (как цикловой режим);
+        per_step_loss — НЕ поддержан (adjoint несовместим с векторным
+            режимом): поднимает NotImplementedError.
+
+    Внимание: stability_loss в срезах — батч-агрегат (общий для всех
+    слотов): при stability_penalty_weight > 0 градиент штрафа смешивает
+    слоты батча (кросс-слотовая утечка). Используйте vectorize=True с
+    stability_penalty_weight=0 (default).
+    """
+
+    def __init__(self, experiments, network):
+        self.experiments = list(experiments)
+        self.network = network
+        self._residual_fns = [
+            getattr(e.objective, "residual", None) for e in self.experiments
+        ]
+        self.has_residual = all(fn is not None for fn in self._residual_fns)
+
+    @staticmethod
+    def _slice(output: NetworkOutput, slot: int) -> NetworkOutput:
+        """Срез слота батча как отдельный NetworkOutput."""
+        return NetworkOutput(
+            firing_rates={
+                k: v[slot : slot + 1] for k, v in output.firing_rates.items()
+            },
+            stability_loss=output.stability_loss,
+            final_state=(
+                tuple(t[slot : slot + 1] for t in output.final_state[0]),
+                tuple(t[slot : slot + 1] for t in output.final_state[1]),
+            ),
+        )
+
+    def __call__(self, output, model):
+        n = len(self.experiments)
+        total = None
+        for i, exp in enumerate(self.experiments):
+            loss_e = exp.objective(self._slice(output, i), model)
+            total = loss_e if total is None else total + loss_e
+        return total / float(n)
+
+    def components(self, output, model):
+        comps = {}
+        for i, exp in enumerate(self.experiments):
+            fn = getattr(exp.objective, "components", None)
+            if fn is None:
+                continue
+            for k, v in fn(self._slice(output, i), model).items():
+                comps[f"{exp.name}/{k}"] = v
+        return comps
+
+    def residual(self, output):
+        if not self.has_residual:
+            raise TypeError(
+                "MultiExperimentProblem (vectorize=True): objective "
+                "не предоставляет residual(predictions)."
+            )
+        return tf.concat(
+            [fn(self._slice(output, i)) for i, fn in enumerate(self._residual_fns)],
+            axis=0,
+        )
+
+    def per_step_loss(self, *args, **kwargs):
+        raise NotImplementedError(
+            "Векторный режим MultiExperimentProblem (vectorize=True) "
+            "несовместим с adjoint-методом: per-step разложения потерь "
+            "по батч-срезам нет."
+        )
+
+
+# ---------------------------------------------------------------------------
 # MultiExperimentProblem
 # ---------------------------------------------------------------------------
 
@@ -878,6 +975,31 @@ class MultiExperimentProblem:
             — eager-сложение тензоров снаружи (d/dφ Σ = Σ d/dφ);
             начальное состояние эксперимента — аргумент ядра
             (in-place смена exp.initial_state отражается немедленно).
+        vectorize: если True, обучающие эксперименты прогоняются ОДНИМ
+            батч-прогоном сети (этап 3): требуются одинаковые длины T и
+            согласованный профиль входов (None у всех / тензоры одинаковой
+            ширины; иначе ValueError). Потеря и градиент — СРЕДНЕЕ по
+            экспериментам (mean_e), в отличие от циклового режима (сумма):
+            переключение режимов меняет масштаб loss/grad ровно в E раз
+            (эквивалентно весам 1/E у циклового). Счётчик n_forward
+            увеличивается на 1 за батч-операцию (в цикловом — на число
+            экспериментов). x0-записи ParameterSpace материализуются
+            батчево: common — broadcast на все слоты (градиент
+            аккумулирует вклады всех экспериментов), exp-specific — своя
+            подстановка через one-hot маску (вклад только своего слота;
+            изоляция как в цикловом режиме). residual — конкатенация
+            невязок экспериментов; компоненты — с префиксом '{exp.name}/'.
+            simulate() — срез запрошенного эксперимента (experiment=None —
+            первого); validate() — один батч-прогон для held-out той же
+            длины/профиля, иначе по одному. adjoint-метод несовместим
+            (per-step разложения по батч-срезам нет,
+            _VectorizedObjective.per_step_loss поднимает NotImplementedError).
+            compiled=True + vectorize=True — один ядро на весь батч
+            (кэш по id objective-обёртки и протоколов экспериментов).
+            stability-штраф: stability_loss в батч-режиме — агрегат по
+            всем слотам, при stability_penalty_weight > 0 его градиент
+            смешивает слоты (кросс-слотовая утечка) — используйте
+            vectorize=True с stability_penalty_weight=0 (default).
             simulate() и validate() — eager в обоих режимах.
     """
 
@@ -889,6 +1011,7 @@ class MultiExperimentProblem:
         grad_mode: str = "assign",
         held_out: Optional[Sequence[Experiment]] = None,
         compiled: bool = False,
+        vectorize: bool = False,
     ):
         if grad_mode not in _GRAD_MODES:
             raise ValueError(
@@ -966,6 +1089,222 @@ class MultiExperimentProblem:
         # CalibrationProblem._get_compiled_core. Начальное состояние
         # эксперимента — аргумент ядра, материализуется при каждом вызове.
         self._core_cache: Dict[Any, _CompiledCore] = {}
+        self.vectorize = bool(vectorize)
+        if self.vectorize:
+            # Одинаковая длина T (статическая проверка; динамические оси
+            # допускаем — несовпадение отловит tf.concat при прогоне).
+            t0 = self.experiments[0].t_sequence.shape[1]
+            for exp in self.experiments[1:]:
+                te = exp.t_sequence.shape[1]
+                if t0 is not None and te is not None and int(te) != int(t0):
+                    raise ValueError(
+                        "MultiExperimentProblem(vectorize=True): все "
+                        "эксперименты должны иметь одинаковую длину T "
+                        f"(got {int(t0)} and {int(te)} for "
+                        f"'{exp.name}')."
+                    )
+            # Согласованный профиль входов: либо у всех None, либо у всех
+            # тензоры одинаковой последней размерности.
+            in0 = self.experiments[0].inputs
+            for exp in self.experiments[1:]:
+                ie = exp.inputs
+                if (in0 is None) != (ie is None):
+                    raise ValueError(
+                        "MultiExperimentProblem(vectorize=True): профиль "
+                        "входов несогласован — inputs=None у части "
+                        f"экспериментов (см. '{exp.name}'). Либо у всех "
+                        "None, либо у всех тензоры."
+                    )
+                if (
+                    in0 is not None
+                    and ie is not None
+                    and in0.shape[-1] is not None
+                    and ie.shape[-1] is not None
+                    and int(in0.shape[-1]) != int(ie.shape[-1])
+                ):
+                    raise ValueError(
+                        "MultiExperimentProblem(vectorize=True): "
+                        "последняя размерность inputs должна совпадать у "
+                        f"всех экспериментов (got {int(in0.shape[-1])} and "
+                        f"{int(ie.shape[-1])} for '{exp.name}')."
+                    )
+            self._vectorized_objective = _VectorizedObjective(
+                self.experiments, self.network
+            )
+        else:
+            self._vectorized_objective = None
+        self._vcore_cache: Dict[Any, _CompiledCore] = {}
+
+    # ------------------------------------------------------------------
+    # Векторный режим (vectorize=True): один батч-прогон на все эксперименты
+    # ------------------------------------------------------------------
+    def _prepare_vectorized(self, phi: Optional[Any]) -> tf.Tensor:
+        """pack (+apply); n_forward += 1 (один батч-прогон на всех)."""
+        phi_t = self.pack(phi)
+        if phi is not None:
+            self._apply_phi(phi_t)
+        self._counters["n_forward"] += 1
+        return phi_t
+
+    def _batched_protocol(self, experiments):
+        """Батч-протокол: concat t/inputs по слотам, per-exp base-состояния.
+
+        Без кэша (конкатенация тензоров дёшево): in-place смена протоколов
+        отражается немедленно. Порядок слотов = порядок experiments.
+        """
+        t_batched = tf.concat([e.t_sequence for e in experiments], axis=0)
+        inputs_batched = None
+        if experiments[0].inputs is not None:
+            inputs_batched = tf.concat([e.inputs for e in experiments], axis=0)
+        base_states = []
+        for e in experiments:
+            if e.initial_state is None:
+                base_states.append(None)
+            else:
+                base_states.append(
+                    (tuple(e.initial_state[0]), tuple(e.initial_state[1]))
+                )
+        names = [e.name for e in experiments]
+        return t_batched, inputs_batched, base_states, names
+
+    def _get_vectorized_core(self, t_batched, inputs_batched) -> _CompiledCore:
+        """Ленивое получение compiled-ядра векторного батч-прогона.
+
+        Ключ — id объектов ПРОТОКОЛОВ ЭКСПЕРИМЕНТОВ (стабильны, т.к. задача
+        держит ссылки), а не конкатенированных тензоров: _batched_protocol
+        пересоздаёт их при каждом вызове, ключ по их id промахивался бы
+        при каждом вызове (retrace-шторм).
+        """
+        key = (
+            id(self._vectorized_objective),
+            tuple(e.name for e in self.experiments),
+            tuple(id(e.t_sequence) for e in self.experiments),
+            tuple(
+                id(e.inputs) if e.inputs is not None else None for e in self.experiments
+            ),
+        )
+        core = self._vcore_cache.get(key)
+        if core is None:
+            core = _CompiledCore(
+                self.network,
+                self.parameter_space,
+                t_batched,
+                inputs_batched,
+                self._vectorized_objective,
+                experiment_name=None,
+                grad_mode=self.grad_mode,
+                x0_substitute=_make_vectorized_x0_substitute(
+                    [e.name for e in self.experiments]
+                ),
+            )
+            core.build()
+            self._vcore_cache[key] = core
+        return core
+
+    def _held_out_can_batch(self) -> bool:
+        """True, если held-out можно прогнать одним батчем: непустые,
+        одинаковые T между собой и с обучающими, согласованный профиль
+        входов (None у всех / тензоры одинаковой ширины).
+        """
+        if not self.held_out:
+            return False
+        train_t = self.experiments[0].t_sequence.shape[1]
+        train_in = self.experiments[0].inputs
+        for e in self.held_out:
+            te = e.t_sequence.shape[1]
+            if train_t is not None and te is not None and int(te) != int(train_t):
+                return False
+            ie = e.inputs
+            if (train_in is None) != (ie is None):
+                return False
+            if (
+                train_in is not None
+                and ie is not None
+                and train_in.shape[-1] is not None
+                and ie.shape[-1] is not None
+                and int(train_in.shape[-1]) != int(ie.shape[-1])
+            ):
+                return False
+        return True
+
+    def _vectorized_forward(self, phi_t, with_tape: bool):
+        """Один батч-прогон векторного режима.
+
+        Returns:
+            (loss_t, grad_t или None, comps, residual_t или None).
+            comps: dict {имя: тензор} с префиксами '{exp}/';
+            residual_t: None, если у какого-то под-объектива нет
+            residual-интерфейса (has_residual=False — статус решает
+            вызывающий).
+        """
+        vobj = self._vectorized_objective
+        t_b, inputs_b, base_states, names = self._batched_protocol(self.experiments)
+        if self.compiled:
+            init_pop, init_syn = _concat_base_states(self.network, base_states)
+            core = self._get_vectorized_core(t_b, inputs_b)
+            if with_tape:
+                loss_t, grad_t, comps, residual_t = core.grad_core(
+                    phi_t, init_pop, init_syn
+                )
+                self._counters["n_gradient"] += 1
+            else:
+                loss_t, comps, residual_t = core.eval_core(phi_t, init_pop, init_syn)
+                grad_t = None
+            return loss_t, grad_t, comps, residual_t
+        if with_tape:
+            with tf.GradientTape(persistent=True) as tape:
+                tape.watch(phi_t)
+                # theta строится ВНУТРИ ленты: x0-записи дифференцируемы
+                # по φ (как в цикловом режиме).
+                theta = self.parameter_space.unpack(phi_t)
+                initial_state, x0_map = _materialize_batched_initial_state(
+                    self.network,
+                    self.parameter_space,
+                    theta,
+                    base_states,
+                    names,
+                )
+                output = self.network(t_b, inputs=inputs_b, initial_state=initial_state)
+                loss_t = vobj(output, self.network)
+            grad_t = _phi_gradient(
+                self.parameter_space, self.grad_mode, tape, loss_t, phi_t, x0_map
+            )
+            del tape
+            self._counters["n_gradient"] += 1
+        else:
+            theta = self.parameter_space.unpack(phi_t)
+            initial_state, _ = _materialize_batched_initial_state(
+                self.network,
+                self.parameter_space,
+                theta,
+                base_states,
+                names,
+            )
+            output = self.network(t_b, inputs=inputs_b, initial_state=initial_state)
+            loss_t = vobj(output, self.network)
+            grad_t = None
+        comps = vobj.components(output, self.network)
+        residual_t = vobj.residual(output) if vobj.has_residual else None
+        return loss_t, grad_t, comps, residual_t
+
+    def _vectorized_evaluation(self, loss_t, comps, residual_t, grad, t0):
+        """numpy-сборка Evaluation векторного режима."""
+        vobj = self._vectorized_objective
+        if vobj.has_residual:
+            residuals = np.zeros(0) if residual_t is None else np.asarray(residual_t)
+            status = "ok"
+        else:
+            residuals, status = np.zeros(0), "no_residual_interface"
+        return _make_evaluation(
+            loss=float(loss_t),
+            components={k: float(v) for k, v in comps.items()},
+            residuals=residuals,
+            grad=grad,
+            status=status,
+            counters=self._counters,
+            elapsed=time.perf_counter() - t0,
+            dt=float(self.network._graph.dt),
+        )
 
     def _exp_base_init(self, exp: Experiment) -> Tuple[Tuple, Tuple]:
         """Начальное состояние протокола эксперимента полными кортежами.
@@ -1145,19 +1484,55 @@ class MultiExperimentProblem:
 
         Контракт мутации как у CalibrationProblem: phi=None не трогает
         модель; phi != None переводит модель в θ = unpack(phi).
+
+        vectorize=True: один батч-прогон; experiment=None возвращает срез
+        ПЕРВОГО эксперимента (батч-output не возвращается — у слотов общий
+        протокол; для полного батча используйте evaluate).
         """
         exp = self._resolve_experiment(experiment)
         phi_t = self.pack(phi)
         if phi is not None:
             self._apply_phi(phi_t)
         theta = self.parameter_space.unpack(phi_t)
+        if self.vectorize:
+            t_b, inputs_b, base_states, names = self._batched_protocol(self.experiments)
+            initial_state, _ = _materialize_batched_initial_state(
+                self.network,
+                self.parameter_space,
+                theta,
+                base_states,
+                names,
+            )
+            output = self.network(t_b, inputs=inputs_b, initial_state=initial_state)
+            self._counters["n_forward"] += 1
+            names = [e.name for e in self.experiments]
+            try:
+                slot = names.index(exp.name)
+            except ValueError:
+                raise ValueError(
+                    "MultiExperimentProblem(vectorize=True): simulate "
+                    f"эксперимент '{exp.name}' не входит в обучающие "
+                    f"эксперименты {names}."
+                ) from None
+            return _VectorizedObjective._slice(output, slot)
         output, _ = self._run_experiment(exp, theta)
         self._counters["n_forward"] += 1
         return output
 
     def evaluate(self, phi: Optional[Any] = None) -> Evaluation:
-        """Суммарная потеря обучающих экспериментов (без градиента)."""
+        """Суммарная потеря обучающих экспериментов (без градиента).
+
+        vectorize=True: потеря — СРЕДНЕЕ по экспериментам (один
+        батч-прогон), не сумма."""
         t0 = time.perf_counter()
+        if self.vectorize:
+            phi_t = self._prepare_vectorized(phi)
+            loss_t, _, comps, residual_t = self._vectorized_forward(
+                phi_t, with_tape=False
+            )
+            return self._vectorized_evaluation(
+                loss_t, comps, residual_t, grad=None, t0=t0
+            )
         phi_t = self._prepare(phi)
         if self.compiled:
             total: Optional[tf.Tensor] = None
@@ -1222,10 +1597,22 @@ class MultiExperimentProblem:
         compiled=True: отдельное ядро на эксперимент, суммы потерь и
         градиентов — eager-сложение тензоров снаружи (d/dφ Σ = Σ d/dφ).
 
+        vectorize=True: один батч-прогон; потеря и градиент — СРЕДНЕЕ по
+        экспериментам (mean_e), эквивалентно весам 1/E в цикловом режиме.
+
         Returns:
             (Evaluation, grad — tf.Tensor формы [size]).
         """
         t0 = time.perf_counter()
+        if self.vectorize:
+            phi_t = self._prepare_vectorized(phi)
+            loss_t, grad_t, comps, residual_t = self._vectorized_forward(
+                phi_t, with_tape=True
+            )
+            eval_result = self._vectorized_evaluation(
+                loss_t, comps, residual_t, grad=grad_t, t0=t0
+            )
+            return eval_result, grad_t
         phi_t = self._prepare(phi)
         if self.compiled:
             losses: List[tf.Tensor] = []
@@ -1303,6 +1690,23 @@ class MultiExperimentProblem:
     def residual(self, phi: Optional[Any] = None) -> np.ndarray:
         """Конкатенированные невязки обучающих экспериментов (numpy)."""
         t0 = time.perf_counter()
+        if self.vectorize:
+            phi_t = self._prepare_vectorized(phi)
+            vobj = self._vectorized_objective
+            if not vobj.has_residual:
+                bad = next(
+                    e
+                    for i, e in enumerate(self.experiments)
+                    if vobj._residual_fns[i] is None
+                )
+                raise TypeError(
+                    "MultiExperimentProblem (vectorize=True): objective "
+                    f"'{type(bad.objective).__name__}' эксперимента "
+                    f"'{bad.name}' не предоставляет residual(predictions)."
+                )
+            _, _, _, residual_t = self._vectorized_forward(phi_t, with_tape=False)
+            self._counters["wall_time"] += time.perf_counter() - t0
+            return np.asarray(residual_t)
         phi_t = self._prepare(phi)
         if self.compiled:
             for exp in self.experiments:
@@ -1340,6 +1744,10 @@ class MultiExperimentProblem:
 
         phi=None не трогает модель; phi != None переводит модель в
         θ = unpack(phi) один раз. objective берётся из эксперимента.
+
+        vectorize=True: если у всех held-out одинаковые T и профиль входов
+        с обучающими (и между собой) — один батч-прогон со срезами;
+        иначе — по одному, как цикловой режим.
         """
         if not self.held_out:
             return {}
@@ -1349,6 +1757,29 @@ class MultiExperimentProblem:
         theta = self.parameter_space.unpack(phi_t)
         results: Dict[str, float] = {}
         t0 = time.perf_counter()
+        if self.vectorize and self._held_out_can_batch():
+            for exp in self.held_out:
+                if exp.objective is None:
+                    raise ValueError(
+                        f"MultiExperimentProblem: held-out experiment "
+                        f"'{exp.name}' has no objective."
+                    )
+            t_b, inputs_b, base_states, names = self._batched_protocol(self.held_out)
+            initial_state, _ = _materialize_batched_initial_state(
+                self.network,
+                self.parameter_space,
+                theta,
+                base_states,
+                names,
+            )
+            output = self.network(t_b, inputs=inputs_b, initial_state=initial_state)
+            for i, exp in enumerate(self.held_out):
+                results[exp.name] = float(
+                    exp.objective(_VectorizedObjective._slice(output, i), self.network)
+                )
+            self._counters["n_forward"] += 1
+            self._counters["wall_time"] += time.perf_counter() - t0
+            return results
         for exp in self.held_out:
             if exp.objective is None:
                 raise ValueError(

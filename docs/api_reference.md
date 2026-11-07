@@ -1238,10 +1238,21 @@ class MultiExperimentProblem:
     # одна сеть + один ParameterSpace; сумма потерь в одной GradientTape,
     # residual — конкатенация, компоненты с префиксом '{name}/'
     def __init__(self, network, parameter_space, experiments,
-                 grad_mode="assign", held_out=None, compiled=False): ...
+                 grad_mode="assign", held_out=None, compiled=False,
+                 vectorize=False): ...
     # compiled=True: отдельное скомпилированное ядро на обучающий
     # эксперимент (см. CalibrationProblem), суммы потерь/градиентов —
     # eager-сложение снаружи; simulate/validate — eager в обоих режимах
+    # vectorize=True (этап 3): обучающие эксперименты одним батч-прогоном
+    # (одинаковые T и профиль входов обязательны). Потеря/градиент —
+    # СРЕДНЕЕ по экспериментам (цикловой режим — сумма): переключение режимов
+    # меняет масштаб loss/grad в E раз. n_forward += 1 за батч-операцию.
+    # x0-записи: common — broadcast на все слоты, exp-specific — one-hot
+    # подстановка в свой слот (изоляция вкладов). residual — конкатенация.
+    # simulate() — срез эксперимента (None — первого); validate() — батчем
+    # для held-out той же длины/профиля, иначе по одному. adjoint
+    # несовместим (per_step_loss поднимает NotImplementedError).
+    # compiled=True + vectorize=True — одно ядро на весь батч (no-retrace).
     # duck parity с CalibrationProblem: size/pack/unpack/bounds_phi/
     # evaluate/value_and_gradient/residual/simulate/validate/counters
     # начальные состояния: общие 'x0/<pop>/<slot>' — во всех экспериментах;

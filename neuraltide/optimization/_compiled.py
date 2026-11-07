@@ -44,6 +44,12 @@ class _CompiledCore:
         experiment_name: имя эксперимента для exp-specific x0 (None —
             внеэкспериментный контекст).
         grad_mode: 'assign' | 'chain' — см. _phi_gradient.
+        x0_substitute: опциональная замена материализатора x0 сигнатуры
+            (network, space, theta, init_pop, init_syn) ->
+            (initial_state, x0_map). По умолчанию — одноэкспериментный
+            _materialize_initial_state; векторный режим MultiExperimentProblem
+            передаёт батч-подстановку (_make_vectorized_x0_substitute), т.к.
+            x0-подстановка должна выполняться внутри графа ядра.
 
     После build() доступны два tf.function (обычные, без jit_compile):
         eval_core(phi, init_pop..., init_syn...) -> (loss, comps, residual)
@@ -64,6 +70,7 @@ class _CompiledCore:
         objective,
         experiment_name: Optional[str] = None,
         grad_mode: str = "chain",
+        x0_substitute=None,
     ):
         self.network = network
         self.parameter_space = parameter_space
@@ -72,6 +79,7 @@ class _CompiledCore:
         self.objective = objective
         self.experiment_name = experiment_name
         self.grad_mode = grad_mode
+        self.x0_substitute = x0_substitute
         self.eval_core = None
         self.grad_core = None
 
@@ -86,7 +94,19 @@ class _CompiledCore:
         objective = self.objective
         experiment = self.experiment_name
         grad_mode = self.grad_mode
+        x0_substitute = self.x0_substitute
         dtype = neuraltide.config.get_dtype()
+
+        def _materialize(theta, init_pop, init_syn):
+            # x0-записи ParameterSpace подставляются поверх явного начального
+            # состояния внутри графа (дифференцируемо по φ). Батч-семантика
+            # начального состояния — общая с eager (_broadcast_or_validate_init
+            # внутри подстановщиков).
+            if x0_substitute is not None:
+                return x0_substitute(network, space, theta, init_pop, init_syn)
+            return _materialize_initial_state(
+                network, space, theta, (init_pop, init_syn), experiment=experiment
+            )
 
         def _comps_and_residual(output):
             components_fn = getattr(objective, "components", None)
@@ -94,19 +114,15 @@ class _CompiledCore:
                 {} if components_fn is None else dict(components_fn(output, network))
             )
             residual_fn = getattr(objective, "residual", None)
-            residual = (
-                tf.zeros([0], dtype=dtype)
-                if residual_fn is None
-                else residual_fn(output)
-            )
+            # objective может декларировать отсутствие residual-интерфейса
+            # флагом has_residual (векторная обёртка MultiExperimentProblem).
+            if residual_fn is None or getattr(objective, "has_residual", True) is False:
+                residual = tf.zeros([0], dtype=dtype)
+            else:
+                residual = residual_fn(output)
             return comps, residual
 
         def _eval_fn(phi, init_pop, init_syn):
-            # x0-записи ParameterSpace подставляются поверх явного
-            # начального состояния тем же материализатором, что в
-            # eager-ветках (evaluate/residual идентичны
-            # value_and_gradient без ленты). Батч-семантика начального
-            # состояния — общая с eager: _broadcast_or_validate_init.
             batch = tf.shape(t_sequence)[0]
             init_pop, init_syn = _broadcast_or_validate_init(
                 (init_pop, init_syn),
@@ -114,9 +130,7 @@ class _CompiledCore:
                 what="compiled core initial_state",
             )
             theta = space.unpack(phi)
-            initial_state, _ = _materialize_initial_state(
-                network, space, theta, (init_pop, init_syn), experiment=experiment
-            )
+            initial_state, _ = _materialize(theta, init_pop, init_syn)
             output = network(t_sequence, inputs=inputs, initial_state=initial_state)
             loss = objective(output, network)
             comps, residual = _comps_and_residual(output)
@@ -132,9 +146,7 @@ class _CompiledCore:
             with tf.GradientTape(persistent=True) as tape:
                 tape.watch(phi)
                 theta = space.unpack(phi)
-                initial_state, x0_map = _materialize_initial_state(
-                    network, space, theta, (init_pop, init_syn), experiment=experiment
-                )
+                initial_state, x0_map = _materialize(theta, init_pop, init_syn)
                 output = network(t_sequence, inputs=inputs, initial_state=initial_state)
                 loss = objective(output, network)
                 comps, residual = _comps_and_residual(output)

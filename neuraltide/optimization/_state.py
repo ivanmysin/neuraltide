@@ -64,6 +64,167 @@ def _broadcast_or_validate_init(initial_state, batch, what="initial_state"):
     return tuple(_one(t) for t in init_pop), tuple(_one(t) for t in init_syn)
 
 
+def _concat_base_states(network, base_states_per_exp):
+    """Склеивает per-sample начальные состояния экспериментов в батч.
+
+    Args:
+        network: NetworkRNN (источник per-sample дефолтного состояния).
+        base_states_per_exp: список длины B; элемент — None (сетевое
+            дефолтное) или (pop, syn) per-sample тензоров [1, ...].
+
+    Returns:
+        (init_pop, init_syn) — кортежи тензоров [B, ...].
+    """
+    pop0, syn0 = network.get_initial_state(batch_size=1)
+
+    def _base(exp_base):
+        if exp_base is None:
+            return pop0, syn0
+        return list(exp_base[0]), list(exp_base[1])
+
+    init_pop = []
+    for i in range(len(pop0)):
+        init_pop.append(
+            tf.concat([_base(b)[0][i] for b in base_states_per_exp], axis=0)
+        )
+    init_syn = []
+    for i in range(len(syn0)):
+        init_syn.append(
+            tf.concat([_base(b)[1][i] for b in base_states_per_exp], axis=0)
+        )
+    return tuple(init_pop), tuple(init_syn)
+
+
+def _substitute_x0_batched(
+    network,
+    space: ParameterSpace,
+    theta: Mapping[str, tf.Tensor],
+    init_pop,
+    init_syn,
+    experiment_names: Sequence[str],
+):
+    """Подставляет x0-записи ParameterSpace в батчированное состояние.
+
+    Двухпроходная схема, зеркаляющая _materialize_initial_state (порядок
+    добавления записей в ParameterSpace не влияет на результат):
+
+    - pass 1 — common-записи (locator.experiment is None): значение
+      broadcast'ится на слоты батча;
+    - pass 2 — exp-specific записи: значение подставляется в свой слот
+      через one-hot маску (дифференцируемо; градиент идёт только через
+      слот записи). Слот перезаписанной common-записи ИСКЛЮЧАЕТСЯ из её
+      broadcast (common-тензор продолжает питать только
+      неперезаписанные слоты); если перезаписаны ВСЕ слоты, common-
+      запись удаляется из x0_map (её тензор больше нигде не участвует —
+      как перезаписанная common в цикловом режиме).
+
+    Returns:
+        ((init_pop, init_syn), x0_map): x0_map[name] — тензор [1, ...].
+    """
+    dtype = neuraltide.config.get_dtype()
+    batch = len(experiment_names)
+    name_index = {n: i for i, n in enumerate(experiment_names)}
+    init_pop = list(init_pop)
+    init_syn = list(init_syn)
+    offsets = network.pop_state_offsets
+
+    def _x0_of(name, entry):
+        x0 = cast_if_needed(tf.convert_to_tensor(theta[name]), dtype)
+        return tf.reshape(x0, entry.shape)  # [1, ...]
+
+    def _slot_of(entry, name):
+        locator = entry.locator
+        if locator is None or locator.population not in offsets:
+            raise ValueError(
+                f"VectorizedProblem: locator записи '{name}' ссылается на "
+                f"неизвестную популяцию "
+                f"'{locator.population if locator else None}'."
+            )
+        start, count = offsets[locator.population]
+        if not (0 <= locator.slot < count):
+            raise ValueError(
+                f"VectorizedProblem: locator slot {locator.slot} вне "
+                f"[0, {count}) для популяции '{locator.population}'."
+            )
+        return start + locator.slot
+
+    # Раскладка по слотам: common владеет слотом целиком, exp-specific
+    # подставляются поверх по одному слоту.
+    common_by_flat: Dict[int, Tuple[str, tf.Tensor]] = {}
+    exp_by_flat: Dict[int, List[Tuple[int, str, tf.Tensor]]] = {}
+    for name, entry in _tensor_entries(space):
+        flat = _slot_of(entry, name)
+        exp_name = _x0_experiment(entry)
+        if exp_name is None:
+            common_by_flat[flat] = (name, _x0_of(name, entry))
+        else:
+            idx = name_index.get(exp_name)
+            if idx is None:
+                # Запись другого эксперимента (например, train-specific при
+                # валидизации held-out): пропускаем, как в цикловом режиме.
+                continue
+            exp_by_flat.setdefault(flat, []).append((idx, name, _x0_of(name, entry)))
+
+    x0_map: Dict[str, tf.Tensor] = {}
+    for flat, (name, x0) in common_by_flat.items():
+        excluded = {idx for idx, _, _ in exp_by_flat.get(flat, [])}
+        tensor = tf.broadcast_to(x0, [batch] + x0.shape[1:].as_list())
+        for idx, ename, ex0 in exp_by_flat.get(flat, []):
+            mask = tf.one_hot(idx, batch, dtype=dtype)
+            mask = tf.reshape(mask, [batch] + [1] * (len(tensor.shape) - 1))
+            tensor = tensor * (1.0 - mask) + ex0 * mask
+            x0_map[ename] = ex0
+        init_pop[flat] = tensor
+        if len(excluded) < batch:
+            # Common ещё питает неперезаписанные слоты.
+            x0_map[name] = x0
+    for flat, entries in exp_by_flat.items():
+        if flat in common_by_flat:
+            continue  # собран в цикле common выше
+        tensor = init_pop[flat]
+        for idx, ename, ex0 in entries:
+            mask = tf.one_hot(idx, batch, dtype=dtype)
+            mask = tf.reshape(mask, [batch] + [1] * (len(tensor.shape) - 1))
+            tensor = tensor * (1.0 - mask) + ex0 * mask
+            x0_map[ename] = ex0
+        init_pop[flat] = tensor
+    return (tuple(init_pop), tuple(init_syn)), x0_map
+
+
+def _materialize_batched_initial_state(
+    network,
+    space: ParameterSpace,
+    theta: Mapping[str, tf.Tensor],
+    base_states_per_exp,
+    experiment_names: Sequence[str],
+):
+    """Батч-материализация начального состояния для векторного режима.
+
+    Склейка per-exp баз (_concat_base_states) + подстановка x0-записей
+    (_substitute_x0_batched). См. их docstring'ы.
+    """
+    init_pop, init_syn = _concat_base_states(network, base_states_per_exp)
+    return _substitute_x0_batched(
+        network, space, theta, init_pop, init_syn, experiment_names
+    )
+
+
+def _make_vectorized_x0_substitute(experiment_names: Sequence[str]):
+    """Замыкание подстановки x0 для compiled-ядра векторного режима.
+
+    Ядро получает батчированную базу аргументами; x0-подстановка должна
+    выполняться ВНУТРИ графа (дифференцируемо по φ), поэтому ядру
+    передаётся эта функция сигнатуры
+    (network, space, theta, init_pop, init_syn) -> (initial_state, x0_map).
+    """
+    names = list(experiment_names)
+
+    def _fn(network, space, theta, init_pop, init_syn):
+        return _substitute_x0_batched(network, space, theta, init_pop, init_syn, names)
+
+    return _fn
+
+
 def _tensor_entries(space: ParameterSpace):
     """
     Trainable tensor-записи (kind 'initial_state'/'shooting_state').
