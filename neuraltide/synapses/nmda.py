@@ -41,8 +41,8 @@ class NMDASynapse(SynapseModel):
     def get_initial_state(self, batch_size: int = 1) -> StateList:
         dtype = neuraltide.config.get_dtype()
         return [
-            tf.zeros([self.n_pre, self.n_post], dtype=dtype),
-            tf.zeros([self.n_pre, self.n_post], dtype=dtype),
+            tf.zeros([batch_size, self.n_pre, self.n_post], dtype=dtype),
+            tf.zeros([batch_size, self.n_pre, self.n_post], dtype=dtype),
         ]
 
     def forward(
@@ -65,21 +65,21 @@ class NMDASynapse(SynapseModel):
         e_r_nmda = _c(self.e_r_nmda, dtype)
         v_ref = _c(self.v_ref, dtype)
 
-        firing_probs_T = tf.transpose(dt * pre_firing_rate / 1000.0)
-        s_input = pconn_nmda * firing_probs_T
+        firing_probs = dt * pre_firing_rate / 1000.0
+        s_input = pconn_nmda * firing_probs[:, :, tf.newaxis]  # [B, n_pre, n_post]
 
         dgnmda_new = dgnmda + dt * (
             s_input - gnmda - (tau1_nmda + tau2_nmda) * dgnmda
         ) / (tau1_nmda * tau2_nmda)
         gnmda_new = gnmda + dt * dgnmda_new
 
-        post_v_flat = tf.reshape(post_voltage, [self.n_post])
-        mg_block = 1.0 / (1.0 + Mgb * tf.exp(-av_nmda * (post_v_flat - v_ref)))
+        post_v = post_voltage[:, tf.newaxis, :]  # [B, 1, n_post]
+        mg_block = 1.0 / (1.0 + Mgb * tf.exp(-av_nmda * (post_v - v_ref)))
 
         g_eff = gsyn_max_nmda * gnmda_new * mg_block
-        I_pair = g_eff * (e_r_nmda - post_v_flat)
-        I_syn = tf.reduce_sum(I_pair, axis=0, keepdims=True)
-        g_syn = tf.reduce_sum(g_eff, axis=0, keepdims=True)
+        I_pair = g_eff * (e_r_nmda - post_v)
+        I_syn = tf.reduce_sum(I_pair, axis=-2)  # [B, n_post]
+        g_syn = tf.reduce_sum(g_eff, axis=-2)
 
         return ({"I_syn": I_syn, "g_syn": g_syn}, [gnmda_new, dgnmda_new])
 
@@ -106,8 +106,8 @@ class NMDASynapse(SynapseModel):
         tau1 = tf.maximum(_c(self.tau1_nmda, dtype), 1e-6)
         tau2 = tf.maximum(_c(self.tau2_nmda, dtype), 1e-6)
 
-        firing_probs_T = tf.transpose(pre_firing_rate / 1000.0)
-        s_input = pconn * firing_probs_T
+        firing_probs = pre_firing_rate / 1000.0
+        s_input = pconn * firing_probs[:, :, tf.newaxis]  # [B, n_pre, n_post]
 
         d_gnmda_dt = dgnmda
 
@@ -144,13 +144,13 @@ class NMDASynapse(SynapseModel):
 
         gnmda = state[0]
 
-        post_v_flat = tf.reshape(post_voltage, [-1])
-        mg_block = 1.0 / (1.0 + Mgb * tf.exp(-av_nmda * (post_v_flat - v_ref)))
+        post_v = post_voltage[:, tf.newaxis, :]  # [B, 1, n_post]
+        mg_block = 1.0 / (1.0 + Mgb * tf.exp(-av_nmda * (post_v - v_ref)))
 
         g_eff = gsyn_max_nmda * gnmda * mg_block
-        I_pair = g_eff * (e_r_nmda - post_v_flat)
-        I_syn = tf.reduce_sum(I_pair, axis=0, keepdims=True)
-        g_syn = tf.reduce_sum(g_eff, axis=0, keepdims=True)
+        I_pair = g_eff * (e_r_nmda - post_v)
+        I_syn = tf.reduce_sum(I_pair, axis=-2)  # [B, n_post]
+        g_syn = tf.reduce_sum(g_eff, axis=-2)
 
         return {"I_syn": I_syn, "g_syn": g_syn}
 
@@ -212,14 +212,14 @@ class NMDASynapse(SynapseModel):
         post_voltage: TensorType,
     ) -> StateList:
         """
-        VJP from I_syn/g_syn back to synapse state.
+        VJP from I_syn/g_syn back to synapse state (per-batch-slot).
 
-        I_syn[b,j] = sum_i gsyn_max[i,j] * gnmda[i,j] * mg_block[b,j] * (e_r - post_v[b,j])
-        g_syn[b,j] = sum_i gsyn_max[i,j] * gnmda[i,j] * mg_block[b,j]
+        I_syn[b,j] = sum_i gsyn_max[i,j] * gnmda[b,i,j] * mg_block[b,j] * (e_r - post_v[b,j])
+        g_syn[b,j] = sum_i gsyn_max[i,j] * gnmda[b,i,j] * mg_block[b,j]
 
         Only gnmda contributes (dgnmda doesn't appear):
-            dgnmda[i,j] += sum_b lam_I[b,j] * gsyn_max[i,j] * mg_block[b,j] * (e_r - post_v[b,j])
-                          + sum_b lam_g[b,j] * gsyn_max[i,j] * mg_block[b,j]
+            dgnmda[b,i,j] = lam_I[b,j] * gsyn_max[i,j] * mg_block[b,j] * (e_r - post_v[b,j])
+                          + lam_g[b,j] * gsyn_max[i,j] * mg_block[b,j]
         """
         gnmda, dgnmda = state
 
@@ -231,14 +231,13 @@ class NMDASynapse(SynapseModel):
         e_r_nmda = _c(self.e_r_nmda, dtype)
         v_ref = _c(self.v_ref, dtype)
 
-        mg_block = 1.0 / (1.0 + Mgb * tf.exp(-av_nmda * (post_voltage - v_ref)))
+        post_v = post_voltage[:, tf.newaxis, :]  # [B, 1, n_post]
+        mg_block = 1.0 / (1.0 + Mgb * tf.exp(-av_nmda * (post_v - v_ref)))
 
-        lam_I_sum = tf.reduce_sum(lam_I, axis=0)
-        lam_g_sum = tf.reduce_sum(lam_g, axis=0)
+        lam_I_b = lam_I[:, tf.newaxis, :]
+        lam_g_b = lam_g[:, tf.newaxis, :]
 
-        dgnmda_contrib = (
-            gsyn_max * mg_block * (lam_I_sum * (e_r_nmda - post_voltage) + lam_g_sum)
-        )
+        dgnmda_contrib = gsyn_max * mg_block * (lam_I_b * (e_r_nmda - post_v) + lam_g_b)
 
         return [dgnmda_contrib, tf.zeros_like(dgnmda)]
 
@@ -251,7 +250,8 @@ class NMDASynapse(SynapseModel):
         post_voltage: TensorType,
     ) -> Dict[str, TensorType]:
         """
-        Gradients for current-level parameters (only gsyn_max_nmda).
+        Gradients for current-level parameters (only gsyn_max_nmda;
+        per-batch-slot).
         """
         gnmda, dgnmda = state
 
@@ -262,14 +262,13 @@ class NMDASynapse(SynapseModel):
         e_r_nmda = _c(self.e_r_nmda, dtype)
         v_ref = _c(self.v_ref, dtype)
 
-        mg_block = 1.0 / (1.0 + Mgb * tf.exp(-av_nmda * (post_voltage - v_ref)))
-        lam_I_sum = tf.reduce_sum(lam_I, axis=0)
-        lam_g_sum = tf.reduce_sum(lam_g, axis=0)
+        post_v = post_voltage[:, tf.newaxis, :]  # [B, 1, n_post]
+        mg_block = 1.0 / (1.0 + Mgb * tf.exp(-av_nmda * (post_v - v_ref)))
+        lam_I_b = lam_I[:, tf.newaxis, :]
+        lam_g_b = lam_g[:, tf.newaxis, :]
 
         if self.gsyn_max_nmda.trainable:
-            dgsyn_max = (
-                gnmda * mg_block * (lam_I_sum * (e_r_nmda - post_voltage) + lam_g_sum)
-            )
+            dgsyn_max = gnmda * mg_block * (lam_I_b * (e_r_nmda - post_v) + lam_g_b)
         else:
             dgsyn_max = tf.zeros_like(gnmda)
 

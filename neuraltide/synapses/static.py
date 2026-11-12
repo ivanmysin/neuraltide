@@ -42,13 +42,13 @@ class StaticSynapse(SynapseModel):
         pconn = _c(self.pconn, dtype)
         e_r = _c(self.e_r, dtype)
 
-        firing_probs_T = tf.transpose(dt * pre_firing_rate / 1000.0)
-        FRpre_normed = pconn * firing_probs_T
+        firing_probs = dt * pre_firing_rate / 1000.0
+        FRpre_normed = pconn * firing_probs[:, :, tf.newaxis]  # [B, n_pre, n_post]
 
-        post_v_T = tf.transpose(post_voltage)
-        I_pair = gsyn_max * FRpre_normed * (e_r - post_v_T)
-        I_syn = tf.reduce_sum(I_pair, axis=0, keepdims=True)
-        g_syn = tf.reduce_sum(gsyn_max * FRpre_normed, axis=0, keepdims=True)
+        post_v = post_voltage[:, tf.newaxis, :]  # [B, 1, n_post]
+        I_pair = gsyn_max * FRpre_normed * (e_r - post_v)
+        I_syn = tf.reduce_sum(I_pair, axis=-2)  # [B, n_post]
+        g_syn = tf.reduce_sum(gsyn_max * FRpre_normed, axis=-2)
 
         return ({"I_syn": I_syn, "g_syn": g_syn}, [])
 
@@ -82,13 +82,13 @@ class StaticSynapse(SynapseModel):
         pconn = _c(self.pconn, dtype)
         e_r = _c(self.e_r, dtype)
 
-        firing_probs_T = tf.transpose(pre_firing_rate / 1000.0)
-        FRpre_normed = pconn * firing_probs_T
+        firing_probs = pre_firing_rate / 1000.0
+        FRpre_normed = pconn * firing_probs[:, :, tf.newaxis]  # [B, n_pre, n_post]
 
-        post_v_T = tf.transpose(post_voltage)
-        I_pair = gsyn_max * FRpre_normed * (e_r - post_v_T)
-        I_syn = tf.reduce_sum(I_pair, axis=0, keepdims=True)
-        g_syn = tf.reduce_sum(gsyn_max * FRpre_normed, axis=0, keepdims=True)
+        post_v = post_voltage[:, tf.newaxis, :]  # [B, 1, n_post]
+        I_pair = gsyn_max * FRpre_normed * (e_r - post_v)
+        I_syn = tf.reduce_sum(I_pair, axis=-2)  # [B, n_post]
+        g_syn = tf.reduce_sum(gsyn_max * FRpre_normed, axis=-2)
 
         return {"I_syn": I_syn, "g_syn": g_syn}
 
@@ -140,14 +140,15 @@ class StaticSynapse(SynapseModel):
         pconn = tf.cast(self.pconn, dtype)
         e_r = tf.cast(self.e_r, dtype)
 
-        firing_probs_T = tf.transpose(pre_firing_rate / 1000.0)
-        FRpre_normed = pconn * firing_probs_T
+        firing_probs = pre_firing_rate / 1000.0
+        FRpre_normed = pconn * firing_probs[:, :, tf.newaxis]  # [B, n_pre, n_post]
 
-        lam_I_sum = tf.reduce_sum(lam_I, axis=0)
-        lam_g_sum = tf.reduce_sum(lam_g, axis=0)
+        post_v = post_voltage[:, tf.newaxis, :]  # [B, 1, n_post]
+        lam_I_b = lam_I[:, tf.newaxis, :]
+        lam_g_b = lam_g[:, tf.newaxis, :]
 
         if self.gsyn_max.trainable:
-            dgsyn_max = FRpre_normed * (lam_I_sum * (e_r - post_voltage) + lam_g_sum)
+            dgsyn_max = FRpre_normed * (lam_I_b * (e_r - post_v) + lam_g_b)
         else:
             dgsyn_max = tf.zeros_like(gsyn_max)
 

@@ -398,11 +398,11 @@ class IzhikevichMeanField(PopulationModel):
         <v> = V_rest (the resting potential).
         """
         dtype = neuraltide.config.get_dtype()
-        v0 = tf.zeros([1, self.n_units], dtype=dtype)
+        v0 = tf.zeros([batch_size, self.n_units], dtype=dtype)
         return [
-            tf.zeros([1, self.n_units], dtype=dtype),
+            tf.zeros([batch_size, self.n_units], dtype=dtype),
             v0,
-            tf.zeros([1, self.n_units], dtype=dtype),
+            tf.zeros([batch_size, self.n_units], dtype=dtype),
         ]
 
     def derivatives(

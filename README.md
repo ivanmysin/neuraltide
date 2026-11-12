@@ -82,6 +82,23 @@ NeuralTide — Python-библиотека для дифференцируемо
   (augmented Lagrangian, epsilon-constraint), пакетная оценка кандидатов
   в параллельных процессах.
 
+### Производительность и вычислительные режимы
+
+- Скан симуляции и train step исполняются через `tf.function` с
+  закреплёнными сигнатурами; опциональная XLA-компиляция —
+  `NetworkRNN(jit_compile=True)` / `Trainer(jit_compile=True)`, у задач
+  калибровки — флаг `compiled=True` (граф прогона+градиента). См.
+  [docs/optimization.md](docs/optimization.md#компилируемый-режим-tffunction).
+- `NetworkRNN` поддерживает батч B>1: один прогон с `[B, T, ...]` ==
+  B индивидуальным прогонам (значения и градиенты); чанкинг длинных
+  протоколов (`chunk_length`) с памятью градиента O(L).
+- На GPU рекомендуется float32 (`neuraltide.config.set_dtype(tf.float32)`
+  до создания объектов): float64 работает, но в разы медленнее. Пакет
+  полностью `tf.function`-совместим — на GPU дополнительных изменений
+  кода не требуется; проверка устройства, размещение, связка режимов
+  (compiled/jit_compile/батч/чанкинг) и рецепты при OOM — в разделе
+  [«Запуск на GPU»](docs/optimization.md#запуск-на-gpu).
+
 ### Идентифицируемость и неопределённость
 
 - `compute_fim` (спектр, effective rank, обусловленность),
@@ -239,15 +256,19 @@ print(f"Output shape: {output.firing_rates['exc'].shape}")
 | [docs/guide/running_simulations.md](docs/guide/running_simulations.md) | Запуск симуляций и выбор интегратора |
 | [docs/guide/calibration.md](docs/guide/calibration.md) | Калибровка по данным: постановка задачи и локальные оптимизаторы |
 | [docs/guide/advanced_calibration.md](docs/guide/advanced_calibration.md) | Глобальный поиск, multiple shooting, continuation |
+| [docs/optimization.md](docs/optimization.md) | Справочник слоя оптимизации: режимы вычислений (eager / tf.function / XLA), ограничения |
 | [docs/troubleshooting.md](docs/troubleshooting.md) | Решение проблем: жёсткость, NaN, сходимость |
 | [docs/examples.md](docs/examples.md) | Каталог примеров с описаниями |
 | [docs/api_reference.md](docs/api_reference.md) | Полный API-справочник |
 
 ## Ограничения
 
-- Вычисления — в eager-режиме TensorFlow (без `tf.function`-графов).
-- Пакетные размеры (batch) больше 1 в текущей последовательной схеме
-  `tf.while_loop` не поддерживаются.
+- По умолчанию вычисления — в eager-режиме TensorFlow; опциональны
+  компилируемые режимы (`tf.function`, XLA) — см.
+  [docs/optimization.md](docs/optimization.md#компилируемый-режим-tffunction).
+- Пакетные размеры (batch) больше 1 поддержаны в `NetworkRNN` (один
+  батч-прогон == B индивидуальным с общим протоколом); разнопротокольные
+  батчи (разные T/входы по слотам) не поддержаны.
 - Требуется Python >= 3.12.
 - Шаг по популяциям по очереди (split-режим, по умолчанию) ограничен
   2-м порядком на связанной сети; для высокого порядка используйте

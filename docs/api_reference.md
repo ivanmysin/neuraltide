@@ -174,6 +174,7 @@ NetworkRNN(
     stability_penalty_weight: float = 0.0,
     *,
     integration_mode: str = "split",
+    jit_compile: bool = False,
     **kwargs,
 )
 ```
@@ -183,14 +184,26 @@ NetworkRNN(
   интегратора по связанной сети через `step_network` (требует
   `integrator.supports_network_step=True`, иначе `ValueError`).
   См. `docs/integrators.md` («Network-wide интегрирование»).
+- `jit_compile`: если `True` — скан сети компилируется через XLA
+  (`tf.function(jit_compile=True)`). Проверено на TF 2.21 (CPU):
+  прямой прогон компилируется для всех встроенных интеграторов.
 
 **Методы**:
-- `call(t_sequence, inputs=None, initial_state=None) -> NetworkOutput`
+- `call(t_sequence, inputs=None, initial_state=None) -> NetworkOutput` —
+  поддерживается произвольный batch B ≥ 1 (состояния `[B, n]`, токи
+  `[B, n_post]`; один батч-прогон == B индивидуальным с общим протоколом;
+  `initial_state=None` broadcast'ит per-sample состояние на B);
+  опциональный чанкинг: `chunk_length` (None — целый прогон; иначе
+  сегменты длины chunk_length, carry = final_state, память градиента
+  O(chunk_length)), `chunk_grad` ('checkpointed' — точный BPTT с
+  пересчётом сегментов | 'truncated' — stop_gradient, дёшево, смещён),
+  `return_rates` (False — predict-only, пустой firing_rates)
 - `get_initial_state(batch_size=1) -> Tuple[StateList, StateList]`
 
 **Свойства**:
 - `trainable_variables -> List[tf.Variable]`
 - `integration_mode -> str` — режим интегрирования ('split' | 'network')
+- `jit_compile -> bool` — компилируется ли скан через XLA
 
 ### NetworkOutput
 
@@ -800,13 +813,32 @@ class Trainer:
 **Конструктор**:
 ```python
 Trainer(
-    model: tf.keras.Model,
-    loss_fn: callable,
+    network: NetworkRNN,
+    loss_fn: CompositeLoss,
     optimizer: tf.keras.optimizers.Optimizer,
-    callbacks: Optional[List] = None,
-    grad_method: str = "bptt"
+    grad_method: str = "bptt",
+    grad_clip_norm: float = 0.0,
+    run_eagerly: bool = False,
+    jit_compile: bool = False,
+    chunk_length: Optional[int] = None,   # чанкинг прогона (память O(L))
+    chunk_grad: str = "checkpointed",     # "checkpointed" | "truncated"
 )
 ```
+
+- `run_eagerly=True` и `jit_compile=True` несовместимы (`ValueError`).
+- `jit_compile=True` с `grad_method='adjoint'` пока не поддержан
+  (`NotImplementedError`): дискретный adjoint внутри скомпилированного
+  `tf.function` не проверен.
+- `jit_compile=True` оборачивает train step в `tf.function(
+  jit_compile=True)` (XLA). Градиент под XLA не компилируется для
+  интеграторов `AdaptiveRKIntegrator` и `ExponentialEulerIntegrator`
+  (InvalidArgumentError «fixed tensor list size») и split-шага
+  `RosenbrockIntegrator` (BroadcastGradientArgs при динамических
+  батч-осях скана) — прямой прогон (`network(...)`, в т.ч. с
+  `NetworkRNN(jit_compile=True)`) под XLA работает для всех встроенных
+  интеграторов. `NetworkRNN(jit_compile=True)` не сочетайте с `Trainer`
+  по умолчанию (TensorList-градиент не пересекает границу XLA/TF) —
+  включайте `jit_compile` у обоих или ни у кого.
 
 **Методы**:
 - `fit(t_sequence, inputs=None, epochs, verbose=1) -> History`
@@ -834,6 +866,24 @@ class MSELoss:
 ```python
 MSELoss(target: Dict[str, TensorType])
 ```
+
+### AntiPhaseLoss
+
+```python
+class AntiPhaseLoss:
+```
+
+**Конструктор**:
+```python
+AntiPhaseLoss(pop_pairs, target_correlation=-1.0, correlation_weight=1.0,
+              activity_target=20.0, activity_weight=0.5,
+              transient_steps=0, eps=1e-8)
+```
+
+Корреляционный член — per-batch-item: Pearson по свёртке `[T·N]` внутри
+каждого слота батча, вклад усредняется по B (слоты не смешиваются; при
+B=1 тождественно прежней пуловой корреляции). Activity-член — mean rate
+per-item, усреднение по B.
 
 ### StabilityPenalty
 
@@ -1051,8 +1101,20 @@ CalibrationProblem(
     objective: Optional[Callable] = None,   # (predictions, network) -> scalar
     initial_state: Optional[tuple] = None,  # (pop, syn)
     grad_mode: str = "assign",              # "assign" | "chain"
+    held_out: Optional[Sequence[Experiment]] = None,
+    compiled: bool = False,
+    chunk_length: Optional[int] = None,     # чанкинг прогона (память O(L))
+    chunk_grad: str = "checkpointed",       # "checkpointed" | "truncated"
 )
 ```
+
+- `compiled=True`: `value_and_gradient` / `evaluate` / `residual`
+  выполняются через скомпилированное tf.function-ядро (одна трассировка
+  на objective × протокол времени/входов, кэш по id объектов; view-хелперы
+  создают новые ядра лениво). Мутация модели (assign φ → θ), счётчики и
+  numpy-сборка Evaluation остаются снаружи в eager; явное initial_state
+  протокола — аргумент ядра (in-place смена отражается немедленно);
+  `simulate()` и `validate()` — eager в обоих режимах.
 
 **Методы**:
 - `simulate(phi=None) -> NetworkOutput` — прямой прогон сети
@@ -1185,7 +1247,21 @@ class MultiExperimentProblem:
     # одна сеть + один ParameterSpace; сумма потерь в одной GradientTape,
     # residual — конкатенация, компоненты с префиксом '{name}/'
     def __init__(self, network, parameter_space, experiments,
-                 grad_mode="assign", held_out=None): ...
+                 grad_mode="assign", held_out=None, compiled=False,
+                 vectorize=False, chunk_length=None, chunk_grad="checkpointed"): ...
+    # compiled=True: отдельное скомпилированное ядро на обучающий
+    # эксперимент (см. CalibrationProblem), суммы потерь/градиентов —
+    # eager-сложение снаружи; simulate/validate — eager в обоих режимах
+    # vectorize=True (этап 3): обучающие эксперименты одним батч-прогоном
+    # (одинаковые T и профиль входов обязательны). Потеря/градиент —
+    # СРЕДНЕЕ по экспериментам (цикловой режим — сумма): переключение режимов
+    # меняет масштаб loss/grad в E раз. n_forward += 1 за батч-операцию.
+    # x0-записи: common — broadcast на все слоты, exp-specific — one-hot
+    # подстановка в свой слот (изоляция вкладов). residual — конкатенация.
+    # simulate() — срез эксперимента (None — первого); validate() — батчем
+    # для held-out той же длины/профиля, иначе по одному. adjoint
+    # несовместим (per_step_loss поднимает NotImplementedError).
+    # compiled=True + vectorize=True — одно ядро на весь батч (no-retrace).
     # duck parity с CalibrationProblem: size/pack/unpack/bounds_phi/
     # evaluate/value_and_gradient/residual/simulate/validate/counters
     # начальные состояния: общие 'x0/<pop>/<slot>' — во всех экспериментах;

@@ -468,7 +468,15 @@ print(output.stability_loss)  # скаляр
 
 ## Внутренняя структура (_step_fn)
 
-Функция `_step_fn` выполняет один шаг симуляции и декорирована `@tf.function` для компиляции в граф TensorFlow:
+Публичный `call` — eager-нормализация аргументов (ранги, `inputs=None`,
+`initial_state=None`, статическая проверка batch=1), далее прогон идёт
+через `self._scan_compiled` — `tf.function` с закреплённой
+`input_signature` (T динамическая ось, batch=1 зафиксирован статически;
+ядро строится в `_build()` и не ретрейсится при смене T). Функция
+`_step_fn` выполняет один шаг симуляции и трассируется внутри этого
+графа (самостоятельных `@tf.function`-декораторов в модуле нет);
+опция `jit_compile=True` компилирует скан через XLA (см.
+`docs/optimization.md`, «Компилируемый режим»):
 
 ```python
 def _step_fn(states, t, input_step, graph, integrator, *, integration_mode="split"):

@@ -308,7 +308,7 @@ class TestIzhikevichDictIntegration:
 
         network = NetworkRNN(graph, integrator=EulerIntegrator())
 
-        t = tf.constant([[0.0], [0.5], [1.0]], dtype=tf.float32)
+        t = tf.constant([[0.0, 0.5, 1.0]], dtype=tf.float32)  # [batch=1, T=3]
         output = network(t, training=False)
         rates = output.firing_rates["pop"]
         assert rates.shape[0] == 1

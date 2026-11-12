@@ -218,6 +218,24 @@ for name in space.names:
 6. `minimize_lbfgsb` — обёртка над SciPy L-BFGS-B с границами из
    `ParameterSpace`.
 
+## Запуск на GPU
+
+Пакет полностью `tf.function`-совместим — на GPU дополнительных
+изменений кода не требуется: скан сети исполняется одним графом на любые
+длины протокола и размеры батча. Проверьте видимость устройства:
+
+```python
+import tensorflow as tf
+print(tf.config.list_physical_devices("GPU"))  # пусто → см. troubleshooting
+```
+
+На GPU рекомендуется float32 (`neuraltide.config.set_dtype(tf.float32)`
+до создания объектов; float64 в разы медленнее). Рекомендуемые режимы
+(`compiled=True` у задач, `Trainer(jit_compile=True)`, батч/vectorize,
+чанкинг) и рецепты при OOM — в разделе
+[«Запуск на GPU»](../optimization.md#запуск-на-gpu) справочника
+оптимизации.
+
 ## Куда дальше
 
 | Раздел | Что даёт |

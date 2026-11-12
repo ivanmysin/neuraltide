@@ -171,9 +171,11 @@ class BrunelFokkerPlanck(FokkerPlanckPopulation):
         # Центр начального распределения — внутри сетки, даже если
         # mu_0 > v_theta (режим выше порога)
         center = tf.minimum(mu0, tf.cast(self.v_theta[0], dtype) - 3.0 * sigma)
+        # Per-sample P [1, grid] -> broadcast на батч.
         P = self._gaussian_initial_state(center, sigma)
-        p_r = tf.zeros([1, 1], dtype=dtype)
-        nu_buf = tf.zeros([1, self._n_delay], dtype=dtype)
+        P = tf.broadcast_to(P, [batch_size, self.grid_size])
+        p_r = tf.zeros([batch_size, 1], dtype=dtype)
+        nu_buf = tf.zeros([batch_size, self._n_delay], dtype=dtype)
         return [P, p_r, nu_buf]
 
     def _threshold_flux_ms(self, P: TensorType, dtype: tf.DType) -> TensorType:
@@ -194,7 +196,8 @@ class BrunelFokkerPlanck(FokkerPlanckPopulation):
         dt = tf.constant(self.dt, dtype=dtype)
         h = tf.constant(self._dt_sub, dtype=dtype)
         tau = tf.cast(self.tau_m[0], dtype)
-        mu = tf.cast(self.mu_0[0], dtype) + tf.cast(I_syn[0, 0], dtype)
+        # Синаптический вход per-batch: [B, 1] -> [B]
+        mu = tf.cast(self.mu_0[0], dtype) + tf.cast(I_syn[:, 0], dtype)
 
         nu_delayed = nu_buf[:, 0:1]  # ν(t − τ_rp), 1/мс
 
@@ -244,18 +247,18 @@ class BrunelFokkerPlanck(FokkerPlanckPopulation):
 
         # Потоки на гранях: диффузия (центральные) + дрейф (upwind).
         # Физическая скорость адвекции −(V−μ)/τ (поток к μ), поэтому
-        # знак дрейфового потока отрицательный.
-        dP_face = (P_b[:, 1:] - P_b[:, :-1]) / dV  # [1, M-1]
+        # знак дрейфового потока отрицательный. μ per-batch: [B] -> [B, 1].
+        dP_face = (P_b[:, 1:] - P_b[:, :-1]) / dV  # [B, M-1]
         v_face = 0.5 * (self._v_grid[:, 1:] + self._v_grid[:, :-1])  # [1, M-1]
         diff_flux = -self._sigma2_over_2tau(dtype) * dP_face
-        drift = (v_face - mu) / tau  # [1, M-1]
+        drift = (v_face - mu[:, tf.newaxis]) / tau  # [B, M-1]
         upwind_P = tf.where(drift >= 0.0, P_b[:, 1:], P_b[:, :-1])
         adv_flux = -drift * upwind_P
         # На грани у порога адвекция отключена (P(θ) = 0)
         adv_flux = tf.concat(
             [adv_flux[:, :-1], tf.zeros_like(adv_flux[:, -1:])], axis=1
         )
-        J = diff_flux + adv_flux  # [1, M-1]
+        J = diff_flux + adv_flux  # [B, M-1]
         nu_sub = J[:, -1:]  # 1/мс
 
         dP = tf.concat(
@@ -279,11 +282,12 @@ class BrunelFokkerPlanck(FokkerPlanckPopulation):
         dtype = neuraltide.config.get_dtype()
         P = state[0]
         dV = tf.constant(self.dV, dtype=dtype)
-        mass = tf.reduce_sum(P) * dV + state[1][0, 0]
-        v_mean = tf.reduce_sum(self._v_grid * P) * dV / tf.maximum(mass, 1e-9)
+        # Масса и средний V — per-batch (по последней оси сетки).
+        mass = tf.reduce_sum(P, axis=-1) * dV + state[1][:, 0]  # [B]
+        v_mean = tf.reduce_sum(self._v_grid * P, axis=-1) * dV / tf.maximum(mass, 1e-9)
         return {
             "firing_rate": self.get_firing_rate(state),
-            "v_mean": tf.reshape(v_mean, [1, 1]),
+            "v_mean": tf.reshape(v_mean, [-1, 1]),
             "p_refractory": state[1],
         }
 

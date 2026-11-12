@@ -118,9 +118,9 @@ class AdaptiveRKIntegrator(BaseIntegrator):
         max_sub_t = tf.constant(self.max_substeps, dtype=tf.int32)
 
         y0_flat = flatten_state(state)
-        n_elems = tf.constant(
-            sum(int(s.shape.num_elements()) for s in state), dtype=dtype
-        )
+        # Динамическое число элементов: батч-оси состояний внутри скана
+        # неизвестны статически.
+        n_elems = tf.cast(tf.reduce_sum([tf.size(s) for s in state]), dtype)
 
         def _bs23(y_flat, h_eff):
             y = unflatten_state(y_flat, state)

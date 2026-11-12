@@ -89,6 +89,24 @@ def _slice_mask_step(
     return out
 
 
+def _reduce_param_grad(grad: tf.Tensor, var: tf.Tensor) -> tf.Tensor:
+    """Сворачивает батч-оси градиента параметра до ранга переменной.
+
+    Состояния сети батчированы ([B, ...]), поэтому градиенты параметров из
+    parameter_jacobian/compute_current_param_grad имеют ведущую батч-ось;
+    переменная параметра общая (per-sample форма). При B=1 свёртка по оси
+    размера 1 не меняет значений.
+    """
+    target_rank = var.shape.rank
+    while (
+        target_rank is not None
+        and grad.shape.rank is not None
+        and grad.shape.rank > target_rank
+    ):
+        grad = tf.reduce_sum(grad, axis=0)
+    return grad
+
+
 class AdjointSolver(tf.Module):
     """
     Solves adjoint state method for gradient computation.
@@ -559,6 +577,7 @@ class AdjointSolver(tf.Module):
                     key = ("syn", name, pname)
                     p_idx_c = self._aparam_rev.get(key)
                     if p_idx_c is not None:
+                        pgrad = _reduce_param_grad(pgrad, self._trainable[p_idx_c])
                         cur_param_updates.append((p_idx_c, dt_val * pgrad))
 
             # Loss coupling: ∂L/∂rate → ∂rate/∂pop_state
@@ -643,6 +662,7 @@ class AdjointSolver(tf.Module):
                         grad = tf.zeros_like(jac)
                         for k, lam in enumerate(sl):
                             grad = grad + lam * jac
+                        grad = _reduce_param_grad(grad, new_da[p_i])
                         new_da[p_i] = new_da[p_i] + dt_val * grad
                     except NotImplementedError:
                         pass

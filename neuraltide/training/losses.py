@@ -306,9 +306,13 @@ class AntiPhaseLoss(BaseLoss):
     1. Correlation term: penalises deviation from target_correlation.
        With target_correlation = -1.0, this pushes the pair toward perfect
        anti-phase.  Mutual inhibition provides the physical substrate.
+       Семантика по батчу: корреляция считается per-batch-item (свёртка
+       по [T·N] внутри слота), вклад усредняется по B — слоты батча не
+       смешиваются (при B=1 тождественно прежней пуловой корреляции).
 
     2. Activity term: penalises mean firing rates below activity_target.
        Prevents the trivial solution where both populations go silent.
+       Mean rate per-batch-item, усреднение по B.
 
     Args:
         pop_pairs: list of (name_a, name_b) tuples.
@@ -351,35 +355,43 @@ class AntiPhaseLoss(BaseLoss):
         rates = predictions.firing_rates  # dict[str, Tensor[B, T, N]]
 
         # --- 1. Anti-correlation term ---
+        # Корреляция per-batch-item: свёртка по [T·N] внутри каждого слота
+        # батча, вклад усредняется по B (при B=1 тождественно прежней
+        # пуловой корреляции по reshape(-1)).
         for pop_a, pop_b in self.pop_pairs:
-            r_a = rates[pop_a]  # [1, T, n_units]
+            r_a = rates[pop_a]  # [B, T, n_units]
             r_b = rates[pop_b]
 
             if self.transient_steps > 0:
                 r_a = r_a[:, self.transient_steps :, :]
                 r_b = r_b[:, self.transient_steps :, :]
 
-            r_a_flat = tf.reshape(r_a, [-1])
-            r_b_flat = tf.reshape(r_b, [-1])
+            batch = tf.shape(r_a)[0]
+            r_a_flat = tf.reshape(r_a, [batch, -1])  # [B, T*n]
+            r_b_flat = tf.reshape(r_b, [batch, -1])
 
-            mean_a = tf.reduce_mean(r_a_flat)
-            mean_b = tf.reduce_mean(r_b_flat)
+            mean_a = tf.reduce_mean(r_a_flat, axis=1, keepdims=True)
+            mean_b = tf.reduce_mean(r_b_flat, axis=1, keepdims=True)
             r_a_c = r_a_flat - mean_a
             r_b_c = r_b_flat - mean_b
 
-            cov = tf.reduce_mean(r_a_c * r_b_c)
-            std_a = tf.sqrt(tf.reduce_mean(r_a_c**2) + self.eps)
-            std_b = tf.sqrt(tf.reduce_mean(r_b_c**2) + self.eps)
-            corr = cov / (std_a * std_b + self.eps)
+            cov = tf.reduce_mean(r_a_c * r_b_c, axis=1)
+            std_a = tf.sqrt(tf.reduce_mean(r_a_c**2, axis=1) + self.eps)
+            std_b = tf.sqrt(tf.reduce_mean(r_b_c**2, axis=1) + self.eps)
+            corr = cov / (std_a * std_b + self.eps)  # [B]
 
-            loss += self.correlation_weight * (corr - self.target_correlation) ** 2
+            loss += self.correlation_weight * tf.reduce_mean(
+                (corr - self.target_correlation) ** 2
+            )
 
         # --- 2. Activity maintenance term ---
+        # Mean rate per-batch-item, усреднение по B (при B=1 — прежняя
+        # глобальная средняя).
         for pop_name in self.all_populations:
-            r = rates[pop_name]  # [1, T, n_units]
+            r = rates[pop_name]  # [B, T, n_units]
             if self.transient_steps > 0:
                 r = r[:, self.transient_steps :, :]
-            mean_rate = tf.reduce_mean(r)
+            mean_rate = tf.reduce_mean(tf.reduce_mean(r, axis=[1, 2]))
             loss += self.activity_weight * tf.nn.relu(self.activity_target - mean_rate)
 
         return loss

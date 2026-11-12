@@ -24,7 +24,8 @@ CalibrationProblem                      ← simulate / evaluate / residual / ∇
 верификация (taylor, dt, adjoint)  →  оптимизация  →  проверка (held-out, free-run)
 ```
 
-Всё вычисление — в eager-режиме, ведущая размерность батча равна 1.
+По умолчанию вычисления — в eager-режиме (компилируемый режим — см.
+ниже); ведущая размерность батча равна 1.
 
 ## Данные и целевая функция
 
@@ -177,8 +178,28 @@ lo, hi = problem.bounds_phi()              # физические границы
   входов невозможен.
 - `residual()` требует objective с residual-интерфейсом (`ResidualLoss`);
   иначе статус `Evaluation.status == "no_residual_interface"`.
-- Всё API eager и пакетный размер 1; прогоны длинных горизонтов
-  дорогие — об этом ниже (continuation, shooting).
+- API по умолчанию eager (есть опция `compiled=True`, см. ниже) и
+  пакетный размер 1; прогоны длинных горизонтов дорогие — об этом ниже
+  (continuation, shooting).
+
+**Компилируемый режим (`compiled=True`).** Для длинных горизонтов и
+многоитерационной оптимизации (L-BFGS-B, DE, мультистарт) включайте
+компиляцию задачи:
+
+```python
+problem = CalibrationProblem(network, space, t_seq, inputs=inputs,
+                             objective=loss, compiled=True)
+```
+
+`value_and_gradient` / `evaluate` / `residual` пойдут через
+скомпилированное ядро — один граф прогона+ленты+градиента на комбинацию
+(objective × протокол); Python-оверхед на итерацию заметно ниже (замеры —
+`benchmarks/g0_graph_mode.py`). Мутация модели, счётчики и `Evaluation`
+остаются eager; `simulate` / `validate` не меняются. Не включайте при
+отладке и FD/Taylor-диагностике (forward-AD несовместим с
+gradient-прогонами на одном экземпляре сети). Подробности и связка с
+`Trainer(jit_compile=True)` — в
+[optimization.md](../optimization.md#компилируемый-режим-tffunction).
 
 ## Верификация задачи до оптимизации
 

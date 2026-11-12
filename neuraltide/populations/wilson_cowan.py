@@ -93,7 +93,7 @@ class WilsonCowan(PopulationModel):
 
     def get_initial_state(self, batch_size: int = 1) -> StateList:
         dtype = neuraltide.config.get_dtype()
-        return [tf.zeros([1, self.n_units], dtype=dtype)]
+        return [tf.zeros([batch_size, self.n_units], dtype=dtype)]
 
     def derivatives(
         self,

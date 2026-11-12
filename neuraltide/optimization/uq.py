@@ -1436,6 +1436,10 @@ def bootstrap_experiments(
                 problem.parameter_space,
                 boot_experiments,
                 grad_mode=getattr(problem, "grad_mode", "assign"),
+                compiled=getattr(problem, "compiled", False),
+                vectorize=getattr(problem, "vectorize", False),
+                chunk_length=getattr(problem, "chunk_length", None),
+                chunk_grad=getattr(problem, "chunk_grad", "checkpointed"),
             )
             weights.append(
                 [int(v) for v in np.bincount(idx, minlength=len(experiments))]

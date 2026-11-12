@@ -662,14 +662,160 @@ finally:
 - tensor candidate-batch (batch>1 через NetworkRNN в одном прогоне) не
   поддержан — параллелится только «один кандидат = один прогон».
 
+## Компилируемый режим (tf.function)
+
+По умолчанию всё считается в eager TensorFlow — удобно для отладки, но
+каждая итерация оптимизатора платит Python-оверхед за построение графа
+операций. Два независимых механизма компиляции снимают большую его часть
+(оба опциональны; eager остаётся fallback):
+
+**1. Keras-путь: `NetworkRNN(jit_compile=...)` / `Trainer(jit_compile=...)`.**
+Скан симуляции и train step всегда исполняются через `tf.function` с
+закреплёнными сигнатурами (см. `core/network.py`); `jit_compile=True`
+дополнительно компилирует их через XLA. Ограничения XLA (TF 2.21, CPU):
+прямой прогон компилируется для всех встроенных интеграторов; градиент
+(train step) — для всех, кроме `AdaptiveRKIntegrator` и
+`ExponentialEulerIntegrator` (InvalidArgumentError «fixed tensor list
+size»). `run_eagerly=True` и `jit_compile=True` несовместимы (ValueError);
+`grad_method='adjoint'` с `jit_compile=True` пока не поддержан
+(NotImplementedError).
+
+**2. Optimization-путь: `CalibrationProblem(..., compiled=True)` /
+`MultiExperimentProblem(..., compiled=True)`.**
+`value_and_gradient` / `evaluate` / `residual` выполняются через
+скомпилированное ядро (`_CompiledCore`, `optimization/_compiled.py`):
+граф прогона сети + GradientTape + градиента по φ трассируется один раз
+на комбинацию (эксперимент × objective × протокол) и кэшируется; ядро
+без XLA по умолчанию. Снаружи в eager остаются: мутация модели
+(`assign` φ → θ), счётчики, numpy-сборка `Evaluation`, `simulate()` и
+`validate()`. Ключ кэша — id объектов (задача держит ссылки): view-хелперы
+(`time_slice` / `with_objective` / `with_inputs` / `with_initial_state`)
+создают новые ядра лениво; явное `initial_state` протокола — аргумент
+ядра, in-place смена отражается немедленно; мутирование objective по
+месту ядром не отслеживается.
+
+**Когда включать.** Длинные горизонты T и много итераций (L-BFGS-B,
+DE, мультистарт): compiled/jit убирают Python-оверхед за итерацию
+(замеры — `benchmarks/g0_graph_mode.py`). **Когда не включать.** Отладка
+(стеки ошибок внутри графа менее читабельны); FD/Taylor-диагностика и
+forward-чувствительности (forward-AD несовместим с предшествующими
+gradient-прогонами на одном экземпляре сети — см. ограничения ниже);
+сценарии с частой сменой objective по месту.
+
+## Запуск на GPU
+
+Пакет полностью `tf.function`-совместим (этап 1): скан `NetworkRNN`
+исполняется через закреплённый граф с динамическими T и batch — один
+граф на любые длины протокола и размеры батча, ретрейсинга при смене
+размеров нет. На GPU дополнительных изменений кода не требуется.
+
+**Проверка окружения.** TensorFlow должен видеть устройство:
+
+```python
+import tensorflow as tf
+print(tf.config.list_physical_devices("GPU"))
+```
+
+Если список пуст — установлена сборка TF без CUDA-поддержки:
+переустановите по официальной инструкции
+(https://www.tensorflow.org/install/pip, `pip install tensorflow` или
+`tensorflow[and-cuda]` под вашу ОС/драйвер). Пакет сам размещает
+вычисления на GPU (placement по умолчанию TF); при нескольких
+устройствах явное размещение — `with tf.device("/GPU:0"): ...`.
+
+**dtype.** На GPU рекомендуется float32: float64 работает, но в 3–10 и
+больше раз медленнее. Тип задаётся до создания любых объектов:
+
+```python
+import neuraltide
+neuraltide.config.set_dtype(tf.float32)  # до построения сети/задач
+```
+
+**Рекомендуемая связка режимов.** `CalibrationProblem(...,
+compiled=True)` / `MultiExperimentProblem(..., compiled=True)` —
+компилируемое ядро прогона+градиента; `Trainer(jit_compile=True)` —
+XLA-поверх (проверено на TF 2.21: градиент под XLA не компилируется у
+`AdaptiveRKIntegrator`/`ExponentialEulerIntegrator`/split-`Rosenbrock`
+— снимите `jit_compile` для них, прямой прогон под XLA работает у всех);
+батч `B>1` в `NetworkRNN` и `vectorize=True` у многоэкспериментной
+задачи — параллелизм протоколов одним прогоном; чанкинг
+`chunk_length=L` для длинных временных рядов (память градиента O(L)).
+Сочетание `jit_compile` + чанкинг не валидировано — используйте одно из
+двого.
+
+**Память.** Рост памяти GPU по умолчанию — стандартные средства TF:
+`tf.config.experimental.set_memory_growth(device, True)` при
+необходимости совместного использования карты. OOM видеопамяти на
+длинном T: уменьшите `chunk_length`, размер батча, используйте
+`return_rates=False` для predict-only либо отключите `jit_compile`.
+
+**Проверка и замеры.** GPU smoke-тест: `pytest tests/unit/test_graph_mode.py
+-k gpu` (skip, если GPU нет). Бенчмарк режимов:
+`python benchmarks/g0_graph_mode.py` — штатные цифры CPU; на GPU
+перезапустите для своей машины.
+
+## Чанкинг длинных протоколов (этап 4)
+
+Длинный горизонт T держит активации всех шагов для BPTT (память O(T)).
+`chunk_length=L` разбивает прогон на сегменты длины L (carry = final_state
+предыдущего сегмента; последний может быть короче) — память под активации
+градиента O(L):
+
+- `chunk_grad='checkpointed'` (default) — точный BPTT: каждый сегмент
+  обёрнут в checkpointing, граничные carry сохраняются, активации сегмента
+  пересчитываются при backward. Стоимость ~2× прямого прохода на сегмент;
+  итоговый градиент совпадает с целым прогоном.
+- `chunk_grad='truncated'` — stop_gradient между сегментами: дёшево
+  (без пересчёта), но градиент смещён (вклад динамики через границы
+  сегментов теряется).
+
+**Как выбрать L.** Память ~ O(L); время растёт с числом сегментов
+(checkpointed ~ 2× стоимость BPTT на шаг). Практика: начните с L=100–500
+и уменьшайте при OOM; truncated берите, когда устойчивость важнее точности
+градиента.
+
+**Где включать.** `NetworkRNN.call(..., chunk_length=L, chunk_grad=...)`;
+`Trainer(chunk_length=...)`, `CalibrationProblem`/`MultiExperimentProblem`
+(`chunk_length=...`; view-хелперы наследуют — срез чанкуется внутри себя);
+`return_rates=False` для predict-only без конкатенации rates.
+Несовместимости: `grad_method='adjoint'` (у adjoint собственная память
+O(1) — ValueError); чанкинг требует статической длины T; XLA-путь
+(`jit_compile`) с чанкингом не валидирован. stability-штраф чанкованного
+прогона — взвешенное среднее сегментных итогов Σ(stab_k·L_k)/T; при
+`stability_penalty_weight>0` результат зависит от разбиения (в отличие
+от целого пути, который берёт накопленный штраф последнего шага) — держите
+weight=0 (default).
+
 ## Ограничения
 
-- **Eager-режим**: все методы работают в eager TensorFlow; `tf.function`
-  вокруг методов задачи не поддерживается;
-- **batch=1**: контракт NetworkRNN; прогоны и `predictive_intervals` —
+- **Eager по умолчанию**: методы задач работают в eager TensorFlow;
+  компилируемый режим (`compiled=True`) — опция, см. раздел
+  «Компилируемый режим (tf.function)» выше;
+- **Batch сети B>1 (этап 2)**: `NetworkRNN` поддерживает произвольный
+  батч (состояния `[B, n]`, синапсы `[B, n_pre, n_post]`); один батч-прогон
+  эквивалентен B индивидуальным с общим протоколом (значения и градиенты).
+  Все слоты батча исполняют один и тот же протокол; `InputPopulation`
+  внутри полного скана не поддержан; split-шаги жёстких интеграторов
+  (`Rosenbrock`/`IMEX`/`Exponential` population step) — только batch=1.
+  Пакетная оценка кандидатов optimization-слоя по-прежнему послойная
+  (`evaluate_candidates`), не тензорный batch; `predictive_intervals` —
   по одному кандидату за раз;
+- **Векторный режим экспериментов (этап 3)**:
+  `MultiExperimentProblem(..., vectorize=True)` прогоняет все обучающие
+  эксперименты одним батч-прогоном (одинаковые T и профиль входов —
+  обязательны, иначе ValueError; default False = цикловой режим без
+  изменений). Потеря и градиент — среднее по экспериментам, а не сумма:
+  переключение режимов меняет масштаб loss/grad ровно в E раз
+  (эквивалентно весам 1/E в цикловом). x0-записи ParameterSpace
+  материализуются батчево (common — broadcast на слоты, exp-specific —
+  one-hot в свой слот, изоляция вкладов сохраняется); residual —
+  конкатенация, компоненты с префиксом '{exp}/'. Счётчик n_forward
+  векторного режима: +1 за батч-прогон (семантика отличается от
+  циклового +E — учитывайте при сравнении бюджетов). adjoint-метод
+  несовместим с векторным режимом (per-step разложения нет).
 - **TF forward-AD против GradientTape в пределах одного NetworkRNN**:
-  `_scan_forward_states` — `@tf.function`; после gradient-прогона
+  скан — закреплённый `tf.function` (`_scan_compiled`, см.
+  `core/network.py`); после gradient-прогона
   (value_and_gradient/локальные решатели/балансировка) forward-режим
   чувствительностей (`residual_jvp`/`residual_jacobian` внутри Laplace)
   в этом экземпляре падает (`variant/int64` в while_loop). Порядок

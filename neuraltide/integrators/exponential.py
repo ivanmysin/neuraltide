@@ -90,6 +90,21 @@ class ExponentialEulerIntegrator(BaseIntegrator):
         state: StateList,
         total_synaptic_input: Dict[str, TensorType],
     ) -> Tuple[StateList, TensorType]:
+        # Якобиан строится per-unit ([n_units, d, d]) — батч-ось должна
+        # быть 1. assert_equal (не статическая форма): внутри графа скана
+        # батч-оси динамические. Для batch>1 используйте Euler/Heun/RK4
+        # (split) или integration_mode='network'.
+        for s in state:
+            tf.debugging.assert_equal(
+                tf.shape(s)[0],
+                1,
+                message=(
+                    "ExponentialEulerIntegrator.step supports batch=1 only "
+                    "(population jacobian is per-unit); got state batch "
+                    "!= 1. Use Euler/Heun/RK4 or integration_mode="
+                    "'network' for batch > 1."
+                ),
+            )
         dtype = neuraltide.config.get_dtype()
         dt = float(population.dt)
         h = dt / self.n_substeps

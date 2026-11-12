@@ -43,9 +43,9 @@ class TsodyksMarkramSynapse(SynapseModel):
     def get_initial_state(self, batch_size: int = 1) -> StateList:
         dtype = neuraltide.config.get_dtype()
         return [
-            tf.ones([self.n_pre, self.n_post], dtype=dtype),
-            tf.zeros([self.n_pre, self.n_post], dtype=dtype),
-            tf.zeros([self.n_pre, self.n_post], dtype=dtype),
+            tf.ones([batch_size, self.n_pre, self.n_post], dtype=dtype),
+            tf.zeros([batch_size, self.n_pre, self.n_post], dtype=dtype),
+            tf.zeros([batch_size, self.n_pre, self.n_post], dtype=dtype),
         ]
 
     def forward(
@@ -67,9 +67,10 @@ class TsodyksMarkramSynapse(SynapseModel):
         gsyn_max = _c(self.gsyn_max, dtype)
         e_r = _c(self.e_r, dtype)
 
+        # pre_rate [B, n_pre] -> [B, n_pre, 1] (батч-ось сохраняется;
+        # прежний transpose корректен только при B=1)
         firing_probs = dt * pre_firing_rate / 1000.0
-        firing_probs_T = tf.transpose(firing_probs)
-        FRpre_normed = pconn * firing_probs_T
+        FRpre_normed = pconn * firing_probs[:, :, tf.newaxis]
 
         tau1r = tf.math.divide_no_nan(tau_d, tau_d - tau_r)
 
@@ -88,10 +89,10 @@ class TsodyksMarkramSynapse(SynapseModel):
         R_new = r_ - released
 
         g_eff = gsyn_max * A_new
-        post_v_flat = tf.reshape(post_voltage, [self.n_post])
-        I_pair = g_eff * (e_r - post_v_flat)
-        I_syn = tf.reduce_sum(I_pair, axis=0, keepdims=True)
-        g_syn = tf.reduce_sum(g_eff, axis=0, keepdims=True)
+        post_v = post_voltage[:, tf.newaxis, :]  # [B, 1, n_post]
+        I_pair = g_eff * (e_r - post_v)
+        I_syn = tf.reduce_sum(I_pair, axis=-2)  # [B, n_post]
+        g_syn = tf.reduce_sum(g_eff, axis=-2)
 
         return ({"I_syn": I_syn, "g_syn": g_syn}, [R_new, U_new, A_new])
 
@@ -121,8 +122,8 @@ class TsodyksMarkramSynapse(SynapseModel):
         tau_r = tf.maximum(_c(self.tau_r, dtype), 1e-6)
         Uinc = _c(self.Uinc, dtype)
 
-        firing_probs_T = tf.transpose(pre_firing_rate / 1000.0)
-        s_input = pconn * firing_probs_T
+        firing_probs = pre_firing_rate / 1000.0
+        s_input = pconn * firing_probs[:, :, tf.newaxis]  # [B, n_pre, n_post]
 
         dA_dt = -A / tau_d + U * R * s_input
 
@@ -163,14 +164,14 @@ class TsodyksMarkramSynapse(SynapseModel):
             R_new, U_new, A_new = state
             g_eff = gsyn_max * A_new
         else:
-            firing_probs_T = tf.transpose(pre_firing_rate / 1000.0)
-            FRpre_normed = _c(self.pconn, dtype) * firing_probs_T
+            firing_probs = pre_firing_rate / 1000.0
+            FRpre_normed = _c(self.pconn, dtype) * firing_probs[:, :, tf.newaxis]
             g_eff = gsyn_max * FRpre_normed
 
-        post_v_flat = tf.reshape(post_voltage, [-1])
-        I_pair = g_eff * (e_r - post_v_flat)
-        I_syn = tf.reduce_sum(I_pair, axis=0, keepdims=True)
-        g_syn = tf.reduce_sum(g_eff, axis=0, keepdims=True)
+        post_v = post_voltage[:, tf.newaxis, :]  # [B, 1, n_post]
+        I_pair = g_eff * (e_r - post_v)
+        I_syn = tf.reduce_sum(I_pair, axis=-2)  # [B, n_post]
+        g_syn = tf.reduce_sum(g_eff, axis=-2)
 
         return {"I_syn": I_syn, "g_syn": g_syn}
 
@@ -201,8 +202,8 @@ class TsodyksMarkramSynapse(SynapseModel):
         tau_r = tf.maximum(_c(self.tau_r, dtype), 1e-6)
         Uinc = _c(self.Uinc, dtype)
 
-        firing_probs_T = tf.transpose(pre_firing_rate / 1000.0)
-        s = pconn * firing_probs_T
+        firing_probs = pre_firing_rate / 1000.0
+        s = pconn * firing_probs[:, :, tf.newaxis]  # [B, n_pre, n_post]
 
         dlam_R = (1.0 / tau_r + U * s) * lam_R - U * s * lam_A
         dlam_U = R * s * lam_R + (1.0 / tau_f + Uinc * s) * lam_U - R * s * lam_A
@@ -234,8 +235,8 @@ class TsodyksMarkramSynapse(SynapseModel):
         R, U, A = state
 
         dtype = neuraltide.config.get_dtype()
-        firing_probs_T = tf.transpose(pre_firing_rate / 1000.0)
-        s = self.pconn * firing_probs_T
+        firing_probs = pre_firing_rate / 1000.0
+        s = self.pconn * firing_probs[:, :, tf.newaxis]  # [B, n_pre, n_post]
 
         if param_name == "tau_f":
             return U / tf.square(tf.maximum(tf.cast(self.tau_f, dtype), 1e-6))
@@ -259,26 +260,27 @@ class TsodyksMarkramSynapse(SynapseModel):
         post_voltage: TensorType,
     ) -> StateList:
         """
-        VJP from I_syn/g_syn back to synapse state.
+        VJP from I_syn/g_syn back to synapse state (per-batch-slot).
 
-        I_syn[b,j] = sum_i gsyn_max[i,j] * A[i,j] * (e_r[i,j] - post_v[b,j])
-        g_syn[b,j] = sum_i gsyn_max[i,j] * A[i,j]
+        I_syn[b,j] = sum_i gsyn_max[i,j] * A[b,i,j] * (e_r[i,j] - post_v[b,j])
+        g_syn[b,j] = sum_i gsyn_max[i,j] * A[b,i,j]
 
         Only A contributes (R, U don't appear in current):
-            ∂I/∂A[i,j] = gsyn_max[i,j] * (e_r[i,j] - post_v[b,j])
-            ∂g/∂A[i,j] = gsyn_max[i,j]
+            ∂I/∂A[b,i,j] = gsyn_max[i,j] * (e_r[i,j] - post_v[b,j])
+            ∂g/∂A[b,i,j] = gsyn_max[i,j]
 
-        VJP: lam_A[i,j] += sum_b lam_I[b,j]*gsyn_max[i,j]*(e_r[i,j]-post_v[b,j])
-                           + sum_b lam_g[b,j]*gsyn_max[i,j]
+        VJP: lam_A[b,i,j] = lam_I[b,j]*gsyn_max[i,j]*(e_r[i,j]-post_v[b,j])
+                            + lam_g[b,j]*gsyn_max[i,j]
         """
         dtype = neuraltide.config.get_dtype()
         gsyn_max = tf.cast(self.gsyn_max, dtype)
         e_r = tf.cast(self.e_r, dtype)
 
-        lam_I_sum = tf.reduce_sum(lam_I, axis=0)
-        lam_g_sum = tf.reduce_sum(lam_g, axis=0)
+        post_v = post_voltage[:, tf.newaxis, :]  # [B, 1, n_post]
+        lam_I_b = lam_I[:, tf.newaxis, :]
+        lam_g_b = lam_g[:, tf.newaxis, :]
 
-        dA = gsyn_max * (lam_I_sum * (e_r - post_voltage) + lam_g_sum)
+        dA = gsyn_max * (lam_I_b * (e_r - post_v) + lam_g_b)
 
         return [tf.zeros_like(state[0]), tf.zeros_like(state[1]), dA]
 
@@ -291,21 +293,22 @@ class TsodyksMarkramSynapse(SynapseModel):
         post_voltage: TensorType,
     ) -> Dict[str, TensorType]:
         """
-        Gradients for current-level parameters.
+        Gradients for current-level parameters (per-batch-slot; суммирование
+        по батчу — за вызывающим кодом).
 
-        dgsyn_max = A * (lam_I @ (e_r - post_v) + lam_g)
-        (sum over batch dimension)
+        dgsyn_max[b,i,j] = A[b,i,j] * (lam_I[b,j] @ (e_r - post_v[b,j]) + lam_g[b,j])
         """
         dtype = neuraltide.config.get_dtype()
 
         e_r = tf.cast(self.e_r, dtype)
         R, U, A = state
 
-        lam_I_sum = tf.reduce_sum(lam_I, axis=0)
-        lam_g_sum = tf.reduce_sum(lam_g, axis=0)
+        post_v = post_voltage[:, tf.newaxis, :]  # [B, 1, n_post]
+        lam_I_b = lam_I[:, tf.newaxis, :]
+        lam_g_b = lam_g[:, tf.newaxis, :]
 
         if self.gsyn_max.trainable:
-            dgsyn_max = A * (lam_I_sum * (e_r - post_voltage) + lam_g_sum)
+            dgsyn_max = A * (lam_I_b * (e_r - post_v) + lam_g_b)
         else:
             dgsyn_max = tf.zeros_like(A)
 
