@@ -408,6 +408,25 @@ def _chain_gradient(
     return tf.concat(pieces, axis=0)
 
 
+def _literal_gradient_path(space: ParameterSpace, grad_mode: str) -> bool:
+    """True, если градиент пойдёт literal-путём по φ (и возможен fallback).
+
+    Это assign-режим без model_var-записей с переменными: literal-путь
+    пробует ``tape.gradient(loss, phi)`` и при неудаче (None) переходит
+    на ``_chain_gradient`` — то есть может вызвать ``tape.gradient``
+    дважды, и лента обязана быть persistent. Во всех остальных случаях
+    диспетчеризация сразу уходит в ``_chain_gradient`` (ровно один
+    вызов tape.gradient), и non-persistent ленты достаточно — это ещё и
+    сильно дешевле на графах tf.while_loop.
+    """
+    if grad_mode != "assign":
+        return False
+    return not any(
+        entry.kind == "model_var" and entry.variable is not None
+        for entry in space.phi_entries.values()
+    )
+
+
 def _phi_gradient(
     space: ParameterSpace,
     grad_mode: str,
@@ -423,12 +442,12 @@ def _phi_gradient(
         переменными — при них градиент через variable.assign недоступен,
         а literal вернул бы неполный градиент (только x0-часть).
     'chain': всегда цепное вычисление.
+
+    Лента должна быть persistent ровно тогда, когда
+    ``_literal_gradient_path(space, grad_mode)`` истинно (возможен
+    второй вызов tape.gradient при неудаче literal-пути).
     """
-    has_model_vars = any(
-        entry.kind == "model_var" and entry.variable is not None
-        for entry in space.phi_entries.values()
-    )
-    if grad_mode == "assign" and not has_model_vars:
+    if _literal_gradient_path(space, grad_mode):
         g = tape.gradient(loss_t, phi_t)
         if g is not None:
             return g

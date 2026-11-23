@@ -68,6 +68,8 @@ import neuraltide.config
 from neuraltide.core.types import cast_if_needed
 from neuraltide.optimization.problem import (
     CalibrationProblem,
+    _chain_gradient,
+    _literal_gradient_path,
     _materialize_initial_state,
     _phi_gradient,
 )
@@ -732,7 +734,12 @@ class ConstrainedProblem:
             problem._require_objective()
             t0 = time.perf_counter()
             phi_t = problem._prepare(phi)
-            with tf.GradientTape(persistent=True) as tape:
+            # persistent только для literal-пути (assign без model_var);
+            # иначе _chain_gradient делает единственный вызов tape.gradient
+            persistent = _literal_gradient_path(
+                problem.parameter_space, problem.grad_mode
+            )
+            with tf.GradientTape(persistent=persistent) as tape:
                 tape.watch(phi_t)
                 theta = problem.parameter_space.unpack(phi_t)
                 initial_state, x0_map = _materialize_initial_state(
@@ -749,14 +756,19 @@ class ConstrainedProblem:
                 loss_data = problem.objective(output, problem.network)
                 penalty, cvals = self._al_penalty_tf(output)
                 total = loss_data + penalty
-            grad_t = _phi_gradient(
-                problem.parameter_space,
-                problem.grad_mode,
-                tape,
-                total,
-                phi_t,
-                x0_map,
-            )
+            if persistent:
+                grad_t = _phi_gradient(
+                    problem.parameter_space,
+                    problem.grad_mode,
+                    tape,
+                    total,
+                    phi_t,
+                    x0_map,
+                )
+            else:
+                grad_t = _chain_gradient(
+                    problem.parameter_space, tape, total, phi_t, x0_map
+                )
             del tape
             problem._counters["n_gradient"] += 1
             eval_result = problem._build_evaluation(

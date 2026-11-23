@@ -706,7 +706,10 @@ class MultipleShootingProblem:
         phi_t = self.pack(phi)
         if phi is not None:
             self._apply_base_phi(phi_t)
-        with tf.GradientTape(persistent=True) as tape:
+        # единственный вызов tape.gradient внутри _chain_gradient — лента
+        # может быть non-persistent (persistent удерживала бы градиентные
+        # структуры tf.while_loop без необходимости)
+        with tf.GradientTape() as tape:
             tape.watch(phi_t)
             loss_t, stitched, gaps, x0_map, _ = self._forward_core(phi_t)
         grad_t = _chain_gradient(self._space, tape, loss_t, phi_t, x0_map)

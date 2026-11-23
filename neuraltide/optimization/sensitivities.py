@@ -49,6 +49,7 @@ import neuraltide.config
 from neuraltide.core.types import cast_if_needed
 from neuraltide.optimization.problem import (
     _chain_gradient,
+    _literal_gradient_path,
     _materialize_initial_state,
     _phi_gradient,
     CalibrationProblem,
@@ -779,7 +780,13 @@ def truncated_bptt(
             t_b = problem.t_sequence[:, split:e]
             in_b = None if problem.inputs is None else problem.inputs[:, split:e]
             problem._apply_phi(phi_var)
-            with tf.GradientTape() as tape:
+            # persistent ровно тогда, когда возможен literal-путь с
+            # fallback (второй tape.gradient); иначе _chain_gradient
+            # делает единственный вызов на non-persistent ленте
+            persistent = _literal_gradient_path(
+                problem.parameter_space, problem.grad_mode
+            )
+            with tf.GradientTape(persistent=persistent) as tape:
                 theta = problem.parameter_space.unpack(phi_var)
                 base = carry if carry is not None else problem.initial_state
                 init, x0_map = _materialize_initial_state(

@@ -101,6 +101,7 @@ from neuraltide.optimization._state import (
     _TENSOR_KINDS,
     _broadcast_or_validate_init,
     _concat_base_states,
+    _literal_gradient_path,
     _make_vectorized_x0_substitute,
     _materialize_batched_initial_state,
     _materialize_initial_state,
@@ -696,17 +697,14 @@ class CalibrationProblem:
             )
             return eval_result, grad_t
         phi_t = self._prepare(phi)
-        # persistent-лента нужна только для fallback-пути assign-режима
-        # (literal-градиент по phi, когда в пространстве нет model_var).
-        # Для model_var/chain градиент считается напрямую через
-        # _chain_gradient; non-persistent лента не удерживает структуры
-        # градиента tf.while_loop после первого tape.gradient — на больших
-        # сетях это многократно ускоряет value_and_gradient.
-        has_model_vars = any(
-            entry.kind == "model_var" and entry.variable is not None
-            for entry in self.parameter_space.phi_entries.values()
-        )
-        persistent = self.grad_mode == "assign" and not has_model_vars
+        # persistent-лента нужна только для literal-пути assign-режима
+        # (возможен fallback: tape.gradient по phi, при None — цепное
+        # вычисление по той же ленте). Для model_var/chain градиент
+        # считается напрямую через _chain_gradient (один вызов
+        # tape.gradient); non-persistent лента не удерживает структуры
+        # градиента tf.while_loop — на больших сетях это многократно
+        # быстрее.
+        persistent = _literal_gradient_path(self.parameter_space, self.grad_mode)
         with tf.GradientTape(persistent=persistent) as tape:
             tape.watch(phi_t)
             theta = self.parameter_space.unpack(phi_t)
@@ -1376,7 +1374,10 @@ class MultiExperimentProblem:
                 grad_t = None
             return loss_t, grad_t, comps, residual_t
         if with_tape:
-            with tf.GradientTape(persistent=True) as tape:
+            # persistent только для literal-пути (assign без model_var);
+            # иначе _chain_gradient делает единственный вызов tape.gradient
+            persistent = _literal_gradient_path(self.parameter_space, self.grad_mode)
+            with tf.GradientTape(persistent=persistent) as tape:
                 tape.watch(phi_t)
                 # theta строится ВНУТРИ ленты: x0-записи дифференцируемы
                 # по φ (как в цикловом режиме).
@@ -1396,9 +1397,14 @@ class MultiExperimentProblem:
                     chunk_grad=self.chunk_grad,
                 )
                 loss_t = vobj(output, self.network)
-            grad_t = _phi_gradient(
-                self.parameter_space, self.grad_mode, tape, loss_t, phi_t, x0_map
-            )
+            if persistent:
+                grad_t = _phi_gradient(
+                    self.parameter_space, self.grad_mode, tape, loss_t, phi_t, x0_map
+                )
+            else:
+                grad_t = _chain_gradient(
+                    self.parameter_space, tape, loss_t, phi_t, x0_map
+                )
             del tape
             self._counters["n_gradient"] += 1
         else:
@@ -1809,7 +1815,10 @@ class MultiExperimentProblem:
                 dt=float(self.network._graph.dt),
             )
             return eval_result, grad_t
-        with tf.GradientTape(persistent=True) as tape:
+        # persistent только для literal-пути (assign без model_var);
+        # иначе _chain_gradient делает единственный вызов tape.gradient
+        persistent = _literal_gradient_path(self.parameter_space, self.grad_mode)
+        with tf.GradientTape(persistent=persistent) as tape:
             tape.watch(phi_t)
             theta = self.parameter_space.unpack(phi_t)
             losses: List[tf.Tensor] = []
@@ -1824,9 +1833,12 @@ class MultiExperimentProblem:
                     x0_map.setdefault(key, []).append(tensor)
                 losses.append(exp.objective(output, self.network))
             loss_t = tf.add_n(losses)
-        grad_t = _phi_gradient(
-            self.parameter_space, self.grad_mode, tape, loss_t, phi_t, x0_map
-        )
+        if persistent:
+            grad_t = _phi_gradient(
+                self.parameter_space, self.grad_mode, tape, loss_t, phi_t, x0_map
+            )
+        else:
+            grad_t = _chain_gradient(self.parameter_space, tape, loss_t, phi_t, x0_map)
         del tape
         self._counters["n_gradient"] += 1
         components, residuals, status = self._aggregate(outputs)
