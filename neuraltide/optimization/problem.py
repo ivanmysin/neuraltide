@@ -167,19 +167,48 @@ class Experiment:
 # ---------------------------------------------------------------------------
 
 
+def _entry_bounds_phi(entry, dtype) -> Tuple[np.ndarray, np.ndarray]:
+    """Границы одной trainable-записи в φ-координатах (поэлементно).
+
+    min/max могут быть скалярами (broadcast на numel) или векторами
+    длины numel — как у размерных параметров IzhikevichMeanField
+    (`I_ext`/`Delta_I` после конверсии хранят границы списком).
+    """
+
+    def _inv(value) -> np.ndarray:
+        inv = entry.transform.inverse(tf.constant(value, dtype=dtype))
+        arr = np.asarray(inv, dtype=np.float64).reshape(-1)
+        if arr.size == 1:
+            return np.full(entry.numel, float(arr[0]), dtype=np.float64)
+        if arr.size == entry.numel:
+            return arr
+        raise ValueError(
+            f"ParameterSpace: bounds for '{entry.full_name}' have "
+            f"{arr.size} elements, expected 1 or {entry.numel}."
+        )
+
+    lo = (
+        _inv(entry.min)
+        if entry.min is not None
+        else np.full(entry.numel, -np.inf, dtype=np.float64)
+    )
+    hi = (
+        _inv(entry.max)
+        if entry.max is not None
+        else np.full(entry.numel, np.inf, dtype=np.float64)
+    )
+    return lo, hi
+
+
 def _bounds_phi_from_space(space: ParameterSpace) -> Tuple[np.ndarray, np.ndarray]:
     """Границы вектора φ из физических min/max trainable-записей ParameterSpace."""
     lower: list = []
     upper: list = []
     dtype = neuraltide.config.get_dtype()
     for entry in space.phi_entries.values():
-        lo, hi = -np.inf, np.inf
-        if entry.min is not None:
-            lo = float(entry.transform.inverse(tf.constant(entry.min, dtype)))
-        if entry.max is not None:
-            hi = float(entry.transform.inverse(tf.constant(entry.max, dtype)))
-        lower.extend([lo] * entry.numel)
-        upper.extend([hi] * entry.numel)
+        lo, hi = _entry_bounds_phi(entry, dtype)
+        lower.extend(lo.tolist())
+        upper.extend(hi.tolist())
     return (
         np.asarray(lower, dtype=np.float64),
         np.asarray(upper, dtype=np.float64),
@@ -213,33 +242,45 @@ def _search_box_phi_from_space(
     upper: list = []
     dtype = neuraltide.config.get_dtype()
     for entry in space.phi_entries.values():
-        lo, hi = -np.inf, np.inf
         if entry.min is not None and entry.max is not None:
-            span = float(entry.max) - float(entry.min)
-            lo_t = float(entry.min) + float(rel_margin) * span
-            hi_t = float(entry.max) - float(rel_margin) * span
-            lo = float(entry.transform.inverse(tf.constant(lo_t, dtype)))
-            hi = float(entry.transform.inverse(tf.constant(hi_t, dtype)))
-            lo, hi = min(lo, hi), max(lo, hi)
+            min_arr = _entry_bounds_phi_value(entry.min, entry.numel, entry.full_name)
+            max_arr = _entry_bounds_phi_value(entry.max, entry.numel, entry.full_name)
+            span = max_arr - min_arr
+            lo_t = min_arr + float(rel_margin) * span
+            hi_t = max_arr - float(rel_margin) * span
+            lo = np.asarray(
+                entry.transform.inverse(tf.constant(lo_t, dtype=dtype)),
+                dtype=np.float64,
+            ).reshape(-1)
+            hi = np.asarray(
+                entry.transform.inverse(tf.constant(hi_t, dtype=dtype)),
+                dtype=np.float64,
+            ).reshape(-1)
+            lo, hi = np.minimum(lo, hi), np.maximum(lo, hi)
         elif entry.min is not None or entry.max is not None:
-            lo_b, hi_b = _bounds_phi_from_space_entry(entry, dtype)
-            lo, hi = lo_b, hi_b
-        lower.extend([lo] * entry.numel)
-        upper.extend([hi] * entry.numel)
+            lo, hi = _entry_bounds_phi(entry, dtype)
+        else:
+            lo = np.full(entry.numel, -np.inf, dtype=np.float64)
+            hi = np.full(entry.numel, np.inf, dtype=np.float64)
+        lower.extend(np.asarray(lo, dtype=np.float64).reshape(-1).tolist())
+        upper.extend(np.asarray(hi, dtype=np.float64).reshape(-1).tolist())
     return (
         np.asarray(lower, dtype=np.float64),
         np.asarray(upper, dtype=np.float64),
     )
 
 
-def _bounds_phi_from_space_entry(entry, dtype) -> Tuple[float, float]:
-    """bounds_phi одной записи (для односторонних границ)."""
-    lo, hi = -np.inf, np.inf
-    if entry.min is not None:
-        lo = float(entry.transform.inverse(tf.constant(entry.min, dtype)))
-    if entry.max is not None:
-        hi = float(entry.transform.inverse(tf.constant(entry.max, dtype)))
-    return lo, hi
+def _entry_bounds_phi_value(value, numel: int, name: str) -> np.ndarray:
+    """Broadcast физического min/max (скаляр или вектор) до [numel]."""
+    arr = np.asarray(value, dtype=np.float64).reshape(-1)
+    if arr.size == 1:
+        return np.full(numel, float(arr[0]), dtype=np.float64)
+    if arr.size == numel:
+        return arr
+    raise ValueError(
+        f"ParameterSpace: bounds for '{name}' have {arr.size} elements, "
+        f"expected 1 or {numel}."
+    )
 
 
 def _make_evaluation(
@@ -655,9 +696,18 @@ class CalibrationProblem:
             )
             return eval_result, grad_t
         phi_t = self._prepare(phi)
-        # persistent: assign-режим сначала пробует literal-путь по phi,
-        # и при None переиспользует ту же ленту для цепного вычисления.
-        with tf.GradientTape(persistent=True) as tape:
+        # persistent-лента нужна только для fallback-пути assign-режима
+        # (literal-градиент по phi, когда в пространстве нет model_var).
+        # Для model_var/chain градиент считается напрямую через
+        # _chain_gradient; non-persistent лента не удерживает структуры
+        # градиента tf.while_loop после первого tape.gradient — на больших
+        # сетях это многократно ускоряет value_and_gradient.
+        has_model_vars = any(
+            entry.kind == "model_var" and entry.variable is not None
+            for entry in self.parameter_space.phi_entries.values()
+        )
+        persistent = self.grad_mode == "assign" and not has_model_vars
+        with tf.GradientTape(persistent=persistent) as tape:
             tape.watch(phi_t)
             theta = self.parameter_space.unpack(phi_t)
             initial_state, x0_map = _materialize_initial_state(
@@ -676,10 +726,13 @@ class CalibrationProblem:
                 chunk_grad=self.chunk_grad,
             )
             loss_t = self.objective(output, self.network)
-        grad_t = _phi_gradient(
-            self.parameter_space, self.grad_mode, tape, loss_t, phi_t, x0_map
-        )
-        # persistent-лента больше не нужна — явно освобождаем.
+        if persistent:
+            grad_t = _phi_gradient(
+                self.parameter_space, self.grad_mode, tape, loss_t, phi_t, x0_map
+            )
+        else:
+            grad_t = _chain_gradient(self.parameter_space, tape, loss_t, phi_t, x0_map)
+        # лента больше не нужна — явно освобождаем.
         del tape
         self._counters["n_gradient"] += 1
         eval_result = self._build_evaluation(

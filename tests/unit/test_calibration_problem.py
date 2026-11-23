@@ -293,6 +293,129 @@ class TestBoundsPhi:
         assert lower[i_iext] == -np.inf and upper[i_iext] == np.inf
 
 
+def _phi_offsets(space: ParameterSpace) -> dict:
+    """Смещения записей в векторе φ (записи могут иметь numel > 1)."""
+    offsets = {}
+    off = 0
+    for name, entry in space.phi_entries.items():
+        offsets[name] = off
+        off += entry.numel
+    return offsets
+
+
+class TestVectorBoundsPhi:
+    """Векторные (per-element) min/max в bounds_phi/search_box_phi.
+
+    Регрессия: float(entry.min) на списке падал TypeError; теперь границы
+    broadcast'ятся поэлементно (случай явных list-границ и размерных
+    параметров IzhikevichMeanField после конверсии).
+    """
+
+    def _build_problem(self) -> CalibrationProblem:
+        pop = WilsonCowan(
+            dt=DT,
+            params={
+                "tau": {
+                    "value": [8.0, 8.0],
+                    "trainable": True,
+                    "min": 1.0,
+                    "max": 50.0,
+                },
+                "a": 1.0,
+                "theta": 0.0,
+                "w": 0.2,
+                "I_ext": {
+                    "value": [0.8, 1.0],
+                    "trainable": True,
+                    "min": [0.0, 0.5],
+                    "max": [2.0, 3.0],
+                },
+                "max_rate": 100.0,
+            },
+            name="exc",
+        )
+        syn = StaticSynapse(
+            n_pre=1,
+            n_post=2,
+            dt=DT,
+            params={
+                "gsyn_max": {
+                    "value": [[0.05, 0.05]],
+                    "trainable": True,
+                    "min": 0.001,
+                    "max": 1.0,
+                },
+                "pconn": [[1.0, 1.0]],
+                "e_r": 0.0,
+            },
+            name="in->exc",
+        )
+        gen = ConstantRateGenerator(dt=DT, params={"rate": 10.0})
+
+        graph = NetworkGraph(dt=DT)
+        graph.declare_input("in", n_units=1)
+        graph.add_population("exc", pop)
+        graph.add_synapse("in->exc", syn, src="in", tgt="exc")
+        network = NetworkRNN(graph, EulerIntegrator())
+
+        t_seq = tf.constant((np.arange(T, dtype=np.float32) * DT)[None, :, None])
+        inputs = graph.pack_inputs({"in": gen(t_seq)})
+        target = network(t_seq, inputs=inputs).firing_rates["exc"]
+        loss = ResidualLoss(
+            [ObservationSpec(name="obs", population="exc", target=target, sigma=2.0)]
+        )
+        space = ParameterSpace.from_network(network)
+        return CalibrationProblem(network, space, t_seq, inputs=inputs, objective=loss)
+
+    def test_bounds_per_element(self):
+        problem = self._build_problem()
+        lower, upper = problem.bounds_phi()
+        assert lower.shape == upper.shape == (problem.size,)
+        off = _phi_offsets(problem.parameter_space)
+
+        # I_ext: векторные границы, identity-трансформация → поэлементно
+        i = off["exc/I_ext"]
+        np.testing.assert_allclose(lower[i : i + 2], [0.0, 0.5], rtol=1e-6)
+        np.testing.assert_allclose(upper[i : i + 2], [2.0, 3.0], rtol=1e-6)
+
+        # tau: скалярные границы бродкастятся на оба юнита
+        i = off["exc/tau"]
+        np.testing.assert_allclose(lower[i : i + 2], [1.0, 1.0], rtol=1e-6)
+        np.testing.assert_allclose(upper[i : i + 2], [50.0, 50.0], rtol=1e-6)
+
+        # gsyn_max: матричная запись [1, 2], скалярные границы бродкастятся
+        i = off["in->exc/gsyn_max"]
+        np.testing.assert_allclose(lower[i : i + 2], [0.001, 0.001], rtol=1e-6)
+        np.testing.assert_allclose(upper[i : i + 2], [1.0, 1.0], rtol=1e-6)
+
+    def test_search_box_per_element(self):
+        problem = self._build_problem()
+        lo, hi = problem.bounds_phi()
+        s_lo, s_hi = problem.search_box_phi(0.1)
+        assert s_lo.shape == s_hi.shape == (problem.size,)
+
+        # 10%-отступ внутри физических [0, 0.5] / [2, 3] — поэлементно
+        i = _phi_offsets(problem.parameter_space)["exc/I_ext"]
+        np.testing.assert_allclose(s_lo[i : i + 2], [0.2, 0.75], rtol=1e-5)
+        np.testing.assert_allclose(s_hi[i : i + 2], [1.8, 2.75], rtol=1e-5)
+        # бокс строго внутри bounds
+        assert np.all(s_lo >= lo - 1e-9) and np.all(s_hi <= hi + 1e-9)
+
+    def test_gradient_modes_agree(self):
+        problem = self._build_problem()
+        problem.grad_mode = "assign"
+        # сдвиг от phi0-минимума (target снят с него), чтобы градиенты
+        # были ненулевыми
+        phi0 = np.asarray(problem.pack(), dtype=np.float64) + 0.25
+        _, g_assign = problem.value_and_gradient(phi0)
+        problem.grad_mode = "chain"
+        _, g_chain = problem.value_and_gradient(phi0)
+        np.testing.assert_allclose(
+            np.asarray(g_assign), np.asarray(g_chain), rtol=1e-5, atol=1e-8
+        )
+        assert np.any(np.asarray(g_assign) != 0.0)
+
+
 class TestNonTrainableRegistryEntries:
     """C8: ручная non-trainable model_var запись — реестровая константа вне φ."""
 
