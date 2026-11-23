@@ -86,7 +86,7 @@ def build_network(dt, mode):
 def run_once(dt, mode, t_end):
     """Прогон сети: возвращает (E в момент t_end, wall time после разогрева)."""
     network = build_network(dt, mode)
-    t_seq = _t_seq(int(round(t_end / dt)), dt)
+    t_seq = _t_seq(round(t_end / dt), dt)
     network(t_seq)  # разогрев: трассировка @tf.function
     t0 = time.perf_counter()
     out = network(t_seq)

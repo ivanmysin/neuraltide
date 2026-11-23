@@ -209,7 +209,7 @@ def main() -> None:
             rel_err = float("inf")
             rel_err_str = "unstable/overflow"
         print(
-            f"{name:<28}{str(r['finite']):>8}{rel_err_str:>19}"
+            f"{name:<28}{r['finite']!s:>8}{rel_err_str:>19}"
             f"{r['wall']:>9.3f}{r['n_substeps']:>10}"
         )
 

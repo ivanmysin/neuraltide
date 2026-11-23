@@ -1,5 +1,6 @@
-import tensorflow as tf
 from abc import ABC, abstractmethod
+
+import tensorflow as tf
 
 import neuraltide
 import neuraltide.config
@@ -231,7 +232,7 @@ class HemodynamicReadout(BaseReadout):
 
     def build(self, input_shape):
         dtype = neuraltide.config.get_dtype()
-        n_taps = max(int(round(self.duration_s * 1000.0 / self.dt)), 1)
+        n_taps = max(round(self.duration_s * 1000.0 / self.dt), 1)
         t_s = tf.range(n_taps, dtype=dtype) * tf.constant(self.dt / 1000.0, dtype=dtype)
         hrf = self._gamma_pdf(t_s, 6.0) - self._gamma_pdf(t_s, 16.0) / 6.0
         hrf = hrf / tf.reduce_max(tf.abs(hrf))

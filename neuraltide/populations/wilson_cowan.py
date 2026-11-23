@@ -8,7 +8,7 @@ from neuraltide.core.base import (
     _infer_n_units_from_params,
     _validate_param_dimensions,
 )
-from neuraltide.core.types import TensorType, StateList, Dict
+from neuraltide.core.types import StateList, TensorType
 
 
 class WilsonCowan(PopulationModel):
@@ -98,7 +98,7 @@ class WilsonCowan(PopulationModel):
     def derivatives(
         self,
         state: StateList,
-        total_synaptic_input: Dict[str, TensorType],
+        total_synaptic_input: dict[str, TensorType],
     ) -> StateList:
         E = state[0]
         I_syn = total_synaptic_input["I_syn"]
@@ -120,11 +120,11 @@ class WilsonCowan(PopulationModel):
         max_rate = tf.cast(self.max_rate, neuraltide.config.get_dtype())
         return tf.nn.relu(E) * max_rate
 
-    def observables(self, state: StateList) -> Dict[str, TensorType]:
+    def observables(self, state: StateList) -> dict[str, TensorType]:
         return {"firing_rate": self.get_firing_rate(state)}
 
     @property
-    def parameter_spec(self) -> Dict[str, Dict[str, any]]:
+    def parameter_spec(self) -> dict[str, dict[str, any]]:
         return {
             "tau": {
                 "shape": (self.n_units,),

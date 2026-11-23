@@ -33,13 +33,11 @@ Network-wide шаг (integration_mode='network') не поддерживаетс
 (supports_network_step=False): NetworkRNN в этом режиме бросит ValueError.
 """
 
-from typing import Dict, Tuple
-
 import tensorflow as tf
 
 import neuraltide.config
 from neuraltide.core.base import PopulationModel, SynapseModel
-from neuraltide.core.types import TensorType, StateList, cast_if_needed
+from neuraltide.core.types import StateList, TensorType, cast_if_needed
 from neuraltide.integrators.base import BaseIntegrator
 from neuraltide.integrators.euler import EulerIntegrator
 from neuraltide.integrators.stiffness import flatten_state, unflatten_state
@@ -108,8 +106,8 @@ class IMEXEulerIntegrator(BaseIntegrator):
         self,
         population: PopulationModel,
         state: StateList,
-        total_synaptic_input: Dict[str, TensorType],
-    ) -> Tuple[StateList, TensorType]:
+        total_synaptic_input: dict[str, TensorType],
+    ) -> tuple[StateList, TensorType]:
         # Линеаризация строится per-unit ([n_units, d, d]) — батч-ось должна
         # быть 1. assert_equal (не статическая форма): внутри графа скана
         # батч-оси динамические. Для batch>1 используйте Euler/Heun/RK4
@@ -182,7 +180,7 @@ class IMEXEulerIntegrator(BaseIntegrator):
         pre_firing_rate: TensorType,
         post_voltage: TensorType,
         dt: float,
-    ) -> Tuple[StateList, TensorType]:
+    ) -> tuple[StateList, TensorType]:
         return self._syn_euler.step_synapse(
             synapse, state, pre_firing_rate, post_voltage, dt
         )

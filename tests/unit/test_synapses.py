@@ -1,12 +1,12 @@
-import tensorflow as tf
 import numpy as np
+import tensorflow as tf
 
 from neuraltide.integrators import EulerIntegrator
 from neuraltide.synapses import (
-    TsodyksMarkramSynapse,
+    CompositeSynapse,
     NMDASynapse,
     StaticSynapse,
-    CompositeSynapse,
+    TsodyksMarkramSynapse,
 )
 
 
@@ -109,7 +109,7 @@ class TestTsodyksMarkramDerivatives:
         state = syn.get_initial_state()
         target_state_fwd = None
         for _ in range(100):
-            current_dict, new_state = syn.forward(pre_rate, post_v, state, dt)
+            _current_dict, new_state = syn.forward(pre_rate, post_v, state, dt)
             target_state_fwd = new_state
             state = new_state
 
@@ -168,7 +168,7 @@ class TestNMDADerivatives:
         state = syn.get_initial_state()
         target_state_fwd = None
         for _ in range(100):
-            current_dict, new_state = syn.forward(pre_rate, post_v, state, dt)
+            _current_dict, new_state = syn.forward(pre_rate, post_v, state, dt)
             target_state_fwd = new_state
             state = new_state
 

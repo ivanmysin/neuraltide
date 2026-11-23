@@ -8,15 +8,15 @@ These tests verify:
 4. Long sequence handling with adjoint method
 """
 
+import numpy as np
 import pytest
 import tensorflow as tf
-import numpy as np
 
 from neuraltide.core.network import NetworkGraph, NetworkRNN
-from neuraltide.populations import IzhikevichMeanField
-from neuraltide.synapses import TsodyksMarkramSynapse, NMDASynapse, StaticSynapse
 from neuraltide.inputs import VonMisesGenerator
 from neuraltide.integrators import RK4Integrator
+from neuraltide.populations import IzhikevichMeanField
+from neuraltide.synapses import NMDASynapse, StaticSynapse, TsodyksMarkramSynapse
 from neuraltide.training import MSELoss
 from neuraltide.utils import seed_everything
 

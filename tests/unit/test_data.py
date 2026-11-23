@@ -5,7 +5,7 @@ import os
 import numpy as np
 import pytest
 
-from neuraltide.data import save_dataset, load_dataset, Dataset
+from neuraltide.data import Dataset, load_dataset, save_dataset
 
 
 class TestSaveLoadDataset:

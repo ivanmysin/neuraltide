@@ -27,14 +27,15 @@ joint_vector_field-линеаризации RosenbrockIntegrator.step_network; �
 последнего шага сегмента), как внутри шага у network-wide интеграторов.
 """
 
-from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple
+from collections.abc import Callable
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 import tensorflow as tf
 
 import neuraltide.config
 from neuraltide.core.base import PopulationModel
-from neuraltide.core.types import TensorType, StateList, cast_if_needed
+from neuraltide.core.types import StateList, TensorType, cast_if_needed
 
 if TYPE_CHECKING:  # циклический импорт: core.network -> integrators.base
     from neuraltide.core.network import NetworkGraph, NetworkRNN
@@ -82,7 +83,7 @@ def unflatten_joint_state(
     flat: tf.Tensor,
     pop_states: StateList,
     syn_states: StateList,
-) -> Tuple[StateList, StateList]:
+) -> tuple[StateList, StateList]:
     """
     Обратное к flatten_joint_state преобразование.
 
@@ -106,7 +107,7 @@ def unflatten_joint_state(
     return new_pop, new_syn
 
 
-def joint_block_layout(rhs: Any) -> Tuple[List[int], List[int]]:
+def joint_block_layout(rhs: Any) -> tuple[list[int], list[int]]:
     """
     «Network scope»: числа тензоров состояния по блокам популяций и
     синапсов связанной сети.
@@ -133,7 +134,7 @@ def joint_block_layout(rhs: Any) -> Tuple[List[int], List[int]]:
     return pop_blocks, syn_blocks
 
 
-def joint_derivative_ranges(blocks: List[int], n_derivs: int) -> List[Tuple[int, int]]:
+def joint_derivative_ranges(blocks: list[int], n_derivs: int) -> list[tuple[int, int]]:
     """
     Раскладывает n_derivs плоских производных по блокам состояния.
 
@@ -165,7 +166,7 @@ def joint_derivative_ranges(blocks: List[int], n_derivs: int) -> List[Tuple[int,
 
 def joint_dynamic_indices(
     rhs: Any, n_dpop: int, n_dsyn: int
-) -> Tuple[List[int], List[int]]:
+) -> tuple[list[int], list[int]]:
     """
     Плоские индексы слотов состояния, для которых rhs дал производные.
 
@@ -179,12 +180,12 @@ def joint_dynamic_indices(
         и syn_states. Слоты блоков без динамики в списки не входят.
     """
     pop_blocks, syn_blocks = joint_block_layout(rhs)
-    pop_idx: List[int] = []
+    pop_idx: list[int] = []
     s = 0
     for n, (_, cnt) in zip(pop_blocks, joint_derivative_ranges(pop_blocks, n_dpop)):
         pop_idx.extend(range(s, s + cnt))
         s += n
-    syn_idx: List[int] = []
+    syn_idx: list[int] = []
     s = 0
     for n, (_, cnt) in zip(syn_blocks, joint_derivative_ranges(syn_blocks, n_dsyn)):
         syn_idx.extend(range(s, s + cnt))
@@ -196,7 +197,7 @@ def flat_vector_field_jacobian(
     f_flat: Callable[[tf.Tensor], tf.Tensor],
     z: tf.Tensor,
     method: str = "jvp",
-    fd_eps: Optional[float] = None,
+    fd_eps: float | None = None,
 ) -> tf.Tensor:
     """
     Плотный якобиан J = ∂f/∂z плоского векторного поля: [D, D].
@@ -279,9 +280,9 @@ def flat_vector_field_jacobian(
 def state_vector_field_jacobian(
     population: PopulationModel,
     state: StateList,
-    total_synaptic_input: Dict[str, TensorType],
+    total_synaptic_input: dict[str, TensorType],
     method: str = "jvp",
-    fd_eps: Optional[float] = None,
+    fd_eps: float | None = None,
 ) -> tf.Tensor:
     """
     Якобиан J правой части популяции по её состоянию: [n_units, d, d].
@@ -348,7 +349,7 @@ def state_vector_field_jacobian(
     raise ValueError(f"Unknown jacobian method '{method}', expected 'jvp' or 'fd'.")
 
 
-def _extract_state_tensors(output: Any) -> List[tf.Tensor]:
+def _extract_state_tensors(output: Any) -> list[tf.Tensor]:
     """Извлекает плоский список тензоров состояния из разных форм вывода."""
     from neuraltide.core.network import NetworkOutput
 
@@ -398,7 +399,7 @@ def explicit_euler_dt_limit(eigenvalues: np.ndarray) -> float:
     return float(limit)
 
 
-def classify_failure(output: Any, diverged_threshold: float = 1e6) -> Dict[str, Any]:
+def classify_failure(output: Any, diverged_threshold: float = 1e6) -> dict[str, Any]:
     """
     Классифицирует результат прогона сети.
 
@@ -429,7 +430,7 @@ def classify_failure(output: Any, diverged_threshold: float = 1e6) -> Dict[str, 
     return {"status": "ok", "max_abs": max_abs}
 
 
-def _segment_bounds(total: int, n_segments: int) -> List[Tuple[int, int]]:
+def _segment_bounds(total: int, n_segments: int) -> list[tuple[int, int]]:
     """Границы почти равных сегментов [start, end) покрывающих [0, total)."""
     base = total // n_segments
     rem = total % n_segments
@@ -445,7 +446,7 @@ def _segment_bounds(total: int, n_segments: int) -> List[Tuple[int, int]]:
 def _resolve_network_and_protocol(
     network_or_problem: Any,
     t_points: int,
-) -> Tuple["NetworkRNN", Optional[tf.Tensor], Optional[tf.Tensor], Any, int]:
+) -> tuple["NetworkRNN", tf.Tensor | None, tf.Tensor | None, Any, int]:
     """
     Возвращает (network, t_sequence|None, inputs, initial_state, n_segments).
 
@@ -480,7 +481,7 @@ def _resolve_network_and_protocol(
                 "(t_sequence, inputs) is available."
             )
         n_segments = max(1, int(t_points))
-        steps_per_segment = max(1, int(round(1.0 / float(graph.dt))))
+        steps_per_segment = max(1, round(1.0 / float(graph.dt)))
         total = n_segments * steps_per_segment
         dtype = neuraltide.config.get_dtype()
         t_seq = tf.constant(
@@ -499,7 +500,7 @@ def _joint_network_rhs_jacobian(
     graph: "NetworkGraph",
     pop_states: StateList,
     syn_states: StateList,
-    input_rates: Optional[Dict[str, TensorType]],
+    input_rates: dict[str, TensorType] | None,
     method: str = "jvp",
 ) -> tf.Tensor:
     """
@@ -566,8 +567,8 @@ def _joint_network_rhs_jacobian(
 
 
 def _spectrum_metrics(
-    per_point: List[np.ndarray],
-) -> Tuple[Dict[str, Any], List[float], List[float], List[float]]:
+    per_point: list[np.ndarray],
+) -> tuple[dict[str, Any], list[float], list[float], list[float]]:
     """
     Метрики спектра по списку точек: блок отчёта + агрегаты.
 
@@ -603,11 +604,11 @@ def _spectrum_metrics(
 
 def stiffness_report(
     network_or_problem: Any,
-    phi: Optional[np.ndarray] = None,
+    phi: np.ndarray | None = None,
     t_points: int = 8,
     method: str = "jvp",
     scope: str = "populations",
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """
     Отчёт о жёсткости: спектр якобиана правой части в точках траектории.
 
@@ -692,17 +693,17 @@ def stiffness_report(
         pop_names = list(graph.dynamic_population_names)
 
         # eigenvalues[pop] -> list [P] of np.ndarray [n, d]
-        spectra: Dict[str, list] = {name: [] for name in pop_names}
+        spectra: dict[str, list] = {name: [] for name in pop_names}
         # scope='network': list [P] of np.ndarray [D] полного спектра
-        network_spectra: List[np.ndarray] = []
+        network_spectra: list[np.ndarray] = []
         # Нулевой синаптический вход — per-population формы [1, n_units_pop]:
         # кэш по имени популяции, а не по первой встреченной n_units.
-        zero_inputs: Dict[str, Dict[str, tf.Tensor]] = {}
+        zero_inputs: dict[str, dict[str, tf.Tensor]] = {}
         carry_state = initial_state
         for k0, k1 in bounds:
             t_seg = t_seq_full[:, k0:k1, :]
             inputs_seg = inputs_full[:, k0:k1, :] if inputs_full is not None else None
-            kwargs: Dict[str, Any] = {}
+            kwargs: dict[str, Any] = {}
             if inputs_seg is not None:
                 kwargs["inputs"] = inputs_seg
             if carry_state is not None:
@@ -718,7 +719,7 @@ def stiffness_report(
             if scope == "network":
                 # Внешние входы заморожены ZOH: значение последнего шага
                 # сегмента (тот вход, который rhs видит внутри шага).
-                input_rates: Dict[str, TensorType] = {}
+                input_rates: dict[str, TensorType] = {}
                 if inputs_seg is not None:
                     last = inputs_seg[:, -1, :]
                     for name in graph._input_names:
@@ -760,12 +761,12 @@ def stiffness_report(
             )
 
     # (lambda_max_abs, stiffness_ratio, explicit_dt_limit) по блокам
-    metrics: List[Tuple[List[float], List[float], List[float]]] = []
+    metrics: list[tuple[list[float], list[float], list[float]]] = []
     lambda_max_global = 0.0
     ratio_global = 0.0
     dt_limit_global = np.inf
     if scope == "populations":
-        populations: Dict[str, Dict[str, Any]] = {}
+        populations: dict[str, dict[str, Any]] = {}
         for name in pop_names:
             block, lam, ratios, dt_limits = _spectrum_metrics(spectra[name])
             populations[name] = block
@@ -779,7 +780,7 @@ def stiffness_report(
         dt_limit_global = min(dt_limit_global, *dt_limits)
 
     dt_network = float(graph.dt)
-    report: Dict[str, Any] = {
+    report: dict[str, Any] = {
         "method": method,
         "scope": scope,
         "t_points": n_segments,

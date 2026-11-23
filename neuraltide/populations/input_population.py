@@ -4,8 +4,8 @@ import tensorflow as tf
 
 import neuraltide
 import neuraltide.config
-from neuraltide.core.base import PopulationModel, BaseInputGenerator
-from neuraltide.core.types import TensorType, StateList, Dict
+from neuraltide.core.base import BaseInputGenerator, PopulationModel
+from neuraltide.core.types import StateList, TensorType
 
 
 class InputPopulation(PopulationModel):
@@ -61,9 +61,9 @@ class InputPopulation(PopulationModel):
         rate = self.generator(t, extra_inputs=extra)
         return tf.reshape(rate, [1, self.n_units])
 
-    def observables(self, state: StateList) -> Dict[str, TensorType]:
+    def observables(self, state: StateList) -> dict[str, TensorType]:
         return {"firing_rate": self.get_firing_rate(state)}
 
     @property
-    def parameter_spec(self) -> Dict[str, Dict[str, any]]:
+    def parameter_spec(self) -> dict[str, dict[str, any]]:
         return {}

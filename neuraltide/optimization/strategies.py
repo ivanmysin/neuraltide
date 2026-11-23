@@ -30,8 +30,9 @@ to_dict/from_dict/save/load (стадии кодируются их собств
 import os
 import time
 import warnings
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple
+from typing import Any
 
 import numpy as np
 import tensorflow as tf
@@ -52,12 +53,12 @@ from neuraltide.optimization.results import (
 )
 
 __all__ = [
-    "sample_phi0s",
-    "multistart",
-    "dt_continuation",
-    "subset_continuation",
     "ContinuationResult",
+    "dt_continuation",
+    "multistart",
     "resolve_local_optimizer",
+    "sample_phi0s",
+    "subset_continuation",
 ]
 
 _SAMPLING_METHODS = ("sobol", "lhs", "random")
@@ -75,7 +76,7 @@ _UNIT_EPS = 1e-12
 
 def resolve_local_optimizer(
     optimizer,
-) -> Tuple[Callable, str]:
+) -> tuple[Callable, str]:
     """
     Приводит строковое имя ('lbfgsb' | 'least_squares') или callable к
     (fn, имя). Адаптеры импортируются лениво из neuraltide.optimization.local;
@@ -103,7 +104,7 @@ def resolve_local_optimizer(
 # ---------------------------------------------------------------------------
 
 
-def _unit_cube(n: int, size: int, method: str, seed: Optional[int]) -> np.ndarray:
+def _unit_cube(n: int, size: int, method: str, seed: int | None) -> np.ndarray:
     """n точек единичного гиперкуба [0,1)^(n,size) выбранным методом."""
     rng = np.random.default_rng(seed)
     if method == "sobol":
@@ -120,9 +121,9 @@ def _unit_cube(n: int, size: int, method: str, seed: Optional[int]) -> np.ndarra
     return np.asarray(rng.random((n, size)), dtype=np.float64)
 
 
-def _entry_offsets(space: ParameterSpace) -> Dict[str, Tuple[int, int]]:
+def _entry_offsets(space: ParameterSpace) -> dict[str, tuple[int, int]]:
     """Смещения trainable-записей ParameterSpace в плоском векторе φ."""
-    offsets: Dict[str, Tuple[int, int]] = {}
+    offsets: dict[str, tuple[int, int]] = {}
     start = 0
     for name, entry in space.phi_entries.items():
         offsets[name] = (start, entry.numel)
@@ -163,8 +164,8 @@ def sample_phi0s(
     n: int,
     *,
     method: str = "sobol",
-    seed: Optional[int] = None,
-    log_uniform: Optional[Sequence[str]] = None,
+    seed: int | None = None,
+    log_uniform: Sequence[str] | None = None,
     clip_to_bounds: bool = True,
 ) -> np.ndarray:
     """
@@ -234,7 +235,7 @@ def sample_phi0s(
     unit = _unit_cube(n, size, method, seed)
 
     phi = np.empty((n, size), dtype=np.float64)
-    unbounded_names: List[str] = []
+    unbounded_names: list[str] = []
     for name, entry in space.phi_entries.items():
         start, numel = offsets[name]
         sl = slice(start, start + numel)
@@ -281,9 +282,7 @@ def sample_phi0s(
 # ---------------------------------------------------------------------------
 
 
-def _design_for_problem(
-    problem, n: int, method: str, seed: Optional[int]
-) -> np.ndarray:
+def _design_for_problem(problem, n: int, method: str, seed: int | None) -> np.ndarray:
     """
     Начальные phi для проблемы: полный sample_phi0s для ParameterSpace,
     иначе fallback по bounds_phi()/pack() для duck-typed проблем.
@@ -332,7 +331,7 @@ def _multistart_config(
     refine_top_k: int,
     local_name: str,
     dedup_rtol: float,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     return {
         "n_starts": int(n_starts),
         "method": str(method),
@@ -366,9 +365,9 @@ def _write_checkpoint(path, seed, config, completed: Mapping[int, StartResult]) 
 
 def _load_completed(
     path,
-) -> Tuple[Optional[int], Dict[str, Any], Dict[int, StartResult]]:
+) -> tuple[int | None, dict[str, Any], dict[int, StartResult]]:
     checkpoint = RunCheckpoint.load(os.fspath(path))
-    completed: Dict[int, StartResult] = {}
+    completed: dict[int, StartResult] = {}
     for item in checkpoint.completed:
         if not isinstance(item, Mapping):
             raise ValueError(
@@ -392,14 +391,14 @@ def _phi_close(a: np.ndarray, b: np.ndarray, rtol: float) -> bool:
     return bool(np.all(np.abs(a - b) <= rtol * np.maximum(np.abs(b), 1.0)))
 
 
-def _cluster_solutions(solutions: Sequence[StartResult], rtol: float) -> Dict[str, Any]:
+def _cluster_solutions(solutions: Sequence[StartResult], rtol: float) -> dict[str, Any]:
     """
     Greedy-кластеризация успешных (status 'ok') стартов по возрастанию
     loss: старт присоединяется к кластеру, если его phi близок к phi
     представителя кластера (rtol-норма), иначе открывает новый кластер.
     """
     labels = [-1] * len(solutions)
-    representatives: List[int] = []
+    representatives: list[int] = []
     order = sorted(
         (
             i
@@ -444,7 +443,7 @@ def _run_multistart(
     screen_local,
     refine_top_k: int,
     local,
-    seed: Optional[int],
+    seed: int | None,
     checkpoint_path,
     resume: bool,
     dedup_rtol: float,
@@ -464,7 +463,7 @@ def _run_multistart(
     )
     config["n_starts_list"] = list(range(n_starts))
 
-    completed: Dict[int, StartResult] = {}
+    completed: dict[int, StartResult] = {}
     if checkpoint_path is not None and resume and os.path.exists(checkpoint_path):
         ckpt_seed, ckpt_config, completed = _load_completed(checkpoint_path)
         if ckpt_seed != seed:
@@ -520,7 +519,7 @@ def _run_multistart(
             start.loss = screened
             start.status = "screen_rejected"
             start.message = "отклонён на этапе screening"
-        except Exception as exc:  # noqa: BLE001 - старт не должен ронять прогон
+        except Exception as exc:
             start.status = "failed"
             start.message = f"{screen_stage}: {exc}"
             start.loss = float("inf")
@@ -558,7 +557,7 @@ def _run_multistart(
             start.message = str(getattr(result, "message", ""))
             start.refined = True
             start.local = result
-        except Exception as exc:  # noqa: BLE001 - старт не должен ронять прогон
+        except Exception as exc:
             start.status = "failed"
             start.message = f"refinement: {exc}"
             start.refined = False
@@ -631,7 +630,7 @@ def multistart(
     screen_local="lbfgsb",
     refine_top_k: int = 5,
     local="lbfgsb",
-    seed: Optional[int] = None,
+    seed: int | None = None,
     checkpoint_path=None,
     resume: bool = False,
     dedup_rtol: float = 1e-4,
@@ -757,7 +756,7 @@ def _jsonable(value: Any) -> Any:
     return repr(value)
 
 
-def _stage_to_dict(result: Any) -> Dict[str, Any]:
+def _stage_to_dict(result: Any) -> dict[str, Any]:
     to_dict = getattr(result, "to_dict", None)
     if callable(to_dict):
         return to_dict()
@@ -786,13 +785,13 @@ class ContinuationResult(_JsonDTO):
         history: краткая история по стадиям (dt/loss/success/...).
     """
 
-    stage_results: List[Any] = field(default_factory=list)
+    stage_results: list[Any] = field(default_factory=list)
     final_result: Any = None
     final_dt: float = 0.0
     wall_time: float = 0.0
-    history: List[Dict[str, Any]] = field(default_factory=list)
+    history: list[dict[str, Any]] = field(default_factory=list)
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "stage_results": [_stage_to_dict(r) for r in self.stage_results],
             "final_result": _stage_to_dict(self.final_result),
@@ -820,7 +819,7 @@ def _resolve_optimizer_call(optimizer, problem, phi: np.ndarray, kwargs) -> Any:
     return fn(problem, phi, **kwargs)
 
 
-def _history_entry(stage: int, dt: float, result: Any) -> Dict[str, Any]:
+def _history_entry(stage: int, dt: float, result: Any) -> dict[str, Any]:
     base = getattr(result, "base", None)
     return {
         "stage": int(stage),
@@ -865,8 +864,8 @@ def dt_continuation(
         raise ValueError("dt_continuation: непустая последовательность dts.")
     t_begin = time.perf_counter()
     problems = [build_problem(dt) for dt in dts]
-    stage_results: List[Any] = []
-    history: List[Dict[str, Any]] = []
+    stage_results: list[Any] = []
+    history: list[dict[str, Any]] = []
     phi = np.asarray(problems[0].pack(), dtype=np.float64).reshape(-1)
     for stage, (dt, problem) in enumerate(zip(dts, problems)):
         result = _resolve_optimizer_call(optimizer, problem, phi, kwargs)
@@ -964,8 +963,8 @@ def subset_continuation(
         dt = float(getattr(graph, "dt", 0.0))
 
     t_begin = time.perf_counter()
-    stage_results: List[Any] = []
-    history: List[Dict[str, Any]] = []
+    stage_results: list[Any] = []
+    history: list[dict[str, Any]] = []
     for stage_id, names in enumerate(stages):
         # FrozenProblem строится ПОСЛЕ применения предыдущей стадии:
         # замороженные координаты снимаются с текущего состояния модели,

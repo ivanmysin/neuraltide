@@ -2,16 +2,16 @@
 Tests for AdjointSolver: gradient computation via adjoint state method.
 """
 
+import numpy as np
 import pytest
 import tensorflow as tf
-import numpy as np
 
 from neuraltide.core.network import NetworkGraph, NetworkRNN
-from neuraltide.populations import IzhikevichMeanField
-from neuraltide.synapses import TsodyksMarkramSynapse
 from neuraltide.inputs import VonMisesGenerator
 from neuraltide.integrators import RK4Integrator
-from neuraltide.training import MSELoss, StabilityPenalty, CompositeLoss
+from neuraltide.populations import IzhikevichMeanField
+from neuraltide.synapses import TsodyksMarkramSynapse
+from neuraltide.training import CompositeLoss, MSELoss, StabilityPenalty
 
 
 def _make_simple_small_network(dt=0.05):
@@ -121,7 +121,7 @@ class TestAdjointBasics:
         """AdjointSolver should be instantiable with network and integrator."""
         from neuraltide.training.adjoint import AdjointSolver
 
-        graph, gen = _make_simple_small_network()
+        graph, _gen = _make_simple_small_network()
         network = NetworkRNN(graph, integrator=RK4Integrator())
 
         solver = AdjointSolver(network, network._integrator)
@@ -138,8 +138,8 @@ class TestAdjointBasics:
         inputs = _make_inputs(graph, gen, t_seq)
         solver = AdjointSolver(network, network._integrator)
 
-        output, states_final, state_info = solver.forward_pass(t_seq, inputs)
-        init_pop, init_syn, pop_stacked, syn_stacked = state_info
+        output, _states_final, state_info = solver.forward_pass(t_seq, inputs)
+        _init_pop, _init_syn, pop_stacked, syn_stacked = state_info
 
         assert output is not None, "forward_pass should return output"
         assert hasattr(output, "firing_rates"), "output should have firing_rates"
@@ -174,7 +174,7 @@ class TestAdjointGradientCorrectness:
             )
         }
 
-        bptt_grads, bptt_output = _compute_bptt_gradients(
+        bptt_grads, _bptt_output = _compute_bptt_gradients(
             network, t_seq, inputs, target
         )
 
@@ -184,7 +184,7 @@ class TestAdjointGradientCorrectness:
                 (1.0, MSELoss(target)),
             ]
         )
-        adj_grads, variables, adj_output = solver.compute_gradients(
+        adj_grads, _variables, _adj_output = solver.compute_gradients(
             t_seq, inputs, target, loss_fn
         )
 
@@ -420,7 +420,7 @@ class TestAdjointWithStabilityPenalty:
         )
 
         solver = AdjointSolver(network, network._integrator)
-        adj_grads, variables, adj_output = solver.compute_gradients(
+        adj_grads, _variables, _adj_output = solver.compute_gradients(
             t_seq, inputs, target, loss_fn
         )
 
@@ -458,7 +458,7 @@ class TestAdjointNumericalGradient:
                 (1.0, MSELoss(target)),
             ]
         )
-        adj_grads, variables, _ = solver.compute_gradients(
+        adj_grads, _variables, _ = solver.compute_gradients(
             t_seq, inputs, target, loss_fn
         )
 

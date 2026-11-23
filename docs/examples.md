@@ -26,15 +26,15 @@ python examples/example_simple.py
 
 ```python
 graph = NetworkGraph(dt=0.5)
-graph.declare_input('input', n_units=gen.n_units)
-graph.add_population('exc', pop)
-graph.add_synapse('input->exc', syn, src='input', tgt='exc')
+graph.declare_input("input", n_units=gen.n_units)
+graph.add_population("exc", pop)
+graph.add_synapse("input->exc", syn, src="input", tgt="exc")
 
 network = NetworkRNN(graph, integrator=RK4Integrator())
 
-t_seq = tf.constant(t_values[None, :, None])       # [1, T, 1]
-inputs = graph.pack_inputs({'input': gen(t_seq)})  # предвычисленные частоты
-output = network(t_seq, inputs=inputs)             # output.firing_rates['exc']
+t_seq = tf.constant(t_values[None, :, None])  # [1, T, 1]
+inputs = graph.pack_inputs({"input": gen(t_seq)})  # предвычисленные частоты
+output = network(t_seq, inputs=inputs)  # output.firing_rates['exc']
 ```
 
 ### Продолжение прогонов
@@ -44,13 +44,13 @@ output = network(t_seq, inputs=inputs)             # output.firing_rates['exc']
 по умолчанию — через `network.get_initial_state()`:
 
 ```python
-output1 = network(t_seq, inputs=inputs)                          # первый прогон
-output2 = network(t_seq, inputs=inputs,
-                  initial_state=output1.final_state)             # продолжение
+output1 = network(t_seq, inputs=inputs)  # первый прогон
+output2 = network(
+    t_seq, inputs=inputs, initial_state=output1.final_state
+)  # продолжение
 
-init_pop, init_syn = network.get_initial_state(batch_size=1)     # сброс
-output3 = network(t_seq, inputs=inputs,
-                  initial_state=(init_pop, init_syn))
+init_pop, init_syn = network.get_initial_state(batch_size=1)  # сброс
+output3 = network(t_seq, inputs=inputs, initial_state=(init_pop, init_syn))
 ```
 
 Подробности — в [руководстве по запуску симуляций](guide/running_simulations.md#начальные-состояния-и-продолжение-прогонов).
@@ -63,39 +63,56 @@ output3 = network(t_seq, inputs=inputs,
 
 ```python
 from neuraltide.config.schema import (
-    NetworkConfig, PopulationConfig, SynapseConfig, InputConfig,
+    NetworkConfig,
+    PopulationConfig,
+    SynapseConfig,
+    InputConfig,
     build_network_from_config,
 )
 
 config = NetworkConfig(
     dt=0.5,
-    integrator='rk4',
+    integrator="rk4",
     inputs=[
         InputConfig(
-            name='input',
-            generator_class='SinusoidalGenerator',
-            params={'dt': 0.5, 'params': {
-                'amplitude': 10.0, 'freq': 8.0, 'phase': 0.0, 'offset': 5.0}},
+            name="input",
+            generator_class="SinusoidalGenerator",
+            params={
+                "dt": 0.5,
+                "params": {"amplitude": 10.0, "freq": 8.0, "phase": 0.0, "offset": 5.0},
+            },
         ),
     ],
     populations=[
         PopulationConfig(
-            name='exc',
-            model_class='IzhikevichMeanField',
+            name="exc",
+            model_class="IzhikevichMeanField",
             dt=0.5,
             params={
-                'tau_pop': [1.0], 'alpha': [0.5], 'a': [0.02],
-                'b': [0.2], 'w_jump': [0.1], 'Delta_I': [0.5], 'I_ext': [1.0],
+                "tau_pop": [1.0],
+                "alpha": [0.5],
+                "a": [0.02],
+                "b": [0.2],
+                "w_jump": [0.1],
+                "Delta_I": [0.5],
+                "I_ext": [1.0],
             },
         ),
     ],
     synapses=[
         SynapseConfig(
-            name='input->exc',
-            synapse_class='StaticSynapse',
-            src='input', tgt='exc', dt=0.5,
-            params={'n_pre': 1, 'n_post': 1, 'gsyn_max': 0.1,
-                    'pconn': [[1.0]], 'e_r': 0.0},
+            name="input->exc",
+            synapse_class="StaticSynapse",
+            src="input",
+            tgt="exc",
+            dt=0.5,
+            params={
+                "n_pre": 1,
+                "n_post": 1,
+                "gsyn_max": 0.1,
+                "pconn": [[1.0]],
+                "e_r": 0.0,
+            },
         ),
     ],
 )
@@ -141,17 +158,25 @@ output = network(t_seq, inputs=inputs)
 графика (rate vs theta, фазовая прецессия, карта арены).
 
 ```python
-gen = PlaceFieldGenerator(dt=dt, params={
-    'center_x': [40.0, -50.0, ...], 'center_y': [30.0, 40.0, ...],
-    'radius': [35.0, 40.0, ...], 'peak_rate': [25.0, 30.0, ...],
-    'background_rate': [2.0]*6,
-    'theta_modulation_factor': 0.0,
-    'precession_slope': [30.0, ...], 'precession_init_phase': [0.0, ...],
-    'phase_outside': 0.0, 'R': 0.6, 'freq': 8.0,
-})
+gen = PlaceFieldGenerator(
+    dt=dt,
+    params={
+        "center_x": [40.0, -50.0, ...],
+        "center_y": [30.0, 40.0, ...],
+        "radius": [35.0, 40.0, ...],
+        "peak_rate": [25.0, 30.0, ...],
+        "background_rate": [2.0] * 6,
+        "theta_modulation_factor": 0.0,
+        "precession_slope": [30.0, ...],
+        "precession_init_phase": [0.0, ...],
+        "phase_outside": 0.0,
+        "R": 0.6,
+        "freq": 8.0,
+    },
+)
 
 # extra_inputs: [batch, T, 2] — (x, y) в см, или [batch, T, 4] — (x, y, vx, vy)
-rates = gen(t_seq, extra_inputs=extra)   # [1, T, n_place_cells]
+rates = gen(t_seq, extra_inputs=extra)  # [1, T, n_place_cells]
 ```
 
 Поток данных:
@@ -202,16 +227,18 @@ pos_x, pos_y, vx, vy (см, см/мс)  ──→  extra_inputs [batch, T, 4]
 ```python
 from neuraltide.training import Trainer, CompositeLoss, MSELoss, StabilityPenalty
 
-loss_fn = CompositeLoss([
-    (1.0, MSELoss(target)),      # основная ошибка
-    (1e-3, StabilityPenalty()),  # штраф за нестабильность
-])
+loss_fn = CompositeLoss(
+    [
+        (1.0, MSELoss(target)),  # основная ошибка
+        (1e-3, StabilityPenalty()),  # штраф за нестабильность
+    ]
+)
 trainer = Trainer(network, loss_fn, optimizer=tf.keras.optimizers.Adam(1e-3))
 history = trainer.fit(t_seq, inputs=inputs, epochs=500, verbose=1)
 
 # Экспорт результатов
-trainer.export_results('results.json')
-trainer.export_results('results.csv', format='csv')
+trainer.export_results("results.json")
+trainer.export_results("results.csv", format="csv")
 ```
 
 Больше о градиентных методах (BPTT/adjoint), колбэках и ограничениях —
@@ -253,19 +280,19 @@ StaticSynapse от SinusoidalGenerator) с известным θ*:
    честный свободный прогон без teacher forcing.
 
 ```python
-ms = multistart(problem, n_starts=8, method="sobol", refine_top_k=3,
-                local="least_squares", seed=7)
+ms = multistart(
+    problem, n_starts=8, method="sobol", refine_top_k=3, local="least_squares", seed=7
+)
 phi_best = np.asarray(ms.base.phi_best)
 
 jac = residual_jacobian(problem, phi_best)
 fim = compute_fim(jac, param_names=space.names)
 
-profile = likelihood_profile(problem, "exc/tau",
-                             grid=np.linspace(4.0, 14.0, 6))
-print(profile.intervals["0.95"])          # 95% интервал по chi2(1)
+profile = likelihood_profile(problem, "exc/tau", grid=np.linspace(4.0, 14.0, 6))
+print(profile.intervals["0.95"])  # 95% интервал по chi2(1)
 
-validation = problem.validate(phi_best)   # held-out протокол
-ev_free = problem.evaluate(phi_best)      # честный free-run
+validation = problem.validate(phi_best)  # held-out протокол
+ev_free = problem.evaluate(phi_best)  # честный free-run
 ```
 
 ### Глобальный поиск, балансировка и неопределённость
@@ -295,12 +322,19 @@ sigma, что в ObservationSpec — тогда интервалы UQ имеют
    циклу problem.evaluate).
 
 ```python
-gs = global_search(problem, method="de", max_evals=200, refine_top_k=1,
-                   local="lbfgsb", seed=11)
+gs = global_search(
+    problem, method="de", max_evals=200, refine_top_k=1, local="lbfgsb", seed=11
+)
 phi_map = minimize_lbfgsb(problem, gs.base.phi_best, maxiter=100).base.phi_best
 
-bt = balanced_train(problem, gs.base.phi_best, GradNormWeights(),
-                    optimizer="adam", max_steps=6, projector=pcgrad_project)
+bt = balanced_train(
+    problem,
+    gs.base.phi_best,
+    GradNormWeights(),
+    optimizer="adam",
+    max_steps=6,
+    projector=pcgrad_project,
+)
 
 # UQ — на свежем экземпляре задачи (ограничение TF forward-AD, см. выше)
 problem_uq = build_problem()
@@ -333,11 +367,10 @@ diag = residual_diagnostics(problem_uq, phi_map)
 
 ```python
 space = ParameterSpace.from_network(network)
-space.add_initial_state_entries(network)                     # общий x0
+space.add_initial_state_entries(network)  # общий x0
 space.add_experiment_initial_state_entries(network, "stim")  # exp-specific x0
 
-problem = MultiExperimentProblem(network, space,
-                                 experiments=[exp_control, exp_stim])
+problem = MultiExperimentProblem(network, space, experiments=[exp_control, exp_stim])
 ev, grad = problem.value_and_gradient(phi0)
 ```
 

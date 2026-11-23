@@ -21,7 +21,6 @@ jacobian(φ) возвращает dθ/dφ поэлементно, в той же
 """
 
 import math
-from typing import Dict, Optional, Type
 
 import numpy as np
 import tensorflow as tf
@@ -30,15 +29,15 @@ import neuraltide.config
 from neuraltide.core.types import cast_if_needed
 
 __all__ = [
-    "Transform",
-    "IdentityTransform",
+    "TRANSFORM_REGISTRY",
     "AffineTransform",
+    "BoundedLogTransform",
+    "IdentityTransform",
     "LogTransform",
     "LogitTransform",
     "ScaledSigmoidTransform",
     "SoftplusTransform",
-    "BoundedLogTransform",
-    "TRANSFORM_REGISTRY",
+    "Transform",
     "make_transform",
     "register_transform",
 ]
@@ -145,7 +144,7 @@ class LogTransform(Transform):
 
     name = "log"
 
-    def __init__(self, floor: Optional[float] = None):
+    def __init__(self, floor: float | None = None):
         if floor is not None and floor <= 0.0:
             raise ValueError("LogTransform: 'floor' must be positive.")
         self.floor = None if floor is None else float(floor)
@@ -240,7 +239,7 @@ class SoftplusTransform(Transform):
 
     name = "softplus"
 
-    def __init__(self, floor: Optional[float] = None):
+    def __init__(self, floor: float | None = None):
         if floor is not None and floor < 0.0:
             raise ValueError("SoftplusTransform: 'floor' must be non-negative.")
         self.floor = None if floor is None else float(floor)
@@ -312,7 +311,7 @@ class BoundedLogTransform(Transform):
         return self.forward(phi) * self._log_span * u * (1.0 - u)
 
 
-TRANSFORM_REGISTRY: Dict[str, Type[Transform]] = {
+TRANSFORM_REGISTRY: dict[str, type[Transform]] = {
     "identity": IdentityTransform,
     "affine": AffineTransform,
     "log": LogTransform,
@@ -323,7 +322,7 @@ TRANSFORM_REGISTRY: Dict[str, Type[Transform]] = {
 }
 
 
-def register_transform(kind: str, cls: Type[Transform]) -> None:
+def register_transform(kind: str, cls: type[Transform]) -> None:
     """Регистрирует класс преобразования под строковым именем kind."""
     TRANSFORM_REGISTRY[kind] = cls
 

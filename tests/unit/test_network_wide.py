@@ -19,9 +19,9 @@ from neuraltide.core.network import (
     _JointNetworkRHS,
     _step_fn,
 )
+from neuraltide.inputs import ConstantRateGenerator
 from neuraltide.integrators import AdaptiveRKIntegrator, EulerIntegrator
 from neuraltide.integrators.base import BaseIntegrator
-from neuraltide.inputs import ConstantRateGenerator
 from neuraltide.populations import InputPopulation, WilsonCowan
 from neuraltide.synapses import StaticSynapse
 
@@ -326,7 +326,7 @@ class TestInputPopulationSmoke:
         assert len(init_pop) == 3  # ext: [t, extra] + exc: [E]
 
         t = tf.constant([[0.0]], dtype=neuraltide.config.get_dtype())
-        new_pop, new_syn, new_stab = _step_fn(
+        new_pop, _new_syn, _new_stab = _step_fn(
             (
                 tuple(init_pop),
                 tuple(init_syn),

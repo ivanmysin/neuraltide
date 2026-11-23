@@ -14,7 +14,7 @@
 dict/list[dict] с float-значениями, пригодными для сериализации и assert'ов.
 """
 
-from typing import Callable, Dict, List, Optional, Sequence
+from collections.abc import Callable, Sequence
 
 import numpy as np
 import tensorflow as tf
@@ -26,19 +26,19 @@ from neuraltide.training.adjoint import AdjointSolver
 from neuraltide.training.losses import BaseLoss, CompositeLoss
 
 __all__ = [
-    "finite_difference_scan",
-    "taylor_test",
+    "compare_bptt_adjoint",
     "dot_product_test",
     "dt_convergence",
     "dtype_consistency_check",
-    "compare_bptt_adjoint",
+    "finite_difference_scan",
+    "taylor_test",
 ]
 
 
 # ── Внутренние helpers ───────────────────────────────────────────────────────
 
 
-def _arr_stats(a: np.ndarray) -> Dict[str, float]:
+def _arr_stats(a: np.ndarray) -> dict[str, float]:
     """Краткая сводка массива: mean/std/max|.|."""
     a = np.asarray(a, dtype=np.float64)
     return {
@@ -48,7 +48,7 @@ def _arr_stats(a: np.ndarray) -> Dict[str, float]:
     }
 
 
-def _summarize_outputs(outputs) -> Dict[str, Dict[str, float]]:
+def _summarize_outputs(outputs) -> dict[str, dict[str, float]]:
     """Сводка выходов: dict имя → stats либо stats единственного массива."""
     if isinstance(outputs, dict):
         return {str(k): _arr_stats(np.asarray(v)) for k, v in outputs.items()}
@@ -73,8 +73,8 @@ def _loglog_slope(r0: float, r1: float, h0: float, h1: float) -> float:
 def finite_difference_scan(
     func: Callable[[np.ndarray], float],
     phi0: Sequence[float],
-    h_values: Optional[Sequence[float]] = None,
-) -> Dict[str, object]:
+    h_values: Sequence[float] | None = None,
+) -> dict[str, object]:
     """
     Центральные конечные разности градиента скалярной функции.
 
@@ -99,7 +99,7 @@ def finite_difference_scan(
     h_arr = np.atleast_1d(np.asarray(h_values, dtype=np.float64)).reshape(-1)
 
     f0 = float(func(phi0))
-    gradients: List[np.ndarray] = []
+    gradients: list[np.ndarray] = []
     for h in h_arr:
         grad = np.zeros_like(phi0)
         it = np.nditer(phi0, flags=["multi_index"])
@@ -137,9 +137,9 @@ def finite_difference_scan(
 def taylor_test(
     value_and_grad: Callable[[np.ndarray], tuple],
     phi0: Sequence[float],
-    v: Optional[Sequence[float]] = None,
-    h_values: Optional[Sequence[float]] = None,
-) -> Dict[str, object]:
+    v: Sequence[float] | None = None,
+    h_values: Sequence[float] | None = None,
+) -> dict[str, object]:
     """
     Направленный Taylor test для value_and_grad.
 
@@ -173,7 +173,7 @@ def taylor_test(
     g0 = np.asarray(g0, dtype=np.float64)
     grad_dot_v = float(np.sum(g0 * v))
 
-    rows: List[Dict[str, float]] = []
+    rows: list[dict[str, float]] = []
     for h in h_arr:
         fh = float(value_and_grad(phi0 + h * v)[0])
         R0 = fh - f0
@@ -212,7 +212,7 @@ def dot_product_test(
     x: Sequence[float],
     y: Sequence[float],
     tol: float = 1e-5,
-) -> Dict[str, object]:
+) -> dict[str, object]:
     """
     Проверка сопряжённости пар операторов: <Jx, y> против <x, Jᵀy>.
 
@@ -248,9 +248,9 @@ def dot_product_test(
 
 
 def dt_convergence(
-    build_and_run: Callable[[float], Dict[str, object]],
+    build_and_run: Callable[[float], dict[str, object]],
     dts: Sequence[float],
-) -> List[Dict[str, object]]:
+) -> list[dict[str, object]]:
     """
     Сводка потери, градиента и выходов по уточняющейся сетке dt.
 
@@ -271,11 +271,11 @@ def dt_convergence(
         по внешнему dt неинформативными — используйте внешнюю сетку
         субшагов самой модели, а не эту функцию.
     """
-    rows: List[Dict[str, object]] = []
-    prev: Optional[Dict[str, object]] = None
+    rows: list[dict[str, object]] = []
+    prev: dict[str, object] | None = None
     for dt in dts:
         res = build_and_run(float(dt))
-        row: Dict[str, object] = {"dt": float(dt), "loss": float(res["loss"])}
+        row: dict[str, object] = {"dt": float(dt), "loss": float(res["loss"])}
         if res.get("grads") is not None:
             g = np.asarray(res["grads"], dtype=np.float64).ravel()
             row["grad_norm"] = float(np.linalg.norm(g))
@@ -297,9 +297,9 @@ def dt_convergence(
 
 
 def dtype_consistency_check(
-    build_and_run: Callable[[tf.DType], Dict[str, object]],
+    build_and_run: Callable[[tf.DType], dict[str, object]],
     dtypes: Sequence[tf.DType] = (tf.float32, tf.float64),
-) -> List[Dict[str, object]]:
+) -> list[dict[str, object]]:
     """
     Запуск build_and_run при разных глобальных dtype через config.set_dtype.
 
@@ -320,12 +320,12 @@ def dtype_consistency_check(
         восстановление здесь — защита от загрязнения состояния вне тестов.
     """
     prev_dtype = neuraltide.config.get_dtype()
-    rows: List[Dict[str, object]] = []
+    rows: list[dict[str, object]] = []
     try:
         for dtype in dtypes:
             neuraltide.config.set_dtype(dtype)
             res = build_and_run(dtype)
-            row: Dict[str, object] = {
+            row: dict[str, object] = {
                 "dtype": str(dtype.name),
                 "loss": float(res["loss"]),
             }
@@ -354,9 +354,9 @@ def dtype_consistency_check(
 # ── 6. BPTT ↔ adjoint ────────────────────────────────────────────────────────
 
 
-def _extract_targets_from_loss(loss_fn) -> Dict[str, TensorType]:
+def _extract_targets_from_loss(loss_fn) -> dict[str, TensorType]:
     """Собирает target из термов потери (атрибут target), как Trainer."""
-    targets: Dict[str, TensorType] = {}
+    targets: dict[str, TensorType] = {}
     terms = loss_fn.terms if isinstance(loss_fn, CompositeLoss) else [(1.0, loss_fn)]
     for _, sub in terms:
         tgt = getattr(sub, "target", None)
@@ -369,10 +369,10 @@ def compare_bptt_adjoint(
     network: NetworkRNN,
     loss_fn: BaseLoss,
     t_seq: TensorType,
-    inputs: Optional[TensorType] = None,
-    target: Optional[Dict[str, TensorType]] = None,
-    initial_state: Optional[tuple] = None,
-) -> Dict[str, object]:
+    inputs: TensorType | None = None,
+    target: dict[str, TensorType] | None = None,
+    initial_state: tuple | None = None,
+) -> dict[str, object]:
     """
     Сравнивает скалярную потерю и градиенты BPTT и adjoint на одной сети.
 
@@ -412,7 +412,7 @@ def compare_bptt_adjoint(
     )
     adjoint_loss = loss_fn(adj_output, network)
 
-    per_variable: List[Dict[str, object]] = []
+    per_variable: list[dict[str, object]] = []
     max_abs = 0.0
     max_rel = 0.0
     dots = 0.0

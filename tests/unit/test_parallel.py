@@ -23,8 +23,8 @@ import numpy as np
 import pytest
 
 from neuraltide.core.network import NetworkGraph, NetworkRNN
-from neuraltide.integrators import EulerIntegrator
 from neuraltide.inputs import ConstantRateGenerator
+from neuraltide.integrators import EulerIntegrator
 from neuraltide.optimization import (
     CalibrationProblem,
     ObservationSpec,

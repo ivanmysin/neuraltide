@@ -3,7 +3,7 @@ import tensorflow as tf
 
 import neuraltide
 import neuraltide.config
-from neuraltide.core.types import TensorType, StateList, Dict
+from neuraltide.core.types import StateList, TensorType
 from neuraltide.populations.fokker_planck import FokkerPlanckPopulation
 
 
@@ -109,13 +109,13 @@ class BrunelFokkerPlanck(FokkerPlanckPopulation):
         # Индекс узла сетки, ближайшего к v_reset
         reset_v = self._params["v_reset"]
         reset_v = reset_v["value"] if isinstance(reset_v, dict) else reset_v
-        self._reset_index = int(round((float(reset_v) - v_min) / self.dV))
+        self._reset_index = round((float(reset_v) - v_min) / self.dV)
         self._reset_index = min(max(self._reset_index, 0), grid_size - 2)
 
         # Длина буфера задержки рефрактерности (в шагах dt)
         rp = self._params["tau_rp"]
         rp = rp["value"] if isinstance(rp, dict) else rp
-        self._n_delay = max(1, int(round(float(rp) / dt)))
+        self._n_delay = max(1, round(float(rp) / dt))
 
         # Внутреннее субшагивение для устойчивости явной конечно-объёмной
         # схемы: ограничения Куранта по диффузии и по дрейфу (худший случай
@@ -186,9 +186,9 @@ class BrunelFokkerPlanck(FokkerPlanckPopulation):
     def derivatives(
         self,
         state: StateList,
-        total_synaptic_input: Dict[str, TensorType],
+        total_synaptic_input: dict[str, TensorType],
     ) -> StateList:
-        P, p_r, nu_buf = state
+        P, _p_r, nu_buf = state
         I_syn = total_synaptic_input["I_syn"]
 
         dtype = neuraltide.config.get_dtype()
@@ -278,7 +278,7 @@ class BrunelFokkerPlanck(FokkerPlanckPopulation):
         nu_ms = self._threshold_flux_ms(state[0], dtype)
         return 1000.0 * nu_ms  # 1/мс → Гц, shape [..., 1]
 
-    def observables(self, state: StateList) -> Dict[str, TensorType]:
+    def observables(self, state: StateList) -> dict[str, TensorType]:
         dtype = neuraltide.config.get_dtype()
         P = state[0]
         dV = tf.constant(self.dV, dtype=dtype)
@@ -292,7 +292,7 @@ class BrunelFokkerPlanck(FokkerPlanckPopulation):
         }
 
     @property
-    def parameter_spec(self) -> Dict[str, Dict[str, any]]:
+    def parameter_spec(self) -> dict[str, dict[str, any]]:
         return {
             "tau_m": {
                 "shape": (1,),

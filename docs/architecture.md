@@ -51,10 +51,10 @@ NeuralTide — это библиотека для построения и сим
 pop = IzhikevichMeanField(
     dt=0.5,
     params={
-        'tau_pop': [1.0, 1.0, 1.0, 1.0],
-        'alpha': [0.5, 0.5, 0.5, 0.5],
+        "tau_pop": [1.0, 1.0, 1.0, 1.0],
+        "alpha": [0.5, 0.5, 0.5, 0.5],
         # ... другие параметры
-    }
+    },
 )
 ```
 
@@ -66,11 +66,11 @@ pop = IzhikevichMeanField(
 gen = VonMisesGenerator(
     dt=0.5,
     params={
-        'mean_rate': 20.0,
-        'R': 0.5,
-        'freq': 8.0,
-        'phase': 0.0,
-    }
+        "mean_rate": 20.0,
+        "R": 0.5,
+        "freq": 8.0,
+        "phase": 0.0,
+    },
 )
 ```
 
@@ -87,11 +87,11 @@ syn = TsodyksMarkramSynapse(
     n_post=4,
     dt=0.5,
     params={
-        'gsyn_max': 0.1,
-        'tau_f': 20.0,
-        'tau_d': 5.0,
+        "gsyn_max": 0.1,
+        "tau_f": 20.0,
+        "tau_d": 5.0,
         # ... другие параметры
-    }
+    },
 )
 ```
 
@@ -99,16 +99,16 @@ syn = TsodyksMarkramSynapse(
 
 ```python
 graph = NetworkGraph(dt=0.5)
-graph.declare_input('theta', n_units=gen.n_units)  # объявление входа
-graph.add_population('exc', pop)                    # динамическая популяция
-graph.add_synapse('theta->exc', syn, src='theta', tgt='exc')
+graph.declare_input("theta", n_units=gen.n_units)  # объявление входа
+graph.add_population("exc", pop)  # динамическая популяция
+graph.add_synapse("theta->exc", syn, src="theta", tgt="exc")
 ```
 
 ### 5. Предвычисление входных данных
 
 ```python
 # Вычисление частот разрядов для каждого входа
-inputs = graph.pack_inputs({'theta': gen(t_seq)})
+inputs = graph.pack_inputs({"theta": gen(t_seq)})
 ```
 
 ### 6. Создание и запуск NetworkRNN
@@ -127,23 +127,23 @@ output = network(t_seq, inputs=inputs)
 
 ### Скаляр (broadcast к n_units)
 ```python
-params={'rate': 10.0}
+params = {"rate": 10.0}
 ```
 Автоматически расширяется до `[10.0, 10.0, ...]`
 
 ### Вектор (по одному значению на единицу)
 ```python
-params={'rate': [10.0, 15.0, 20.0]}
+params = {"rate": [10.0, 15.0, 20.0]}
 ```
 
 ### Словарь с полным контролем
 ```python
-params={
-    'rate': {
-        'value': 10.0,
-        'trainable': True,
-        'min': 0.0,
-        'max': 100.0,
+params = {
+    "rate": {
+        "value": 10.0,
+        "trainable": True,
+        "min": 0.0,
+        "max": 100.0,
     }
 }
 ```
@@ -155,8 +155,10 @@ params={
 
 Пример: 2 входные группы → 2 нейрона
 ```python
-pconn = [[1.0, 0.0],   # вход 0 → нейрон 0 (сильный), → нейрон 1 (слабый)
-         [0.0, 1.0]]   # вход 1 → нейрон 0 (слабый), → нейрон 1 (сильный)
+pconn = [
+    [1.0, 0.0],  # вход 0 → нейрон 0 (сильный), → нейрон 1 (слабый)
+    [0.0, 1.0],
+]  # вход 1 → нейрон 0 (слабый), → нейрон 1 (сильный)
 ```
 
 ## Типы данных
@@ -165,6 +167,7 @@ NeuralTide использует TensorFlow для всех вычислений.
 
 ```python
 import neuraltide.config as config
+
 config.set_dtype(tf.float64)  # по умолчанию tf.float32
 ```
 

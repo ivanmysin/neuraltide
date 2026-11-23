@@ -130,26 +130,42 @@ from neuraltide.populations import WilsonCowan
 from neuraltide.synapses import StaticSynapse
 from neuraltide.utils import seed_everything
 
-neuraltide.config.set_dtype(tf.float64)   # до создания моделей
+neuraltide.config.set_dtype(tf.float64)  # до создания моделей
 seed_everything(42)
 
 DT, T = 0.5, 80  # шаг и длительность, мс
 
 # 1. Компоненты
-pop = WilsonCowan(dt=DT, params={
-    "tau":  {"value": [8.0],  "trainable": True, "min": 1.0, "max": 50.0},
-    "a": 1.0, "theta": 0.0, "w": 0.2,
-    "I_ext": {"value": [0.8], "trainable": True},
-    "max_rate": 100.0,
-})
-syn = StaticSynapse(n_pre=1, n_post=1, dt=DT, params={
-    "gsyn_max": {"value": [[30.0]], "trainable": True, "min": 0.1, "max": 1000.0},
-    "pconn": [[1.0]],
-    "e_r": 1.0,
-})
-gen = SinusoidalGenerator(dt=DT, params={
-    "amplitude": 8.0, "freq": 8.0, "phase": 0.0, "offset": 10.0,
-})
+pop = WilsonCowan(
+    dt=DT,
+    params={
+        "tau": {"value": [8.0], "trainable": True, "min": 1.0, "max": 50.0},
+        "a": 1.0,
+        "theta": 0.0,
+        "w": 0.2,
+        "I_ext": {"value": [0.8], "trainable": True},
+        "max_rate": 100.0,
+    },
+)
+syn = StaticSynapse(
+    n_pre=1,
+    n_post=1,
+    dt=DT,
+    params={
+        "gsyn_max": {"value": [[30.0]], "trainable": True, "min": 0.1, "max": 1000.0},
+        "pconn": [[1.0]],
+        "e_r": 1.0,
+    },
+)
+gen = SinusoidalGenerator(
+    dt=DT,
+    params={
+        "amplitude": 8.0,
+        "freq": 8.0,
+        "phase": 0.0,
+        "offset": 10.0,
+    },
+)
 
 # 2. Топология
 graph = NetworkGraph(dt=DT)
@@ -165,15 +181,20 @@ inputs = graph.pack_inputs({"in": gen(t_seq)})
 target = network(t_seq, inputs=inputs).firing_rates["exc"]
 
 # 4. Пространство оптимизируемых параметров и сдвиг от истины
-space = ParameterSpace.from_network(network, transforms={
-    "exc/tau": LogTransform(),
-    "in->exc/gsyn_max": LogTransform(),
-})
-space.apply_to_model({
-    "exc/tau": tf.constant([[20.0]]),            # истина 8.0
-    "exc/I_ext": tf.constant([[0.2]]),           # истина 0.8
-    "in->exc/gsyn_max": tf.constant([[120.0]]),  # истина 30.0
-})
+space = ParameterSpace.from_network(
+    network,
+    transforms={
+        "exc/tau": LogTransform(),
+        "in->exc/gsyn_max": LogTransform(),
+    },
+)
+space.apply_to_model(
+    {
+        "exc/tau": tf.constant([[20.0]]),  # истина 8.0
+        "exc/I_ext": tf.constant([[0.2]]),  # истина 0.8
+        "in->exc/gsyn_max": tf.constant([[120.0]]),  # истина 30.0
+    }
+)
 
 objective = ResidualLoss(
     [ObservationSpec(name="exc", population="exc", target=target, sigma=2.0)]
@@ -181,10 +202,12 @@ objective = ResidualLoss(
 problem = CalibrationProblem(network, space, t_seq, inputs=inputs, objective=objective)
 print(f"loss до: {problem.evaluate().loss:.6f}")
 
+
 # 5. Проверка градиента, затем локальная оптимизация
 def value_and_grad(phi_np):
     ev, grad = problem.value_and_gradient(phi_np)
     return ev.loss, np.asarray(grad)
+
 
 report = taylor_test(value_and_grad, np.asarray(problem.pack()) + 0.25)
 print("Taylor test:", report["slope_R0_median"], report["slope_R1_median"])
@@ -226,6 +249,7 @@ for name in space.names:
 
 ```python
 import tensorflow as tf
+
 print(tf.config.list_physical_devices("GPU"))  # пусто → см. troubleshooting
 ```
 

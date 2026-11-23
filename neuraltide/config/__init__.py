@@ -1,5 +1,4 @@
 import tensorflow as tf
-from typing import Dict, Type
 
 _DTYPE = tf.float32
 _DEBUG_NUMERICS = False
@@ -45,21 +44,21 @@ def maybe_check_numerics(tensor: tf.Tensor, message: str) -> tf.Tensor:
     return tensor
 
 
-POPULATION_REGISTRY: Dict[str, Type] = {}
-SYNAPSE_REGISTRY: Dict[str, Type] = {}
-INPUT_REGISTRY: Dict[str, Type] = {}
+POPULATION_REGISTRY: dict[str, type] = {}
+SYNAPSE_REGISTRY: dict[str, type] = {}
+INPUT_REGISTRY: dict[str, type] = {}
 
 
-def register_population(name: str, cls: Type) -> None:
+def register_population(name: str, cls: type) -> None:
     """Регистрирует пользовательский класс PopulationModel для config-first API."""
     POPULATION_REGISTRY[name] = cls
 
 
-def register_synapse(name: str, cls: Type) -> None:
+def register_synapse(name: str, cls: type) -> None:
     """Регистрирует пользовательский класс SynapseModel."""
     SYNAPSE_REGISTRY[name] = cls
 
 
-def register_input(name: str, cls: Type) -> None:
+def register_input(name: str, cls: type) -> None:
     """Регистрирует пользовательский класс BaseInputGenerator."""
     INPUT_REGISTRY[name] = cls

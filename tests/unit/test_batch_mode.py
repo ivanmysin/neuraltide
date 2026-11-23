@@ -16,6 +16,7 @@ import tensorflow as tf
 
 import neuraltide.config
 from neuraltide.core.network import NetworkGraph, NetworkRNN
+from neuraltide.inputs import ConstantRateGenerator, VonMisesGenerator
 from neuraltide.integrators import (
     EulerIntegrator,
     ExponentialEulerIntegrator,
@@ -23,7 +24,6 @@ from neuraltide.integrators import (
     RK4Integrator,
     RosenbrockIntegrator,
 )
-from neuraltide.inputs import ConstantRateGenerator, VonMisesGenerator
 from neuraltide.optimization import (
     CalibrationProblem,
     ObservationSpec,
@@ -154,8 +154,8 @@ def build_brunel():
         v_min=-80.0,
     )
     graph = NetworkGraph(dt=DT)
+    graph.add_population("brunel", pop)
     with pytest.warns(UserWarning, match="has no incoming synapses"):
-        graph.add_population("brunel", pop)
         network = NetworkRNN(graph, EulerIntegrator())
     return network
 
@@ -355,7 +355,7 @@ class TestBatchEquivalence:
         t_b = _batch_t(t, B)
         out_graph = net_b(t_b, inputs=inputs_b)
         pop0, syn0 = net_b.get_initial_state(batch_size=B)
-        rates_e, _, fp, fs, _, _ = net_b._scan_forward_impl(
+        rates_e, _, _fp, _fs, _, _ = net_b._scan_forward_impl(
             t_b, tuple(pop0), tuple(syn0), inputs_b
         )
         out_i_list = []

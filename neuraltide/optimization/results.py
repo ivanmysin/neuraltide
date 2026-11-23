@@ -28,8 +28,9 @@ OptimizationResult) и используют единый механизм сер
 
 import json
 import os
+from collections.abc import Mapping
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Mapping, Optional, Union
+from typing import Any
 
 import numpy as np
 import tensorflow as tf
@@ -38,16 +39,16 @@ import neuraltide
 
 __all__ = [
     "Evaluation",
-    "OptimizationResult",
-    "LocalOptimizerResult",
-    "StartResult",
-    "MultistartResult",
-    "RunCheckpoint",
     "JacobianResult",
+    "LocalOptimizerResult",
+    "MultistartResult",
+    "OptimizationResult",
+    "RunCheckpoint",
+    "StartResult",
 ]
 
 
-def _default_versions() -> Dict[str, str]:
+def _default_versions() -> dict[str, str]:
     """Версии пакетов, влияющих на воспроизводимость вычислений."""
     return {
         "neuraltide": getattr(neuraltide, "__version__", "unknown"),
@@ -76,9 +77,9 @@ class Evaluation:
     """
 
     loss: float
-    components: Dict[str, float] = field(default_factory=dict)
+    components: dict[str, float] = field(default_factory=dict)
     residuals: np.ndarray = field(default_factory=lambda: np.zeros(0))
-    grad: Optional[np.ndarray] = None
+    grad: np.ndarray | None = None
     status: str = "ok"
     n_forward: int = 0
     n_gradient: int = 0
@@ -86,7 +87,7 @@ class Evaluation:
     dtype: str = "float32"
     dt: float = 0.0
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Словарь с JSON-сериализуемыми значениями (numpy -> list)."""
         return {
             "loss": float(self.loss),
@@ -126,10 +127,10 @@ class OptimizationResult:
     phi_best: np.ndarray
     theta_best: Mapping[str, np.ndarray]
     loss_best: float
-    history: List[Dict[str, Any]] = field(default_factory=list)
-    seed: Optional[int] = None
-    config: Dict[str, Any] = field(default_factory=dict)
-    versions: Dict[str, str] = field(default_factory=dict)
+    history: list[dict[str, Any]] = field(default_factory=list)
+    seed: int | None = None
+    config: dict[str, Any] = field(default_factory=dict)
+    versions: dict[str, str] = field(default_factory=dict)
     dtype: str = "float32"
 
     def __post_init__(self) -> None:
@@ -141,7 +142,7 @@ class OptimizationResult:
         if not self.versions:
             self.versions = _default_versions()
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Словарь с JSON-сериализуемыми значениями (numpy -> list)."""
         return {
             "phi_best": self.phi_best.tolist(),
@@ -174,13 +175,13 @@ class OptimizationResult:
             dtype=str(data.get("dtype", "float32")),
         )
 
-    def save(self, path: Union[str, os.PathLike]) -> None:
+    def save(self, path: str | os.PathLike) -> None:
         """Сохраняет результат в JSON-файл."""
         with open(path, "w") as f:
             json.dump(self.to_dict(), f, indent=2)
 
     @classmethod
-    def load(cls, path: Union[str, os.PathLike]) -> "OptimizationResult":
+    def load(cls, path: str | os.PathLike) -> "OptimizationResult":
         """Загружает результат из JSON-файла, записанного save()."""
         with open(path, "r") as f:
             data = json.load(f)
@@ -210,20 +211,20 @@ def _encode(value: Any) -> Any:
 class _JsonDTO:
     """Единый механизм сериализации DTO: to_dict/from_dict + save/load."""
 
-    def to_dict(self) -> Dict[str, Any]:  # pragma: no cover - интерфейс
+    def to_dict(self) -> dict[str, Any]:  # pragma: no cover - интерфейс
         raise NotImplementedError
 
     @classmethod
     def from_dict(cls, data: Mapping[str, Any]):  # pragma: no cover - интерфейс
         raise NotImplementedError
 
-    def save(self, path: Union[str, os.PathLike]) -> None:
+    def save(self, path: str | os.PathLike) -> None:
         """Сохраняет DTO в JSON-файл."""
         with open(path, "w") as f:
             json.dump(self.to_dict(), f, indent=2)
 
     @classmethod
-    def load(cls, path: Union[str, os.PathLike]):
+    def load(cls, path: str | os.PathLike):
         """Загружает DTO из JSON-файла, записанного save()."""
         with open(path, "r") as f:
             data = json.load(f)
@@ -260,13 +261,13 @@ class LocalOptimizerResult(_JsonDTO):
     nfev: int = 0
     njev: int = 0
     grad_norm: float = 0.0
-    bounds_active: List[str] = field(default_factory=list)
+    bounds_active: list[str] = field(default_factory=list)
     n_forward: int = 0
     n_gradient: int = 0
     wall_time: float = 0.0
-    validation: Dict[str, float] = field(default_factory=dict)
+    validation: dict[str, float] = field(default_factory=dict)
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "base": self.base.to_dict(),
             "method": str(self.method),
@@ -336,17 +337,17 @@ class StartResult(_JsonDTO):
     loss: float = 0.0
     status: str = "pending"
     message: str = ""
-    screened_loss: Optional[float] = None
+    screened_loss: float | None = None
     refined: bool = False
     screen_refined: bool = False
-    local: Optional[LocalOptimizerResult] = None
+    local: LocalOptimizerResult | None = None
     wall_time: float = 0.0
 
     def __post_init__(self) -> None:
         self.phi0 = np.asarray(self.phi0, dtype=np.float64)
         self.phi = np.asarray(self.phi, dtype=np.float64)
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "index": int(self.index),
             "x0_origin": str(self.x0_origin),
@@ -403,16 +404,16 @@ class MultistartResult(_JsonDTO):
     """
 
     base: OptimizationResult
-    solutions: List[StartResult] = field(default_factory=list)
+    solutions: list[StartResult] = field(default_factory=list)
     best_index: int = -1
     n_starts: int = 0
     n_refined: int = 0
     n_failed: int = 0
-    seed: Optional[int] = None
-    clustering: Dict[str, Any] = field(default_factory=dict)
+    seed: int | None = None
+    clustering: dict[str, Any] = field(default_factory=dict)
     wall_time: float = 0.0
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "base": self.base.to_dict(),
             "solutions": [s.to_dict() for s in self.solutions],
@@ -453,13 +454,13 @@ class RunCheckpoint(_JsonDTO):
         best_index: индекс лучшего завершённого старта (-1, если нет).
     """
 
-    seed: Optional[int] = None
-    config: Dict[str, Any] = field(default_factory=dict)
-    completed: List[Any] = field(default_factory=list)
-    pending: List[Any] = field(default_factory=list)
+    seed: int | None = None
+    config: dict[str, Any] = field(default_factory=dict)
+    completed: list[Any] = field(default_factory=list)
+    pending: list[Any] = field(default_factory=list)
     best_index: int = -1
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "seed": self.seed,
             "config": _encode(self.config),
@@ -505,7 +506,7 @@ class JacobianResult(_JsonDTO):
     n_forward: int = 0
     wall_time: float = 0.0
     method: str = "forward"
-    likelihood_scale: Optional[np.ndarray] = None
+    likelihood_scale: np.ndarray | None = None
 
     def __post_init__(self) -> None:
         self.J = np.asarray(self.J, dtype=np.float64)
@@ -527,7 +528,7 @@ class JacobianResult(_JsonDTO):
             )
         return self.likelihood_scale[:, None] * self.J
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "J": self.J.tolist(),
             "r": self.r.tolist(),

@@ -26,13 +26,11 @@ ROS2). Под tf.function (NetworkRNN) всё трассируется в гра
 якобиан [D, D] по объединённому состоянию сети (см. stiffness.py).
 """
 
-from typing import Dict, Optional, Tuple
-
 import tensorflow as tf
 
 import neuraltide.config
 from neuraltide.core.base import PopulationModel, SynapseModel
-from neuraltide.core.types import TensorType, StateList
+from neuraltide.core.types import StateList, TensorType
 from neuraltide.integrators.base import BaseIntegrator
 from neuraltide.integrators.euler import EulerIntegrator
 from neuraltide.integrators.stiffness import (
@@ -75,7 +73,7 @@ class RosenbrockIntegrator(BaseIntegrator):
         self,
         n_substeps: int = 1,
         jacobian_method: str = "jvp",
-        fd_eps: Optional[float] = None,
+        fd_eps: float | None = None,
     ):
         self.n_substeps = max(1, int(n_substeps))
         self.jacobian_method = jacobian_method
@@ -88,8 +86,8 @@ class RosenbrockIntegrator(BaseIntegrator):
         self,
         population: PopulationModel,
         state: StateList,
-        total_synaptic_input: Dict[str, TensorType],
-    ) -> Tuple[StateList, TensorType]:
+        total_synaptic_input: dict[str, TensorType],
+    ) -> tuple[StateList, TensorType]:
         # Пошаговый якобиан строится per-unit ([n_units, d, d]) — батч-ось
         # должна быть 1. Проверка через assert_equal (а не статическую
         # форму): внутри графа скана батч-оси динамические, статическая
@@ -154,7 +152,7 @@ class RosenbrockIntegrator(BaseIntegrator):
         pre_firing_rate: TensorType,
         post_voltage: TensorType,
         dt: float,
-    ) -> Tuple[StateList, TensorType]:
+    ) -> tuple[StateList, TensorType]:
         return self._syn_euler.step_synapse(
             synapse, state, pre_firing_rate, post_voltage, dt
         )
@@ -165,7 +163,7 @@ class RosenbrockIntegrator(BaseIntegrator):
         pop_states: StateList,
         syn_states: StateList,
         dt: float,
-    ) -> Tuple[StateList, StateList]:
+    ) -> tuple[StateList, StateList]:
         """
         Один ROS2-шаг по связанной сети (integration_mode='network').
 

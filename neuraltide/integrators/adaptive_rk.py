@@ -20,13 +20,11 @@ Network-wide шаг (integration_mode='network') не поддерживаетс
 (supports_network_step=False): NetworkRNN в этом режиме бросит ValueError.
 """
 
-from typing import Dict, Tuple
-
 import tensorflow as tf
 
 import neuraltide.config
 from neuraltide.core.base import PopulationModel, SynapseModel
-from neuraltide.core.types import TensorType, StateList
+from neuraltide.core.types import StateList, TensorType
 from neuraltide.integrators.base import BaseIntegrator
 from neuraltide.integrators.euler import EulerIntegrator
 from neuraltide.integrators.stiffness import flatten_state, unflatten_state
@@ -107,8 +105,8 @@ class AdaptiveRKIntegrator(BaseIntegrator):
         self,
         population: PopulationModel,
         state: StateList,
-        total_synaptic_input: Dict[str, TensorType],
-    ) -> Tuple[StateList, TensorType]:
+        total_synaptic_input: dict[str, TensorType],
+    ) -> tuple[StateList, TensorType]:
         dtype = neuraltide.config.get_dtype()
         dt = float(population.dt)
         dt_t = tf.constant(dt, dtype=dtype)
@@ -222,12 +220,12 @@ class AdaptiveRKIntegrator(BaseIntegrator):
                 tf.constant(0, dtype=tf.int32),
                 tf.constant(False),
             )
-            t_done, h_last, y_flat, _, _, err_acc, n_sub, failed = tf.while_loop(
+            t_done, _h_last, y_flat, _, _, err_acc, n_sub, failed = tf.while_loop(
                 _cond, _body, init
             )
         else:
             # Фиксированный субшаг: честная развёртка (дифференцируема).
-            n_substeps = max(1, int(round(dt / h_init)))
+            n_substeps = max(1, round(dt / h_init))
             y_flat = y0_flat
             err_acc = tf.zeros([], dtype=dtype)
             t_done = tf.zeros([], dtype=dtype)
@@ -277,7 +275,7 @@ class AdaptiveRKIntegrator(BaseIntegrator):
         pre_firing_rate: TensorType,
         post_voltage: TensorType,
         dt: float,
-    ) -> Tuple[StateList, TensorType]:
+    ) -> tuple[StateList, TensorType]:
         return self._syn_euler.step_synapse(
             synapse, state, pre_firing_rate, post_voltage, dt
         )

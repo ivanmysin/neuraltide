@@ -52,8 +52,9 @@ Eager API; numpy-выходы — float64. Глобальный dtype (neuraltid
 
 import functools
 import time
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
+from typing import Any
 
 import numpy as np
 import tensorflow as tf
@@ -70,8 +71,8 @@ from neuraltide.optimization.results import (
 )
 
 __all__ = [
-    "FIMDirection",
     "CollinearityPair",
+    "FIMDirection",
     "FIMResult",
     "ProfileResult",
     "SubsetResult",
@@ -93,9 +94,9 @@ _NORM_EPS = 1e-12
 # ---------------------------------------------------------------------------
 
 
-def _entry_offsets(space) -> Dict[str, Tuple[int, int]]:
+def _entry_offsets(space) -> dict[str, tuple[int, int]]:
     """Смещения trainable-записей ParameterSpace в плоском векторе φ."""
-    offsets: Dict[str, Tuple[int, int]] = {}
+    offsets: dict[str, tuple[int, int]] = {}
     start = 0
     for name, entry in space.phi_entries.items():
         offsets[str(name)] = (start, entry.numel)
@@ -103,12 +104,12 @@ def _entry_offsets(space) -> Dict[str, Tuple[int, int]]:
     return offsets
 
 
-def _flat_names(space, size: int) -> List[str]:
+def _flat_names(space, size: int) -> list[str]:
     """
     Имена φ-координат: full_name для скалярных trainable-записей,
     'name[i]' иначе (non-trainable записи реестра в φ не входят).
     """
-    names: List[str] = []
+    names: list[str] = []
     for name, entry in space.phi_entries.items():
         if entry.numel == 1:
             names.append(str(name))
@@ -122,14 +123,14 @@ def _flat_names(space, size: int) -> List[str]:
     return names
 
 
-def _counters(problem) -> Tuple[int, int]:
+def _counters(problem) -> tuple[int, int]:
     return (
         int(getattr(problem, "n_forward", 0)),
         int(getattr(problem, "n_gradient", 0)),
     )
 
 
-def _free_index(offsets: Mapping[str, Tuple[int, int]], names: Sequence[str]):
+def _free_index(offsets: Mapping[str, tuple[int, int]], names: Sequence[str]):
     """Индексы φ-координат записей names в полном векторе φ."""
     if not names:
         return np.zeros(0, dtype=int)
@@ -166,9 +167,9 @@ class FIMDirection:
     eigenvalue: float = 0.0
     energy_fraction: float = 0.0
     cumulative_energy: float = 0.0
-    top_params: List[Tuple[str, float]] = field(default_factory=list)
+    top_params: list[tuple[str, float]] = field(default_factory=list)
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "index": int(self.index),
             "singular_value": float(self.singular_value),
@@ -204,7 +205,7 @@ class CollinearityPair:
     second: str = ""
     cosine: float = 0.0
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "first": str(self.first),
             "second": str(self.second),
@@ -263,14 +264,14 @@ class FIMResult(_JsonDTO):
     condition_number_fim: float = np.inf
     effective_rank: int = 0
     energy: float = 0.99
-    stiff_dirs: List[FIMDirection] = field(default_factory=list)
-    soft_dirs: List[FIMDirection] = field(default_factory=list)
-    collinearity: List[CollinearityPair] = field(default_factory=list)
-    param_sensitivity: List[Tuple[str, float]] = field(default_factory=list)
-    param_names: List[str] = field(default_factory=list)
+    stiff_dirs: list[FIMDirection] = field(default_factory=list)
+    soft_dirs: list[FIMDirection] = field(default_factory=list)
+    collinearity: list[CollinearityPair] = field(default_factory=list)
+    param_sensitivity: list[tuple[str, float]] = field(default_factory=list)
+    param_names: list[str] = field(default_factory=list)
     phi: np.ndarray = field(default_factory=lambda: np.zeros(0))
     loss: float = 0.0
-    J_shape: Tuple[int, int] = (0, 0)
+    J_shape: tuple[int, int] = (0, 0)
     collinearity_threshold: float = 0.95
     max_dirs: int = 10
 
@@ -286,7 +287,7 @@ class FIMResult(_JsonDTO):
         self.energy = float(self.energy)
         self.J_shape = (int(self.J_shape[0]), int(self.J_shape[1]))
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "fim": self.fim.tolist(),
             "eigenvalues": self.eigenvalues.tolist(),
@@ -345,7 +346,7 @@ def compute_fim(
     jac: JacobianResult,
     *,
     energy: float = 0.99,
-    param_names: Optional[Sequence[str]] = None,
+    param_names: Sequence[str] | None = None,
     collinearity_threshold: float = 0.95,
     max_dirs: int = 10,
 ) -> FIMResult:
@@ -448,7 +449,7 @@ def compute_fim(
     # Коллинеарность: |cos| между столбцами J (нулевые столбцы пропускаются).
     col_norms = np.linalg.norm(J, axis=0)
     valid = col_norms > 0.0
-    pairs: List[CollinearityPair] = []
+    pairs: list[CollinearityPair] = []
     if np.count_nonzero(valid) > 1:
         unit = np.zeros_like(J)
         unit[:, valid] = J[:, valid] / col_norms[valid]
@@ -527,17 +528,17 @@ class ProfileResult(_JsonDTO):
     """
 
     name: str = ""
-    theta_values: List[float] = field(default_factory=list)
-    losses: List[float] = field(default_factory=list)
-    rel_loss: List[float] = field(default_factory=list)
-    successes: List[bool] = field(default_factory=list)
-    phi_path: List[Optional[np.ndarray]] = field(default_factory=list)
-    nfev: List[int] = field(default_factory=list)
-    messages: List[str] = field(default_factory=list)
-    intervals: Dict[str, Optional[Tuple[float, float]]] = field(default_factory=dict)
+    theta_values: list[float] = field(default_factory=list)
+    losses: list[float] = field(default_factory=list)
+    rel_loss: list[float] = field(default_factory=list)
+    successes: list[bool] = field(default_factory=list)
+    phi_path: list[np.ndarray | None] = field(default_factory=list)
+    nfev: list[int] = field(default_factory=list)
+    messages: list[str] = field(default_factory=list)
+    intervals: dict[str, tuple[float, float] | None] = field(default_factory=dict)
     chi2_threshold: float = _CHI2_DF1_95
     rel_loss_threshold: float = _CHI2_DF1_95 / 2.0
-    warnings: List[str] = field(default_factory=list)
+    warnings: list[str] = field(default_factory=list)
     optimizer: str = "lbfgsb"
     warm_start: bool = True
     n_forward: int = 0
@@ -563,7 +564,7 @@ class ProfileResult(_JsonDTO):
         self.chi2_threshold = float(self.chi2_threshold)
         self.rel_loss_threshold = float(self.rel_loss_threshold)
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "name": str(self.name),
             "theta_values": list(self.theta_values),
@@ -625,7 +626,7 @@ def _profile_interval(
     rel_loss: np.ndarray,
     successes: np.ndarray,
     threshold: float,
-) -> Tuple[Optional[Tuple[float, float]], List[str]]:
+) -> tuple[tuple[float, float] | None, list[str]]:
     """
     Интервал по успешным узлам и предупреждения о форме профиля.
 
@@ -634,7 +635,7 @@ def _profile_interval(
     несвязность допустимой области и минимум на границе сетки фиксируются
     в предупреждениях и не скрываются.
     """
-    warnings: List[str] = []
+    warnings: list[str] = []
     if not np.any(successes):
         return None, ["нет успешных узлов — интервал не определён"]
     x = np.asarray(theta_values, dtype=np.float64)[successes]
@@ -685,7 +686,7 @@ def _profile_interval(
     return (float(x[lo]), float(x[hi])), warnings
 
 
-def _resolve_profile_optimizer(optimizer: Any) -> Tuple[Any, str]:
+def _resolve_profile_optimizer(optimizer: Any) -> tuple[Any, str]:
     """Строковый идентификатор/ callable → callable(frozen, phi0) -> result."""
     if callable(optimizer):
         return optimizer, "callable"
@@ -731,10 +732,10 @@ def _likelihood_profile(
     problem,
     name: str,
     *,
-    phi: Optional[Any] = None,
-    values: Optional[Sequence[float]] = None,
+    phi: Any | None = None,
+    values: Sequence[float] | None = None,
     n_points: int = 11,
-    grid: Optional[Sequence[float]] = None,
+    grid: Sequence[float] | None = None,
     optimizer: Any = "lbfgsb",
     warm_start: bool = True,
 ) -> ProfileResult:
@@ -866,13 +867,13 @@ def _likelihood_profile(
     t_start = time.perf_counter()
     fwd0, grad0 = _counters(problem)
 
-    theta_values: List[float] = []
-    losses: List[float] = []
-    successes: List[bool] = []
-    phi_path: List[Optional[np.ndarray]] = []
-    nfev: List[int] = []
-    messages: List[str] = []
-    warm_ref: Optional[np.ndarray] = None
+    theta_values: list[float] = []
+    losses: list[float] = []
+    successes: list[bool] = []
+    phi_path: list[np.ndarray | None] = []
+    nfev: list[int] = []
+    messages: list[str] = []
+    warm_ref: np.ndarray | None = None
 
     for node in nodes:
         theta_values.append(float(node))
@@ -1015,15 +1016,15 @@ class SubsetResult(_JsonDTO):
         wall_time: время refit, секунды.
     """
 
-    kept_names: List[str] = field(default_factory=list)
-    fixed_names: List[str] = field(default_factory=list)
-    refit_result: Optional[LocalOptimizerResult] = None
+    kept_names: list[str] = field(default_factory=list)
+    fixed_names: list[str] = field(default_factory=list)
+    refit_result: LocalOptimizerResult | None = None
     loss_before: float = 0.0
-    loss_after: Optional[float] = None
-    theta_delta_kept: Optional[Dict[str, np.ndarray]] = None
-    theta_delta_fixed: Optional[Dict[str, np.ndarray]] = None
-    prediction_delta: Optional[Dict[str, float]] = None
-    validation_delta: Optional[Dict[str, float]] = None
+    loss_after: float | None = None
+    theta_delta_kept: dict[str, np.ndarray] | None = None
+    theta_delta_fixed: dict[str, np.ndarray] | None = None
+    prediction_delta: dict[str, float] | None = None
+    validation_delta: dict[str, float] | None = None
     notes: str = ""
     n_forward: int = 0
     n_gradient: int = 0
@@ -1053,7 +1054,7 @@ class SubsetResult(_JsonDTO):
             else {str(k): float(v) for k, v in self.validation_delta.items()}
         )
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         def _encode_delta(delta):
             if delta is None:
                 return None
@@ -1217,9 +1218,11 @@ def select_subset(
         fixed={n: theta_jac[n] for n in fixed_names},
     )
     notes_parts = [
-        "Замороженные записи зафиксированы FrozenProblem на физических θ из "
-        "jac.phi, поэтому theta_delta_fixed структурно нулевой (это "
-        "свойство постановки, значения вычислены, не hardcoded)."
+        (
+            "Замороженные записи зафиксированы FrozenProblem на физических θ из "
+            "jac.phi, поэтому theta_delta_fixed структурно нулевой (это "
+            "свойство постановки, значения вычислены, не hardcoded)."
+        )
     ]
     try:
         refit_result = minimize_lbfgsb(frozen, phi0_free, validate=False)
@@ -1250,7 +1253,7 @@ def select_subset(
             f"{exc}; bias-поля None."
         )
 
-    prediction_delta: Optional[Dict[str, float]] = None
+    prediction_delta: dict[str, float] | None = None
     if phi_full is not None:
         simulate = getattr(problem, "simulate", None)
         if not callable(simulate):
@@ -1289,7 +1292,7 @@ def select_subset(
             "prediction_delta=None: refit не дал точки для прогнозного прогона."
         )
 
-    validation_delta: Optional[Dict[str, float]] = None
+    validation_delta: dict[str, float] | None = None
     if phi_full is None:
         notes_parts.append("validation_delta=None: refit не дал точки для validate().")
     else:

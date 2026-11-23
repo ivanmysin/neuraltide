@@ -19,7 +19,7 @@
 
 import json
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Any
+from typing import Any
 
 import numpy as np
 
@@ -32,11 +32,11 @@ class Dataset:
     target: np.ndarray  # [T, total_target_units]
     time_seq: np.ndarray  # [T]
     dt: float
-    input_names: List[str]
-    input_n_units: Dict[str, int]
-    target_names: List[str]
-    target_n_units: Dict[str, int]
-    generator_params: Dict[str, Any] = field(default_factory=dict)
+    input_names: list[str]
+    input_n_units: dict[str, int]
+    target_names: list[str]
+    target_n_units: dict[str, int]
+    generator_params: dict[str, Any] = field(default_factory=dict)
 
     @property
     def T(self) -> int:
@@ -73,10 +73,10 @@ class Dataset:
 
 def save_dataset(
     path: str,
-    inputs: Dict[str, np.ndarray],
-    target: Dict[str, np.ndarray],
+    inputs: dict[str, np.ndarray],
+    target: dict[str, np.ndarray],
     dt: float,
-    generator_params: Optional[Dict[str, Any]] = None,
+    generator_params: dict[str, Any] | None = None,
 ) -> None:
     """
     Сохраняет dataset в HDF5.
@@ -189,7 +189,7 @@ def load_dataset(path: str) -> Dataset:
 
 def plot_dataset(
     data: Dataset,
-    max_t: Optional[float] = None,
+    max_t: float | None = None,
     figsize: tuple = (14, 8),
 ) -> None:
     """

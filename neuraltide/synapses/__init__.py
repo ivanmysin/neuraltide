@@ -1,10 +1,9 @@
-from neuraltide.synapses.tsodyks_markram import TsodyksMarkramSynapse
-from neuraltide.synapses.nmda import NMDASynapse
-from neuraltide.synapses.static import StaticSynapse
-from neuraltide.synapses.second_order import SecondOrderSynapse
-from neuraltide.synapses.composite import CompositeSynapse
-
 import neuraltide.config
+from neuraltide.synapses.composite import CompositeSynapse
+from neuraltide.synapses.nmda import NMDASynapse
+from neuraltide.synapses.second_order import SecondOrderSynapse
+from neuraltide.synapses.static import StaticSynapse
+from neuraltide.synapses.tsodyks_markram import TsodyksMarkramSynapse
 
 neuraltide.config.register_synapse("TsodyksMarkramSynapse", TsodyksMarkramSynapse)
 neuraltide.config.register_synapse("NMDASynapse", NMDASynapse)
@@ -13,9 +12,9 @@ neuraltide.config.register_synapse("SecondOrderSynapse", SecondOrderSynapse)
 neuraltide.config.register_synapse("CompositeSynapse", CompositeSynapse)
 
 __all__ = [
-    "TsodyksMarkramSynapse",
-    "NMDASynapse",
-    "StaticSynapse",
-    "SecondOrderSynapse",
     "CompositeSynapse",
+    "NMDASynapse",
+    "SecondOrderSynapse",
+    "StaticSynapse",
+    "TsodyksMarkramSynapse",
 ]

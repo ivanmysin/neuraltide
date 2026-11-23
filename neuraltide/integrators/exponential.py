@@ -34,13 +34,11 @@ Network-wide шаг (integration_mode='network') не поддерживаетс
 (supports_network_step=False): NetworkRNN в этом режиме бросит ValueError.
 """
 
-from typing import Dict, Optional, Tuple
-
 import tensorflow as tf
 
 import neuraltide.config
 from neuraltide.core.base import PopulationModel, SynapseModel
-from neuraltide.core.types import TensorType, StateList
+from neuraltide.core.types import StateList, TensorType
 from neuraltide.integrators.base import BaseIntegrator
 from neuraltide.integrators.euler import EulerIntegrator
 from neuraltide.integrators.stiffness import (
@@ -68,7 +66,7 @@ class ExponentialEulerIntegrator(BaseIntegrator):
         self,
         n_substeps: int = 1,
         jacobian_method: str = "jvp",
-        fd_eps: Optional[float] = None,
+        fd_eps: float | None = None,
         max_block_size: int = 8,
         on_large_block: str = "raise",
     ):
@@ -88,8 +86,8 @@ class ExponentialEulerIntegrator(BaseIntegrator):
         self,
         population: PopulationModel,
         state: StateList,
-        total_synaptic_input: Dict[str, TensorType],
-    ) -> Tuple[StateList, TensorType]:
+        total_synaptic_input: dict[str, TensorType],
+    ) -> tuple[StateList, TensorType]:
         # Якобиан строится per-unit ([n_units, d, d]) — батч-ось должна
         # быть 1. assert_equal (не статическая форма): внутри графа скана
         # батч-оси динамические. Для batch>1 используйте Euler/Heun/RK4
@@ -161,7 +159,7 @@ class ExponentialEulerIntegrator(BaseIntegrator):
         pre_firing_rate: TensorType,
         post_voltage: TensorType,
         dt: float,
-    ) -> Tuple[StateList, TensorType]:
+    ) -> tuple[StateList, TensorType]:
         return self._syn_euler.step_synapse(
             synapse, state, pre_firing_rate, post_voltage, dt
         )

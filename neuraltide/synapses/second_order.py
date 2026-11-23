@@ -1,10 +1,9 @@
 import tensorflow as tf
-from typing import Dict, Tuple
 
 import neuraltide
 import neuraltide.config
 from neuraltide.core.base import SynapseModel
-from neuraltide.core.types import TensorType, StateList
+from neuraltide.core.types import StateList, TensorType
 
 
 class SecondOrderSynapse(SynapseModel):
@@ -47,7 +46,7 @@ class SecondOrderSynapse(SynapseModel):
         post_voltage: TensorType,
         state: StateList,
         dt: float,
-    ) -> Tuple[Dict[str, TensorType], StateList]:
+    ) -> tuple[dict[str, TensorType], StateList]:
         g_s, dg_s = state
 
         dtype = neuraltide.config.get_dtype()
@@ -109,7 +108,7 @@ class SecondOrderSynapse(SynapseModel):
         state: StateList,
         pre_firing_rate: TensorType,
         post_voltage: TensorType,
-    ) -> Dict[str, TensorType]:
+    ) -> dict[str, TensorType]:
         dtype = neuraltide.config.get_dtype()
         gsyn_max = tf.cast(self.gsyn_max, dtype)
         e_r = tf.cast(self.e_r, dtype)
@@ -200,7 +199,7 @@ class SecondOrderSynapse(SynapseModel):
         pre_firing_rate: TensorType,
         post_voltage: TensorType,
     ) -> StateList:
-        g_s, dg_s = state
+        _g_s, dg_s = state
 
         dtype = neuraltide.config.get_dtype()
         gsyn_max = tf.cast(self.gsyn_max, dtype)
@@ -221,8 +220,8 @@ class SecondOrderSynapse(SynapseModel):
         state: StateList,
         pre_firing_rate: TensorType,
         post_voltage: TensorType,
-    ) -> Dict[str, TensorType]:
-        g_s, dg_s = state
+    ) -> dict[str, TensorType]:
+        g_s, _dg_s = state
 
         dtype = neuraltide.config.get_dtype()
         e_r = tf.cast(self.e_r, dtype)
@@ -239,7 +238,7 @@ class SecondOrderSynapse(SynapseModel):
         return {"gsyn_max": dgsyn_max}
 
     @property
-    def parameter_spec(self) -> Dict[str, Dict[str, any]]:
+    def parameter_spec(self) -> dict[str, dict[str, any]]:
         return {
             "gsyn_max": {
                 "shape": (self.n_pre, self.n_post),

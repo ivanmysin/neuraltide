@@ -20,6 +20,7 @@ import tensorflow as tf
 import neuraltide
 import neuraltide.config
 from neuraltide.core.network import NetworkGraph, NetworkOutput, NetworkRNN
+from neuraltide.inputs import ConstantRateGenerator, VonMisesGenerator
 from neuraltide.integrators import (
     AdaptiveRKIntegrator,
     EulerIntegrator,
@@ -29,7 +30,6 @@ from neuraltide.integrators import (
     RK4Integrator,
     RosenbrockIntegrator,
 )
-from neuraltide.inputs import ConstantRateGenerator, VonMisesGenerator
 from neuraltide.optimization import (
     CalibrationProblem,
     ObservationSpec,
@@ -192,8 +192,8 @@ def _build_brunel() -> NetworkRNN:
         v_min=-80.0,
     )
     graph = NetworkGraph(dt=DT)
+    graph.add_population("brunel", pop)
     with pytest.warns(UserWarning, match="has no incoming synapses"):
-        graph.add_population("brunel", pop)
         network = NetworkRNN(graph, EulerIntegrator())
     return network
 

@@ -25,15 +25,15 @@ Forward-режим несовместим с ранее выполненными
 ```python
 from neuraltide.optimization import compute_fim, residual_jacobian
 
-problem_id = build_problem()                  # свежий экземпляр той же задачи
+problem_id = build_problem()  # свежий экземпляр той же задачи
 jac = residual_jacobian(problem_id, phi_best)  # J: [n_residuals, size]
 fim = compute_fim(jac, param_names=space.trainable_names)
 
 print(fim.effective_rank, "/", problem_id.size)  # сколько направлений реально видно
-print(fim.condition_number)                     # kappa(J) по ненулевым сингулярным
-for pair in fim.collinearity:                   # почти линейно зависимые пары
+print(fim.condition_number)  # kappa(J) по ненулевым сингулярным
+for pair in fim.collinearity:  # почти линейно зависимые пары
     print(pair.first, "~", pair.second, pair.cosine)
-for direction in fim.soft_dirs[:3]:             # «мягкие» направления
+for direction in fim.soft_dirs[:3]:  # «мягкие» направления
     print(direction.top_params)
 ```
 
@@ -58,10 +58,13 @@ for direction in fim.soft_dirs[:3]:             # «мягкие» направ�
 from neuraltide.optimization import likelihood_profile
 
 profile = likelihood_profile(
-    problem_id, "exc/tau", grid=np.linspace(4.0, 14.0, 11),
-    optimizer="lbfgsb", warm_start=True,
+    problem_id,
+    "exc/tau",
+    grid=np.linspace(4.0, 14.0, 11),
+    optimizer="lbfgsb",
+    warm_start=True,
 )
-print(profile.intervals["0.95"])   # chi2-интервал 95% (порог 1.921 по rel_loss)
+print(profile.intervals["0.95"])  # chi2-интервал 95% (порог 1.921 по rel_loss)
 ```
 
 Интервал честный: если он широкий или граничный (уходит в min/max),
@@ -75,9 +78,9 @@ print(profile.intervals["0.95"])   # chi2-интервал 95% (порог 1.921
 from neuraltide.optimization import select_subset
 
 sub = select_subset(problem_id, jac, keep=["exc/tau", "in->exc/gsyn_max"])
-print(sub.loss_after - sub.loss_before)     # цена фиксации остальных
-print(sub.prediction_delta)                  # ||Δr||/||r|| по популяциям
-print(sub.validation_delta)                  # дельта потерь на held-out
+print(sub.loss_after - sub.loss_before)  # цена фиксации остальных
+print(sub.prediction_delta)  # ||Δr||/||r|| по популяциям
+print(sub.validation_delta)  # дельта потерь на held-out
 ```
 
 `prediction_delta` мало — подмножество достаточно; `theta_delta_kept`
@@ -106,13 +109,23 @@ print(sub.validation_delta)                  # дельта потерь на he
 ```python
 from neuraltide.optimization import CalibrationProblem, Experiment
 
-holdout = Experiment(name="holdout_f16", t_sequence=t_seq,
-                     inputs=inputs_holdout, objective=objective_holdout)
-problem = CalibrationProblem(network, space, t_seq, inputs=inputs_train,
-                             objective=objective_train, held_out=[holdout])
+holdout = Experiment(
+    name="holdout_f16",
+    t_sequence=t_seq,
+    inputs=inputs_holdout,
+    objective=objective_holdout,
+)
+problem = CalibrationProblem(
+    network,
+    space,
+    t_seq,
+    inputs=inputs_train,
+    objective=objective_train,
+    held_out=[holdout],
+)
 
 local = minimize_lbfgsb(problem)
-print(local.validation)                     # {'holdout_f16': loss}
+print(local.validation)  # {'holdout_f16': loss}
 print(problem.validate(phi_best))
 ```
 
@@ -155,8 +168,9 @@ print(problem.validate(phi_best))
 ```python
 from neuraltide.optimization import residual_diagnostics
 
-diag = residual_diagnostics(problem, phi_best, max_lag=10,
-                            windows=[(0, 400), (400, 800)])   # окна в индексах шагов [0, T)
+diag = residual_diagnostics(
+    problem, phi_best, max_lag=10, windows=[(0, 400), (400, 800)]
+)  # окна в индексах шагов [0, T)
 for spec in diag.specs:
     print(spec.name, spec.std, spec.max_abs, spec.autocorr)
 ```
@@ -173,9 +187,9 @@ for spec in diag.specs:
 from neuraltide.optimization import laplace_approximation
 
 lap = laplace_approximation(problem, phi_map, method="gn", level=0.95)
-print(lap.pd, lap.jitter_used)          # обратилась ли precision без jitter
+print(lap.pd, lap.jitter_used)  # обратилась ли precision без jitter
 for name in space.trainable_names:
-    print(name, lap.intervals[name])    # интервалы в физических theta
+    print(name, lap.intervals[name])  # интервалы в физических theta
 ```
 
 `method="gn"` строит ковариацию через якобиан невязок (нужен
@@ -188,16 +202,18 @@ Bootstrap — альтернатива без гауссова предполо�
 
 ```python
 from neuraltide.optimization import (
-    bootstrap_experiments, parameter_ensemble, predictive_intervals,
+    bootstrap_experiments,
+    parameter_ensemble,
+    predictive_intervals,
     residual_bootstrap,
 )
 
-boot = residual_bootstrap(problem, n_draws=100, seed=7)      # остаточный
+boot = residual_bootstrap(problem, n_draws=100, seed=7)  # остаточный
 boot_exp = bootstrap_experiments(problem, n_draws=100, seed=7)  # по экспериментам
 
-ensemble = parameter_ensemble([local.base, ms.base])         # из готовых решений
+ensemble = parameter_ensemble([local.base, ms.base])  # из готовых решений
 pred = predictive_intervals(problem, ensemble.phi_samples, level=0.95)
-print(pred.lower["exc"].shape)   # [T, n_units] квантили прогноза
+print(pred.lower["exc"].shape)  # [T, n_units] квантили прогноза
 ```
 
 **Важное ограничение.** Forward-режим чувствительностей (внутри
@@ -208,7 +224,7 @@ TensorFlow кэширует граф прямого прогона, и forward-A
 же picklable-фабрики:
 
 ```python
-problem_uq = build_problem()                 # та же фабрика, что и для parallel
+problem_uq = build_problem()  # та же фабрика, что и для parallel
 lap = laplace_approximation(problem_uq, phi_map, method="gn")
 ```
 
@@ -247,20 +263,31 @@ lap = laplace_approximation(problem_uq, phi_map, method="gn")
 
 ```python
 from neuraltide.optimization import (
-    GradNormWeights, balanced_gradient, balanced_train, pcgrad_project,
+    GradNormWeights,
+    balanced_gradient,
+    balanced_train,
+    pcgrad_project,
 )
 
 # Одна итерация: взвешенный градиент с проекцией PCGrad
 components, grad = balanced_gradient(
-    problem, phi, weights={"exc": 1.0, "inh": 2.0}, projector=pcgrad_project,
+    problem,
+    phi,
+    weights={"exc": 1.0, "inh": 2.0},
+    projector=pcgrad_project,
 )
 
 # Полный цикл с адаптивными весами (с обязательным baseline сравнения):
 bt = balanced_train(
-    problem, phi0, GradNormWeights(alpha=1.0),
-    optimizer="adam", max_steps=200, projector=pcgrad_project, seed=7,
+    problem,
+    phi0,
+    GradNormWeights(alpha=1.0),
+    optimizer="adam",
+    max_steps=200,
+    projector=pcgrad_project,
+    seed=7,
 )
-print(bt.base.loss_best, bt.baseline["best_loss"])   # vs FixedWeights(1.0)
+print(bt.base.loss_best, bt.baseline["best_loss"])  # vs FixedWeights(1.0)
 ```
 
 Стратегии весов (`WeightStrategy`): `FixedWeights` (константные веса —
@@ -276,8 +303,8 @@ print(bt.base.loss_best, bt.baseline["best_loss"])   # vs FixedWeights(1.0)
 ```python
 from neuraltide.optimization import adaptive_window_sampler
 
-focus = adaptive_window_sampler(problem, window_size=50)   # поиск окна
-focused_view = focus(phi)          # view задачи с усиленной маской в окне
+focus = adaptive_window_sampler(problem, window_size=50)  # поиск окна
+focused_view = focus(phi)  # view задачи с усиленной маской в окне
 ```
 
 Как интерпретировать: `balanced_train` всегда прогоняет baseline
@@ -308,15 +335,18 @@ params и `MinMaxConstraint`).
 
 ```python
 from neuraltide.optimization import (
-    ConstraintSpec, augmented_lagrangian,
+    ConstraintSpec,
+    augmented_lagrangian,
 )
+
 
 def mean_rate_bound(predictions, network):
     return tf.reduce_mean(predictions.firing_rates["inh"]) - 15.0  # <= 0
 
+
 constraints = [ConstraintSpec(name="inh_rate", kind="ineq", fn=mean_rate_bound)]
 al = augmented_lagrangian(problem, constraints, local="lbfgsb", max_outer=10)
-print(al.base.loss_best)            # потеря ДАННЫХ в phi_best (без AL-членов)
+print(al.base.loss_best)  # потеря ДАННЫХ в phi_best (без AL-членов)
 for row in al.violation_history:
     print(row)
 ```
@@ -335,8 +365,8 @@ from neuraltide.optimization import epsilon_constraint
 
 constrained = epsilon_constraint(
     problem,
-    objectives=["exc", "inh"],   # имена компонентов objective.components
-    index=1,                      # 'inh' <= eps
+    objectives=["exc", "inh"],  # имена компонентов objective.components
+    index=1,  # 'inh' <= eps
     eps=1.0,
 )
 ```
@@ -367,7 +397,11 @@ evaluator, сравнение решений из мультистарта. Пу
 
 ```python
 from neuraltide.optimization import (
-    CandidateTask, ProcessPool, SerialPool, evaluate_candidates, make_evaluator,
+    CandidateTask,
+    ProcessPool,
+    SerialPool,
+    evaluate_candidates,
+    make_evaluator,
 )
 
 # Один вызов — список записей (loss=+inf и error при исключении в worker'е):
@@ -375,7 +409,9 @@ records = evaluate_candidates(build_problem, candidates, n_workers=4, seed=0)
 
 # Явный пул для повторного использования:
 pool = ProcessPool(build_problem, fn="evaluate", n_workers=4, tf_threads=1)
-records = pool.map([CandidateTask(index=i, phi=phi) for i, phi in enumerate(candidates)])
+records = pool.map(
+    [CandidateTask(index=i, phi=phi) for i, phi in enumerate(candidates)]
+)
 pool.close()
 
 # Инъекция в глобальный поиск:

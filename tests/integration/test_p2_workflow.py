@@ -28,8 +28,6 @@ import neuraltide.optimization as opt
 from neuraltide.core.network import NetworkGraph, NetworkRNN
 from neuraltide.inputs import SinusoidalGenerator
 from neuraltide.integrators import EulerIntegrator
-from neuraltide.populations import WilsonCowan
-from neuraltide.synapses import StaticSynapse
 from neuraltide.optimization import (
     ALResult,
     AugmentedLagrangianState,
@@ -37,8 +35,8 @@ from neuraltide.optimization import (
     BootstrapResult,
     CalibrationProblem,
     CandidateTask,
-    ConstraintSpec,
     ConstrainedProblem,
+    ConstraintSpec,
     EnsembleResult,
     EvalRecord,
     FixedWeights,
@@ -81,6 +79,8 @@ from neuraltide.optimization import (
     residual_bootstrap,
     residual_diagnostics,
 )
+from neuraltide.populations import WilsonCowan
+from neuraltide.synapses import StaticSynapse
 
 # Полный список публичных P2-имён (должен совпадать с __all__ пакета).
 PUBLIC_P2_NAMES = [

@@ -194,7 +194,7 @@ class TestInitialize:
         assert check.loss_single == pytest.approx(check.loss_ms, abs=1e-2)
 
     def test_finalize_consistent_at_initialize(self, l0_factory):
-        problem, ms = _build_ms(l0_factory, [0, 20, 60])
+        _problem, ms = _build_ms(l0_factory, [0, 20, 60])
         phi = np.array(ms.initialize_from_single_shooting(), dtype=np.float64)
         check = ms.finalize(phi, gap_tol=1e-9)
         assert check.consistent

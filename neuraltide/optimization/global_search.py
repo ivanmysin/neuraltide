@@ -52,8 +52,9 @@ import math
 import os
 import time
 import warnings
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple
+from typing import Any
 
 import numpy as np
 from scipy import optimize as sp_optimize
@@ -67,8 +68,8 @@ from neuraltide.optimization.results import (
 )
 
 __all__ = [
-    "OptionalDependencyError",
     "GlobalOptimizerResult",
+    "OptionalDependencyError",
     "ParetoResult",
     "global_search",
 ]
@@ -132,11 +133,11 @@ class GlobalOptimizerResult(_JsonDTO):
     n_forward: int = 0
     n_gradient: int = 0
     wall_time: float = 0.0
-    history: List[Dict[str, Any]] = field(default_factory=list)
-    candidates: List[StartResult] = field(default_factory=list)
-    validation: Dict[str, float] = field(default_factory=dict)
+    history: list[dict[str, Any]] = field(default_factory=list)
+    candidates: list[StartResult] = field(default_factory=list)
+    validation: dict[str, float] = field(default_factory=dict)
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "base": self.base.to_dict(),
             "method": str(self.method),
@@ -192,24 +193,24 @@ class ParetoResult(_JsonDTO):
     """
 
     base: OptimizationResult
-    frontier: Dict[str, np.ndarray] = field(default_factory=dict)
-    objective_names: List[str] = field(default_factory=list)
+    frontier: dict[str, np.ndarray] = field(default_factory=dict)
+    objective_names: list[str] = field(default_factory=list)
     method: str = "nsga2"
     success: bool = False
     message: str = ""
     n_evals: int = 0
     n_forward: int = 0
     wall_time: float = 0.0
-    history: List[Dict[str, Any]] = field(default_factory=list)
-    seed: Optional[int] = None
-    config: Dict[str, Any] = field(default_factory=dict)
+    history: list[dict[str, Any]] = field(default_factory=list)
+    seed: int | None = None
+    config: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         self.frontier = {
             str(k): np.asarray(v, dtype=np.float64) for k, v in self.frontier.items()
         }
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "base": self.base.to_dict(),
             "frontier": {k: v.tolist() for k, v in self.frontier.items()},
@@ -274,7 +275,7 @@ def _cap_loss(loss: float) -> float:
     return min(loss, _LOSS_CAP)
 
 
-def _check_options(method: str, options: Optional[Mapping[str, Any]]) -> Dict[str, Any]:
+def _check_options(method: str, options: Mapping[str, Any] | None) -> dict[str, Any]:
     opts = dict(options or {})
     allowed = _OPTION_KEYS[method]
     unknown = sorted(set(opts) - allowed)
@@ -300,9 +301,7 @@ def _resolve_phi0(problem, phi0, size: int) -> np.ndarray:
     return arr
 
 
-def _resolve_bounds(
-    problem, size: int, bounds
-) -> Optional[Tuple[np.ndarray, np.ndarray]]:
+def _resolve_bounds(problem, size: int, bounds) -> tuple[np.ndarray, np.ndarray] | None:
     """
     Границы: явный аргумент > problem.search_box_phi() > problem.bounds_phi()
     > None.
@@ -332,7 +331,7 @@ def _resolve_bounds(
     return lb, ub
 
 
-def _require_finite_bounds(bounds, method: str) -> Tuple[np.ndarray, np.ndarray]:
+def _require_finite_bounds(bounds, method: str) -> tuple[np.ndarray, np.ndarray]:
     """Конечные границы или ValueError с советом (transforms/sample_phi0s)."""
     if bounds is None or not (
         np.all(np.isfinite(bounds[0])) and np.all(np.isfinite(bounds[1]))
@@ -353,7 +352,7 @@ def _clip_to_bounds(theta: np.ndarray, bounds) -> np.ndarray:
     return np.clip(theta, bounds[0], bounds[1])
 
 
-def _theta_best(problem, phi_best: np.ndarray) -> Dict[str, np.ndarray]:
+def _theta_best(problem, phi_best: np.ndarray) -> dict[str, np.ndarray]:
     unpack = getattr(problem, "unpack", None)
     if callable(unpack):
         theta = unpack(phi_best)
@@ -389,7 +388,7 @@ class _Oracle:
     ask-пакета), получают +inf БЕЗ учёта в n_evals/n_failed/history.
     """
 
-    def __init__(self, problem, max_evals: Optional[int], evaluator) -> None:
+    def __init__(self, problem, max_evals: int | None, evaluator) -> None:
         if max_evals is not None:
             max_evals = int(max_evals)
             if max_evals < 1:
@@ -401,13 +400,13 @@ class _Oracle:
         self._evaluator = evaluator
         self.n_evals = 0
         self.n_failed = 0
-        self.history: List[Dict[str, Any]] = []
-        self._scored: List[Tuple[float, np.ndarray]] = []
+        self.history: list[dict[str, Any]] = []
+        self._scored: list[tuple[float, np.ndarray]] = []
         # (phi, F-строка) для nsga2:
-        self.F_history: List[Tuple[np.ndarray, np.ndarray]] = []
+        self.F_history: list[tuple[np.ndarray, np.ndarray]] = []
 
     @property
-    def max_evals(self) -> Optional[int]:
+    def max_evals(self) -> int | None:
         return self._max_evals
 
     def remaining(self) -> float:
@@ -421,7 +420,7 @@ class _Oracle:
             return n
         return max(0, min(n, int(remaining)))
 
-    def _commit(self, loss: float, phi: Optional[np.ndarray]) -> float:
+    def _commit(self, loss: float, phi: np.ndarray | None) -> float:
         """Учёт одной реальной оценки; возвращает записанный loss (+inf)."""
         loss = float(loss)
         failed = not np.isfinite(loss)
@@ -438,7 +437,7 @@ class _Oracle:
         for loss, phi in zip(losses, phis):
             self._commit(loss, phi)
 
-    def _eval_real(self, phis: Sequence[np.ndarray]) -> List[float]:
+    def _eval_real(self, phis: Sequence[np.ndarray]) -> list[float]:
         """Реальная оценка пакета; отказы -> +inf (счётчики в _commit)."""
         phis = [np.asarray(p, dtype=np.float64).reshape(-1) for p in phis]
         if not phis:
@@ -456,7 +455,7 @@ class _Oracle:
         for p in phis:
             try:
                 loss = float(self._problem.evaluate(p).loss)
-            except Exception:  # noqa: BLE001 - отказ кандидата не роняет прогон
+            except Exception:
                 loss = float("inf")
             out.append(loss if np.isfinite(loss) else float("inf"))
         return out
@@ -487,7 +486,7 @@ class _Oracle:
 
     def evaluate_one_components(
         self, phi: np.ndarray
-    ) -> Tuple[float, Dict[str, float]]:
+    ) -> tuple[float, dict[str, float]]:
         """
         Оценка одного кандидата с возвратом (loss, components); бросает
         _BudgetExhausted, если бюджет исчерпан.
@@ -495,7 +494,7 @@ class _Oracle:
         if self.remaining() <= 0:
             raise _BudgetExhausted(f"max_evals={self._max_evals} исчерпан")
         phi = np.asarray(phi, dtype=np.float64).reshape(-1)
-        components: Dict[str, float] = {}
+        components: dict[str, float] = {}
         try:
             ev = self._problem.evaluate(phi)
             components = {
@@ -503,7 +502,7 @@ class _Oracle:
                 for k, v in (getattr(ev, "components", None) or {}).items()
             }
             loss = float(ev.loss)
-        except Exception:  # noqa: BLE001 - отказ кандидата не роняет прогон
+        except Exception:
             loss, components = float("inf"), {}
         loss = self._commit(loss, phi)
         if not np.isfinite(loss):
@@ -522,12 +521,12 @@ class _Oracle:
         n_take = self._n_take(len(phis))
         F = np.full((len(phis), len(names)), np.inf, dtype=np.float64)
         for i, phi in enumerate(phis[:n_take]):
-            row: Optional[np.ndarray] = None
+            row: np.ndarray | None = None
             try:
                 ev = self._problem.evaluate(phi)
                 comp = getattr(ev, "components", None) or {}
                 row = np.array([float(comp.get(nm, np.inf)) for nm in names])
-            except Exception:  # noqa: BLE001 - отказ кандидата не роняет прогон
+            except Exception:
                 row = None
             if row is None or not np.all(np.isfinite(row)):
                 self._commit(float("inf"), None)
@@ -539,12 +538,12 @@ class _Oracle:
             F[i] = float("inf") if row is None else row
         return F
 
-    def best(self, k: int = 1) -> List[Tuple[float, np.ndarray]]:
+    def best(self, k: int = 1) -> list[tuple[float, np.ndarray]]:
         """Топ-k уникальных конечных кандидатов: [(loss, phi), ...]."""
         if not self._scored:
             return []
         order = sorted(range(len(self._scored)), key=lambda i: (self._scored[i][0], i))
-        out: List[Tuple[float, np.ndarray]] = []
+        out: list[tuple[float, np.ndarray]] = []
         seen = set()
         for i in order:
             loss, phi = self._scored[i]
@@ -565,7 +564,7 @@ class _Oracle:
 
 def _save_ask_tell_checkpoint(
     path,
-    seed: Optional[int],
+    seed: int | None,
     config: Mapping[str, Any],
     completed: Sequence[Mapping[str, Any]],
 ) -> None:
@@ -588,8 +587,8 @@ def _save_ask_tell_checkpoint(
 
 
 def _load_ask_tell_checkpoint(
-    path, seed: Optional[int], config: Mapping[str, Any]
-) -> List[Dict[str, Any]]:
+    path, seed: int | None, config: Mapping[str, Any]
+) -> list[dict[str, Any]]:
     """Загрузка и валидация чекпоинта; resume восстанавливает дизайн из seed."""
     checkpoint = RunCheckpoint.load(os.fspath(path))
     if checkpoint.seed != seed:
@@ -620,7 +619,7 @@ def _load_ask_tell_checkpoint(
 # ---------------------------------------------------------------------------
 
 
-def _run_de(oracle, phi0, bounds, seed, opts) -> Tuple[np.ndarray, float, bool, str]:
+def _run_de(oracle, phi0, bounds, seed, opts) -> tuple[np.ndarray, float, bool, str]:
     lb, ub = _require_finite_bounds(bounds, "de")
 
     def fun(x) -> float:
@@ -689,7 +688,7 @@ def _import_cma():
 
 def _run_cma(
     oracle, phi0, bounds, seed, opts, checkpoint_path, resume, config
-) -> Tuple[np.ndarray, float, bool, str]:
+) -> tuple[np.ndarray, float, bool, str]:
     cma_mod = _import_cma()
     if bounds is not None and not (
         np.all(np.isfinite(bounds[0])) and np.all(np.isfinite(bounds[1]))
@@ -706,7 +705,7 @@ def _run_cma(
         else:
             sigma0 = 1.0
         sigma0 = max(float(sigma0), 1e-12)
-    cma_opts: Dict[str, Any] = {
+    cma_opts: dict[str, Any] = {
         "maxiter": int(opts.get("maxiter", 10000)),
         "verbose": -9,
     }
@@ -720,7 +719,7 @@ def _run_cma(
 
     es = cma_mod.CMAEvolutionStrategy(phi0.tolist(), float(sigma0), cma_opts)
 
-    completed: List[Dict[str, Any]] = []
+    completed: list[dict[str, Any]] = []
     if checkpoint_path is not None and resume and os.path.exists(checkpoint_path):
         completed = _load_ask_tell_checkpoint(checkpoint_path, seed, config)
         for gen in completed:
@@ -796,7 +795,7 @@ def _spsa_scale(phi0: np.ndarray, bounds) -> np.ndarray:
 
 def _run_spsa(
     oracle, phi0, bounds, seed, opts, checkpoint_path, resume, config
-) -> Tuple[np.ndarray, float, bool, str]:
+) -> tuple[np.ndarray, float, bool, str]:
     size = int(phi0.shape[0])
     scale = _spsa_scale(phi0, bounds)
     alpha = float(opts.get("alpha", 0.602))
@@ -835,7 +834,7 @@ def _run_spsa(
         return _clip_to_bounds(theta_next, bounds)
 
     theta = phi0.copy()
-    completed: List[Dict[str, Any]] = []
+    completed: list[dict[str, Any]] = []
     if checkpoint_path is not None and resume and os.path.exists(checkpoint_path):
         completed = _load_ask_tell_checkpoint(checkpoint_path, seed, config)
         gen0 = completed[0]
@@ -920,7 +919,7 @@ class _BoundedDisplacement:
 
 def _run_basinhopping(
     oracle, phi0, bounds, seed, opts
-) -> Tuple[np.ndarray, float, bool, str]:
+) -> tuple[np.ndarray, float, bool, str]:
     niter = int(opts.get("niter", 100))
     stepsize = float(opts.get("stepsize", 0.5))
     T = float(opts.get("T", 1.0))
@@ -932,7 +931,7 @@ def _run_basinhopping(
 
     rng = np.random.default_rng(seed)
     stepper = _BoundedDisplacement(stepsize, bounds, rng)
-    minimizer_kwargs: Dict[str, Any] = {
+    minimizer_kwargs: dict[str, Any] = {
         "method": "L-BFGS-B",
         "options": {"maxiter": inner_maxiter},
     }
@@ -988,7 +987,7 @@ def _run_basinhopping(
 class _NSGA2Output:
     frontier_phi: np.ndarray  # [m, size]
     frontier_F: np.ndarray  # [m, n_obj]
-    objective_names: List[str]
+    objective_names: list[str]
     success: bool
     message: str
 
@@ -1075,12 +1074,12 @@ def _run_nsga2(oracle, phi0, bounds, seed, opts, objective_names) -> _NSGA2Outpu
 # ---------------------------------------------------------------------------
 
 
-def _refine_candidates(problem, scored, k: int, local) -> List[StartResult]:
+def _refine_candidates(problem, scored, k: int, local) -> list[StartResult]:
     """Локальная доводка top-k кандидатов; ленивый импорт адаптеров."""
     from neuraltide.optimization.strategies import resolve_local_optimizer
 
     local_fn, _ = resolve_local_optimizer(local)
-    candidates: List[StartResult] = []
+    candidates: list[StartResult] = []
     for index, (loss0, phi0) in enumerate(scored[:k]):
         start = StartResult(
             index=index,
@@ -1101,7 +1100,7 @@ def _refine_candidates(problem, scored, k: int, local) -> List[StartResult]:
             start.message = str(getattr(result, "message", ""))
             start.refined = True
             start.local = result
-        except Exception as exc:  # noqa: BLE001 - доводка не роняет прогон
+        except Exception as exc:
             start.status = "failed"
             start.message = f"refinement: {exc}"
         candidates.append(start)
@@ -1117,17 +1116,17 @@ def global_search(
     problem,
     *,
     method: str = "de",
-    max_evals: Optional[int] = None,
+    max_evals: int | None = None,
     bounds=None,
     phi0=None,
-    seed: Optional[int] = None,
+    seed: int | None = None,
     refine_top_k: int = 0,
     local="lbfgsb",
     checkpoint_path=None,
     resume: bool = False,
-    evaluator: Optional[Callable[[Sequence[np.ndarray]], Sequence[float]]] = None,
-    options: Optional[Mapping[str, Any]] = None,
-    objective_names: Optional[Sequence[str]] = None,
+    evaluator: Callable[[Sequence[np.ndarray]], Sequence[float]] | None = None,
+    options: Mapping[str, Any] | None = None,
+    objective_names: Sequence[str] | None = None,
     validate: bool = True,
 ):
     """
@@ -1204,7 +1203,7 @@ def global_search(
     fwd0 = int(getattr(problem, "n_forward", 0))
     grad0 = int(getattr(problem, "n_gradient", 0))
     oracle = _Oracle(problem, max_evals, evaluator)
-    config: Dict[str, Any] = {
+    config: dict[str, Any] = {
         "method": method_key,
         "max_evals": oracle.max_evals,
         "size": size,
@@ -1262,7 +1261,7 @@ def global_search(
             oracle, phi0_arr, bounds_arr, seed, opts
         )
 
-    candidates: List[StartResult] = []
+    candidates: list[StartResult] = []
     if int(refine_top_k) > 0:
         candidates = _refine_candidates(
             problem, oracle.best(int(refine_top_k)), int(refine_top_k), local
@@ -1279,7 +1278,7 @@ def global_search(
     try:
         final_eval = problem.evaluate(np.asarray(phi_best, dtype=np.float64))
         final_loss = float(final_eval.loss)
-    except Exception as exc:  # noqa: BLE001 - отчитываемся даже при отказе
+    except Exception as exc:
         message = f"{message}; финальная оценка не удалась: {exc}"
     if np.isfinite(final_loss):
         loss_best = final_loss
@@ -1295,7 +1294,7 @@ def global_search(
         config=config,
         dtype=dtype_name,
     )
-    validation: Dict[str, float] = {}
+    validation: dict[str, float] = {}
     if validate and getattr(problem, "held_out", None):
         validation = {
             str(k): float(v)

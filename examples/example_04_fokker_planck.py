@@ -3,15 +3,15 @@
 Пользователь наследуется и реализует derivatives().
 """
 
-import tensorflow as tf
 import numpy as np
+import tensorflow as tf
 
 import neuraltide
-from neuraltide.core.base import PopulationModel
 from neuraltide.config import register_population
+from neuraltide.core.base import PopulationModel
 from neuraltide.core.network import NetworkGraph, NetworkRNN
 from neuraltide.integrators import EulerIntegrator
-from neuraltide.training import Trainer, CompositeLoss, MSELoss
+from neuraltide.training import CompositeLoss, MSELoss, Trainer
 from neuraltide.utils import seed_everything
 
 seed_everything(42)

@@ -9,13 +9,12 @@ import os
 import tempfile
 import time
 from contextlib import contextmanager
-from typing import Optional
 
 import tensorflow as tf
 
 
 @contextmanager
-def profile(logdir: Optional[str] = None):
+def profile(logdir: str | None = None):
     """
     Context manager that profiles TF ops within the block.
 
@@ -46,7 +45,7 @@ def profile(logdir: Optional[str] = None):
     finally:
         try:
             tf.profiler.experimental.stop()
-        except Exception:
+        except Exception:  # noqa: S110 — best-effort остановка профилировщика
             pass
 
 
@@ -63,8 +62,8 @@ def profile_step(trainer, t_sequence, initial_state=None, logdir=None):
     Returns:
         (loss, elapsed_seconds, logdir)
     """
-    with profile(logdir) as logdir:
+    with profile(logdir) as resolved_logdir:
         t0 = time.perf_counter()
         result = trainer.train_step(t_sequence, initial_state=initial_state)
         elapsed = time.perf_counter() - t0
-    return result, elapsed, logdir
+    return result, elapsed, resolved_logdir

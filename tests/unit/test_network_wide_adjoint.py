@@ -16,8 +16,8 @@ import tensorflow as tf
 
 import neuraltide.config
 from neuraltide.core.network import NetworkGraph, NetworkRNN
-from neuraltide.integrators import EulerIntegrator, RK4Integrator
 from neuraltide.inputs import ConstantRateGenerator
+from neuraltide.integrators import EulerIntegrator, RK4Integrator
 from neuraltide.populations import IzhikevichMeanField
 from neuraltide.synapses import TsodyksMarkramSynapse
 from neuraltide.training import (
@@ -131,7 +131,7 @@ class TestDiscreteAdjointNetworkMode:
 
         solver = AdjointSolver(network, network._integrator)
         assert solver._integration_mode == "network"
-        adj_grads, variables, _ = solver.compute_gradients(
+        adj_grads, _variables, _ = solver.compute_gradients(
             t_seq, inputs, target, loss_fn
         )
 
@@ -150,7 +150,7 @@ class TestDiscreteAdjointNetworkMode:
         """forward_pass solver'а совпадает с прямым прогоном сети."""
         neuraltide.config.set_dtype(tf.float64)
         network, gen = _make_coupled_tm_network(RK4Integrator(), "network")
-        t_seq, inputs, target = _make_data(network, gen, t_steps=10)
+        t_seq, inputs, _target = _make_data(network, gen, t_steps=10)
 
         solver = AdjointSolver(network, network._integrator)
         adj_output, _, _ = solver.forward_pass(t_seq, inputs)

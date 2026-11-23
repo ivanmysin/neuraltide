@@ -8,13 +8,11 @@ Keras-совместимая обёртка для NetworkRNN.
     model.fit(inputs, targets, epochs=100)
 """
 
-from typing import List, Optional, Tuple
-
 import tensorflow as tf
 
 import neuraltide
-from neuraltide.core.network import NetworkGraph, NetworkRNN, NetworkOutput
-from neuraltide.core.types import TensorType, StateList
+from neuraltide.core.network import NetworkGraph, NetworkOutput, NetworkRNN
+from neuraltide.core.types import StateList, TensorType
 from neuraltide.integrators.base import BaseIntegrator
 from neuraltide.training.losses import BaseLoss
 
@@ -49,7 +47,7 @@ class BrainModelKeras(tf.keras.Model):
         graph: NetworkGraph,
         integrator: BaseIntegrator,
         dt: float,
-        loss_fn: Optional[BaseLoss] = None,
+        loss_fn: BaseLoss | None = None,
         stability_penalty_weight: float = 0.0,
         **kwargs,
     ):
@@ -67,7 +65,7 @@ class BrainModelKeras(tf.keras.Model):
         self,
         inputs: TensorType,
         training: bool = False,
-        initial_state: Optional[Tuple[StateList, StateList]] = None,
+        initial_state: tuple[StateList, StateList] | None = None,
     ) -> NetworkOutput:
         """
         Forward pass.
@@ -175,6 +173,6 @@ class BrainModelKeras(tf.keras.Model):
         return self._network
 
     @property
-    def trainable_variables(self) -> List[tf.Variable]:
+    def trainable_variables(self) -> list[tf.Variable]:
         """Обучаемые переменные сети."""
         return self._network.trainable_variables

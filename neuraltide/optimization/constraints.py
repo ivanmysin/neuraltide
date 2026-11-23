@@ -58,8 +58,9 @@ import json
 import os
 import time
 import warnings
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple
+from typing import Any
 
 import numpy as np
 import tensorflow as tf
@@ -81,12 +82,12 @@ from neuraltide.optimization.results import (
 from neuraltide.optimization.strategies import resolve_local_optimizer
 
 __all__ = [
-    "ConstraintSpec",
+    "ALResult",
     "AugmentedLagrangianState",
     "ConstrainedProblem",
-    "ALResult",
-    "epsilon_constraint",
+    "ConstraintSpec",
     "augmented_lagrangian",
+    "epsilon_constraint",
     "fd_jacobian",
 ]
 
@@ -119,7 +120,7 @@ class ConstraintSpec:
     name: str
     kind: str
     fn: Callable[[Any, Any], Any]
-    jacobian: Optional[Any] = None
+    jacobian: Any | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.name, str) or not self.name:
@@ -175,10 +176,10 @@ class AugmentedLagrangianState:
         v > eta · prev_violation, то μ <- mu_factor·μ.
     """
 
-    lambdas: Dict[str, np.ndarray]
+    lambdas: dict[str, np.ndarray]
     mu: float = 10.0
     mu_factor: float = 10.0
-    prev_violation: Optional[float] = None
+    prev_violation: float | None = None
 
     def __post_init__(self) -> None:
         self.lambdas = {
@@ -267,7 +268,7 @@ class AugmentedLagrangianState:
         self.prev_violation = v
         return v
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "lambdas": {k: v.tolist() for k, v in self.lambdas.items()},
             "mu": float(self.mu),
@@ -300,9 +301,9 @@ def fd_jacobian(
     value_fn: Callable[[np.ndarray], np.ndarray],
     phi: Sequence[float],
     *,
-    h: Optional[float] = None,
-    h_values: Optional[Sequence[float]] = None,
-    base_value: Optional[Sequence[float]] = None,
+    h: float | None = None,
+    h_values: Sequence[float] | None = None,
+    base_value: Sequence[float] | None = None,
 ) -> np.ndarray:
     """
     Центральные конечные разности якобиана вектор-функции ограничений.
@@ -389,7 +390,7 @@ def _rebuild_evaluation(
     *,
     loss: float,
     components: Mapping[str, float],
-    grad: Optional[np.ndarray] = None,
+    grad: np.ndarray | None = None,
 ) -> Evaluation:
     """Evaluation с заменённой потерей/компонентами (сохраняя счётчики)."""
     grad_np = None if grad is None else np.asarray(grad, dtype=np.float64)
@@ -449,7 +450,7 @@ class ConstrainedProblem:
         self,
         problem,
         constraints: Sequence[ConstraintSpec],
-        state: Optional[AugmentedLagrangianState] = None,
+        state: AugmentedLagrangianState | None = None,
         *,
         augmented_residual: bool = False,
     ):
@@ -496,7 +497,7 @@ class ConstrainedProblem:
         return self._problem
 
     @property
-    def constraints(self) -> List[ConstraintSpec]:
+    def constraints(self) -> list[ConstraintSpec]:
         return list(self._constraints)
 
     @property
@@ -522,10 +523,10 @@ class ConstrainedProblem:
     # ------------------------------------------------------------------
     # pack / unpack / bounds_phi
     # ------------------------------------------------------------------
-    def pack(self, phi: Optional[Any] = None) -> Any:
+    def pack(self, phi: Any | None = None) -> Any:
         return self._problem.pack(phi)
 
-    def unpack(self, phi: Any) -> Dict[str, Any]:
+    def unpack(self, phi: Any) -> dict[str, Any]:
         unpack = getattr(self._problem, "unpack", None)
         if callable(unpack):
             return unpack(phi)
@@ -537,7 +538,7 @@ class ConstrainedProblem:
             "unpack(phi); добавьте метод unpack к duck-typed задаче."
         )
 
-    def bounds_phi(self) -> Tuple[np.ndarray, np.ndarray]:
+    def bounds_phi(self) -> tuple[np.ndarray, np.ndarray]:
         bounds_fn = getattr(self._problem, "bounds_phi", None)
         if callable(bounds_fn):
             lb, ub = bounds_fn()
@@ -553,7 +554,7 @@ class ConstrainedProblem:
     # ------------------------------------------------------------------
     # Ограничения: значения, нарушения, AL-штраф
     # ------------------------------------------------------------------
-    def _predictions_generic(self, phi: Optional[Any]) -> Any:
+    def _predictions_generic(self, phi: Any | None) -> Any:
         simulate = getattr(self._problem, "simulate", None)
         if not callable(simulate):
             raise TypeError(
@@ -564,9 +565,9 @@ class ConstrainedProblem:
             )
         return simulate(self.pack(phi) if phi is None else phi)
 
-    def _constraint_values_np(self, predictions: Any) -> Dict[str, np.ndarray]:
+    def _constraint_values_np(self, predictions: Any) -> dict[str, np.ndarray]:
         network = getattr(self._problem, "network", None)
-        values: Dict[str, np.ndarray] = {}
+        values: dict[str, np.ndarray] = {}
         for spec in self._constraints:
             raw = spec.fn(predictions, network)
             values[spec.name] = np.asarray(raw, dtype=np.float64).reshape(-1)
@@ -574,11 +575,11 @@ class ConstrainedProblem:
 
     def _al_penalty_np(
         self, cvals: Mapping[str, np.ndarray]
-    ) -> Tuple[float, Dict[str, np.ndarray]]:
+    ) -> tuple[float, dict[str, np.ndarray]]:
         """(значение AL-штрафа, d(штраф)/d(значение ограничения))."""
         mu = self._state.mu
         total = 0.0
-        dpsi: Dict[str, np.ndarray] = {}
+        dpsi: dict[str, np.ndarray] = {}
         for spec in self._constraints:
             c = np.asarray(cvals[spec.name], dtype=np.float64).reshape(-1)
             lam = self._state.lambda_for(spec.name, c.size)
@@ -596,13 +597,13 @@ class ConstrainedProblem:
             dpsi[spec.name] = d
         return total, dpsi
 
-    def _al_penalty_tf(self, output: Any) -> Tuple[Any, Dict[str, np.ndarray]]:
+    def _al_penalty_tf(self, output: Any) -> tuple[Any, dict[str, np.ndarray]]:
         """AL-штраф в ленте (дифференцируем) + значения ограничений."""
         dtype = neuraltide.config.get_dtype()
         mu = self._state.mu
         network = getattr(self._problem, "network", None)
         total = None
-        cvals: Dict[str, np.ndarray] = {}
+        cvals: dict[str, np.ndarray] = {}
         for spec in self._constraints:
             raw = spec.fn(output, network)
             c_t = tf.reshape(cast_if_needed(tf.convert_to_tensor(raw), dtype), [-1])
@@ -622,7 +623,7 @@ class ConstrainedProblem:
 
     def _component_entries(
         self, cvals: Mapping[str, np.ndarray], penalty: float
-    ) -> Dict[str, float]:
+    ) -> dict[str, float]:
         entries = {"al/penalty": float(penalty)}
         for spec in self._constraints:
             viol = self._state.violation_array(spec.name, spec.kind, cvals[spec.name])
@@ -632,8 +633,8 @@ class ConstrainedProblem:
         return entries
 
     def augmented_terms(
-        self, phi: Optional[Any] = None
-    ) -> Dict[str, Tuple[np.ndarray, np.ndarray]]:
+        self, phi: Any | None = None
+    ) -> dict[str, tuple[np.ndarray, np.ndarray]]:
         """
         Значения и нарушения ограничений в точке phi одним прогоном.
 
@@ -657,7 +658,7 @@ class ConstrainedProblem:
     # ------------------------------------------------------------------
     # Операции задачи
     # ------------------------------------------------------------------
-    def evaluate(self, phi: Optional[Any] = None) -> Evaluation:
+    def evaluate(self, phi: Any | None = None) -> Evaluation:
         """data loss + AL-штраф, одним прогоном (счётчик +1 n_forward)."""
         if self._fast:
             problem = self._problem
@@ -684,13 +685,13 @@ class ConstrainedProblem:
         )
 
     def _constraint_jacobians(
-        self, phi: Optional[Any], cvals: Mapping[str, np.ndarray]
-    ) -> Dict[str, np.ndarray]:
+        self, phi: Any | None, cvals: Mapping[str, np.ndarray]
+    ) -> dict[str, np.ndarray]:
         """Якобианы ограничений по phi для generic-пути."""
         phi_np = np.asarray(
             self.pack(phi) if phi is None else phi, dtype=np.float64
         ).reshape(-1)
-        jacobians: Dict[str, np.ndarray] = {}
+        jacobians: dict[str, np.ndarray] = {}
         for spec in self._constraints:
             expected = (int(cvals[spec.name].size), phi_np.shape[0])
             if callable(spec.jacobian):
@@ -720,7 +721,7 @@ class ConstrainedProblem:
             jacobians[spec.name] = jac
         return jacobians
 
-    def value_and_gradient(self, phi: Optional[Any] = None):
+    def value_and_gradient(self, phi: Any | None = None):
         """
         (Evaluation, grad) для data loss + AL-штрафа.
 
@@ -799,10 +800,10 @@ class ConstrainedProblem:
         )
         return eval_result, grad
 
-    def _residual_blocks(self, cvals: Mapping[str, np.ndarray]) -> List[np.ndarray]:
+    def _residual_blocks(self, cvals: Mapping[str, np.ndarray]) -> list[np.ndarray]:
         """Блоки sqrt(2·max(ψ_j, 0)) для augmented residual."""
         mu = self._state.mu
-        blocks: List[np.ndarray] = []
+        blocks: list[np.ndarray] = []
         for spec in self._constraints:
             c = np.asarray(cvals[spec.name], dtype=np.float64).reshape(-1)
             lam = self._state.lambda_for(spec.name, c.size)
@@ -816,7 +817,7 @@ class ConstrainedProblem:
             blocks.append(np.sqrt(2.0 * np.maximum(psi, 0.0)))
         return blocks
 
-    def residual(self, phi: Optional[Any] = None) -> np.ndarray:
+    def residual(self, phi: Any | None = None) -> np.ndarray:
         """
         Невязки задачи; при augmented_residual=True дополнены блоками
         ограничений (0.5·||r_aug||² = data loss + Σ max(ψ_j, 0)).
@@ -844,10 +845,10 @@ class ConstrainedProblem:
             cvals = self._constraint_values_np(self._predictions_generic(phi))
         return np.concatenate([r_data] + self._residual_blocks(cvals))
 
-    def simulate(self, phi: Optional[Any] = None) -> Any:
+    def simulate(self, phi: Any | None = None) -> Any:
         return self._problem.simulate(phi)
 
-    def validate(self, phi: Optional[Any] = None) -> Dict[str, float]:
+    def validate(self, phi: Any | None = None) -> dict[str, float]:
         return self._problem.validate(phi)
 
 
@@ -879,7 +880,7 @@ class _WeightedComponentObjective:
             total = term if total is None else total + term
         return total
 
-    def components(self, predictions: Any, network: Any) -> Dict[str, Any]:
+    def components(self, predictions: Any, network: Any) -> dict[str, Any]:
         comps = self._base.components(predictions, network)
         return {name: comps[name] for name in self._names}
 
@@ -890,8 +891,8 @@ def epsilon_constraint(
     index: int,
     eps: float,
     *,
-    objective: Optional[Any] = None,
-    weights: Optional[Mapping[str, float]] = None,
+    objective: Any | None = None,
+    weights: Mapping[str, float] | None = None,
 ) -> ConstrainedProblem:
     """
     Эпсилон-ограничение: компонент objectives[index] становится
@@ -1014,13 +1015,13 @@ class ALResult(_JsonDTO):
 
     base: OptimizationResult
     state: AugmentedLagrangianState
-    violation_history: List[Dict[str, Any]] = field(default_factory=list)
+    violation_history: list[dict[str, Any]] = field(default_factory=list)
     n_outer: int = 0
-    validation: Dict[str, float] = field(default_factory=dict)
+    validation: dict[str, float] = field(default_factory=dict)
     success: bool = False
     wall_time: float = 0.0
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "base": self.base.to_dict(),
             "state": self.state.to_dict(),
@@ -1054,7 +1055,7 @@ class ALResult(_JsonDTO):
 def _write_al_checkpoint(
     path,
     *,
-    seed: Optional[int],
+    seed: int | None,
     config: Mapping[str, Any],
     constraints: Sequence[ConstraintSpec],
     state: AugmentedLagrangianState,
@@ -1088,7 +1089,7 @@ def augmented_lagrangian(
     max_outer: int = 10,
     mu0: float = 10.0,
     eta: float = 0.25,
-    seed: Optional[int] = None,
+    seed: int | None = None,
     checkpoint_path=None,
     resume: bool = False,
 ) -> ALResult:
@@ -1182,7 +1183,7 @@ def augmented_lagrangian(
             )
             phi = clipped
 
-    config: Dict[str, Any] = {
+    config: dict[str, Any] = {
         "local": local_name,
         "max_outer": int(max_outer),
         "mu0": float(mu0),
@@ -1191,7 +1192,7 @@ def augmented_lagrangian(
         "projected_start": bool(projected),
     }
     state = AugmentedLagrangianState(lambdas={}, mu=mu0)
-    violation_history: List[Dict[str, Any]] = []
+    violation_history: list[dict[str, Any]] = []
     start_outer = 0
 
     if (
@@ -1229,7 +1230,7 @@ def augmented_lagrangian(
         violation_history = [dict(r) for r in data.get("violation_history", [])]
 
     # --- Внешние итерации ----------------------------------------------
-    inners: List[Any] = []
+    inners: list[Any] = []
     for k in range(start_outer, max_outer):
         cp = ConstrainedProblem(
             problem,
@@ -1247,7 +1248,7 @@ def augmented_lagrangian(
         terms = cp.augmented_terms(phi)
         values = {name: term[0] for name, term in terms.items()}
         v = state.update(values, kinds, eta=eta)
-        rec: Dict[str, Any] = {
+        rec: dict[str, Any] = {
             "outer": k + 1,
             "violation": float(v),
             "mu_after": float(state.mu),
@@ -1279,12 +1280,12 @@ def augmented_lagrangian(
     else:
         theta = problem.parameter_space.unpack(phi)
     theta_best = {str(k): np.asarray(v) for k, v in theta.items()}
-    validation: Dict[str, float] = {}
+    validation: dict[str, float] = {}
     held_out = getattr(problem, "held_out", None)
     if held_out:
         validation = {str(k): float(v) for k, v in problem.validate(phi).items()}
 
-    history: List[Dict[str, Any]] = []
+    history: list[dict[str, Any]] = []
     for offset, inner in enumerate(inners):
         inner_history = getattr(getattr(inner, "base", None), "history", None) or []
         for entry in inner_history:

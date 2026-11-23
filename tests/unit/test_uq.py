@@ -29,7 +29,6 @@ duck-задачи известен аналитически.
 
 import json
 from types import SimpleNamespace
-from typing import List
 
 import numpy as np
 import pytest
@@ -37,7 +36,6 @@ import tensorflow as tf
 from scipy import stats as sp_stats
 
 import neuraltide.config
-import neuraltide.optimization.uq as uq
 from neuraltide.optimization import (
     CalibrationProblem,
     Experiment,
@@ -47,6 +45,7 @@ from neuraltide.optimization import (
     ParameterEntry,
     ParameterSpace,
     ResidualLoss,
+    uq,
 )
 from neuraltide.optimization.identifiability import compute_fim
 from neuraltide.optimization.transforms import IdentityTransform, LogTransform
@@ -528,7 +527,7 @@ class TestMixedSpaceConsistency:
 
 def _serial_stub():
     """Serial evaluator-заглушка: фиксированное смещение phi0, запись вызовов."""
-    calls: List[np.ndarray] = []
+    calls: list[np.ndarray] = []
 
     def stub(problem, phi0):
         phi = np.asarray(phi0, dtype=np.float64).reshape(-1)
@@ -623,8 +622,8 @@ class TestBootstrapExperiments:
     def test_experiments_unique_service_names_no_mutation(self, multi_problem_f64):
         """Дубликаты внутри draw: уникальные служебные имена, исходные
         Experiment не мутируют."""
-        seen: List[List[str]] = []
-        seen_ids: List[List[int]] = []
+        seen: list[list[str]] = []
+        seen_ids: list[list[int]] = []
 
         def recording_stub(problem, phi0):
             seen.append([e.name for e in problem.experiments])
@@ -672,7 +671,7 @@ class TestBootstrapExperiments:
         ea = Experiment(name="sess/1", t_sequence=t_seq, inputs=inputs, objective=loss)
         eb = Experiment(name="sess/2", t_sequence=t_seq, inputs=inputs, objective=loss)
         problem = MultiExperimentProblem(network, space, [ea, eb])
-        seen: List[List[str]] = []
+        seen: list[list[str]] = []
 
         def recording_stub(problem, phi0):
             seen.append([e.name for e in problem.experiments])
@@ -707,11 +706,11 @@ class TestBootstrapExperiments:
 
             return stub
 
-        seen1: List[List[str]] = []
+        seen1: list[list[str]] = []
         res1 = uq.bootstrap_experiments(
             multi_problem_f64, n_draws=4, seed=11, evaluator=make_stub(seen1)
         )
-        seen2: List[List[str]] = []
+        seen2: list[list[str]] = []
         res2 = uq.bootstrap_experiments(
             multi_problem_f64, n_draws=4, seed=11, evaluator=make_stub(seen2)
         )

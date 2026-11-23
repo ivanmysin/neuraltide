@@ -6,10 +6,10 @@ from neuraltide.utils.summary import print_summary
 __version__ = "0.1.0"
 
 __all__ = [
-    "config",
     "NetworkGraph",
     "NetworkRNN",
-    "seed_everything",
-    "print_summary",
     "__version__",
+    "config",
+    "print_summary",
+    "seed_everything",
 ]

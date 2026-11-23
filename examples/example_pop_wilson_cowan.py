@@ -18,10 +18,10 @@ import matplotlib.pyplot as plt
 import numpy as np
 import tensorflow as tf
 
-from neuraltide.populations.wilson_cowan import WilsonCowan
-from neuraltide.integrators import RK4Integrator
-from neuraltide.utils import seed_everything
 import neuraltide.config
+from neuraltide.integrators import RK4Integrator
+from neuraltide.populations.wilson_cowan import WilsonCowan
+from neuraltide.utils import seed_everything
 
 seed_everything(42)
 

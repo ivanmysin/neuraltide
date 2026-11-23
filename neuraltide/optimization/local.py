@@ -63,7 +63,8 @@
 
 import time
 import warnings
-from typing import Any, Dict, List, Mapping, Optional, Tuple
+from collections.abc import Mapping
+from typing import Any
 
 import numpy as np
 import scipy
@@ -75,7 +76,7 @@ from neuraltide.optimization.results import (
     OptimizationResult,
 )
 
-__all__ = ["minimize_lbfgsb", "least_squares"]
+__all__ = ["least_squares", "minimize_lbfgsb"]
 
 # Допуск определения «координата на границе»: |phi - bound| <= atol + rtol|b|.
 _BOUNDS_RTOL = 1e-6
@@ -160,14 +161,14 @@ def _jsonable(value: Any) -> Any:
     return repr(value)
 
 
-def _counters(problem) -> Tuple[int, int]:
+def _counters(problem) -> tuple[int, int]:
     return (
         int(getattr(problem, "n_forward", 0)),
         int(getattr(problem, "n_gradient", 0)),
     )
 
 
-def _initial_phi(problem, phi0) -> Tuple[np.ndarray, Any]:
+def _initial_phi(problem, phi0) -> tuple[np.ndarray, Any]:
     """
     Стартовый вектор φ; pack() вызывается ровно один раз.
 
@@ -182,7 +183,7 @@ def _initial_phi(problem, phi0) -> Tuple[np.ndarray, Any]:
     return phi_np, phi_arr.dtype
 
 
-def _problem_bounds(problem, size: int) -> Optional[Tuple[np.ndarray, np.ndarray]]:
+def _problem_bounds(problem, size: int) -> tuple[np.ndarray, np.ndarray] | None:
     """Границы (lb, ub) из problem.bounds_phi(); None, если все бесконечны."""
     bounds_fn = getattr(problem, "bounds_phi", None)
     if bounds_fn is None:
@@ -202,7 +203,7 @@ def _problem_bounds(problem, size: int) -> Optional[Tuple[np.ndarray, np.ndarray
 
 def _prepare_start(
     problem, phi0, size: int
-) -> Tuple[np.ndarray, Optional[Tuple[np.ndarray, np.ndarray]], Any]:
+) -> tuple[np.ndarray, tuple[np.ndarray, np.ndarray] | None, Any]:
     """
     Стартовый вектор φ + bounds + dtype φ.
 
@@ -224,7 +225,7 @@ def _prepare_start(
     return x0, bounds, phi_dtype
 
 
-def _coordinate_names(problem, size: int) -> List[str]:
+def _coordinate_names(problem, size: int) -> list[str]:
     """
     Имена координат φ: trainable-имена ParameterSpace (для bounds_active).
 
@@ -235,8 +236,8 @@ def _coordinate_names(problem, size: int) -> List[str]:
     if space is None:
         return [f"phi[{i}]" for i in range(size)]
 
-    def _entry_names(names: List[str]) -> List[str]:
-        expanded: List[str] = []
+    def _entry_names(names: list[str]) -> list[str]:
+        expanded: list[str] = []
         for name in names:
             entry = space.entries[name]
             if entry.numel == 1:
@@ -262,9 +263,9 @@ def _coordinate_names(problem, size: int) -> List[str]:
 def _bounds_active(
     problem,
     phi: np.ndarray,
-    bounds: Optional[Tuple[np.ndarray, np.ndarray]],
+    bounds: tuple[np.ndarray, np.ndarray] | None,
     size: int,
-) -> List[str]:
+) -> list[str]:
     """Имена координат, прижатых к конечной границе в оптимуме."""
     if bounds is None:
         return []
@@ -287,10 +288,10 @@ class _LossGradientFn:
 
     def __init__(self, problem):
         self._problem = problem
-        self.last_loss: Optional[float] = None
-        self.last_grad: Optional[np.ndarray] = None
+        self.last_loss: float | None = None
+        self.last_grad: np.ndarray | None = None
 
-    def __call__(self, x) -> Tuple[float, np.ndarray]:
+    def __call__(self, x) -> tuple[float, np.ndarray]:
         eval_result, grad = self._problem.value_and_gradient(
             np.asarray(x, dtype=np.float64)
         )
@@ -306,7 +307,7 @@ class _ResidualFn:
 
     def __init__(self, problem):
         self._problem = problem
-        self.last_residuals: Optional[np.ndarray] = None
+        self.last_residuals: np.ndarray | None = None
 
     def __call__(self, x) -> np.ndarray:
         residuals = np.asarray(
@@ -479,9 +480,9 @@ def _build_result(
     method: str,
     phi_best: np.ndarray,
     loss_best: float,
-    history: List[Dict[str, Any]],
-    config: Dict[str, Any],
-    start_counters: Tuple[int, int],
+    history: list[dict[str, Any]],
+    config: dict[str, Any],
+    start_counters: tuple[int, int],
     t_start: float,
     validate: bool,
     success: bool,
@@ -491,7 +492,7 @@ def _build_result(
     nfev: int,
     njev: int,
     grad_norm: float,
-    bounds: Optional[Tuple[np.ndarray, np.ndarray]],
+    bounds: tuple[np.ndarray, np.ndarray] | None,
 ) -> LocalOptimizerResult:
     """Сборка LocalOptimizerResult (+ base=OptimizationResult)."""
     size = int(problem.size)
@@ -503,7 +504,7 @@ def _build_result(
         theta = problem.parameter_space.unpack(phi_best)
     theta_best = {str(k): np.asarray(v) for k, v in theta.items()}
 
-    validation: Dict[str, float] = {}
+    validation: dict[str, float] = {}
     if validate:
         held_out = getattr(problem, "held_out", None)
         if held_out:
@@ -545,9 +546,9 @@ def minimize_lbfgsb(
     *,
     maxiter: int = 200,
     gtol: float = 1e-6,
-    ftol: Optional[float] = None,
+    ftol: float | None = None,
     validate: bool = True,
-    options: Optional[Mapping[str, Any]] = None,
+    options: Mapping[str, Any] | None = None,
 ) -> LocalOptimizerResult:
     """
     Локальная минимизация скалярной потери методом L-BFGS-B.
@@ -598,7 +599,7 @@ def minimize_lbfgsb(
             "minimize_lbfgsb: стартовая точка нефинитна "
             f"(loss={f0}); запуск решателя отклонён."
         )
-    history: List[Dict[str, Any]] = [
+    history: list[dict[str, Any]] = [
         {"nit": 0, "loss": f0, "grad_norm": float(np.linalg.norm(g0))}
     ]
 
@@ -618,7 +619,7 @@ def minimize_lbfgsb(
             }
         )
 
-    scipy_options: Dict[str, Any] = {
+    scipy_options: dict[str, Any] = {
         "maxiter": int(maxiter),
         "gtol": float(gtol),
         "ftol": _resolve_lbfgsb_ftol(ftol, options, phi_dtype),
@@ -680,8 +681,8 @@ def least_squares(
     jacobian_max_params: int = 200,
     callback=None,
     x_scale="jac",
-    max_nfev: Optional[int] = None,
-    maxiter: Optional[int] = None,
+    max_nfev: int | None = None,
+    maxiter: int | None = None,
     validate: bool = True,
     **kwargs,
 ) -> LocalOptimizerResult:
@@ -799,7 +800,7 @@ def least_squares(
             "запуск решателя отклонён."
         )
     jac, jac_mode = _resolve_jacobian(problem, jacobian, jacobian_max_params)
-    history: List[Dict[str, Any]] = [
+    history: list[dict[str, Any]] = [
         {
             "loss": float(0.5 * np.dot(r0, r0)),
             "residual_norm": float(np.linalg.norm(r0)),
@@ -823,7 +824,7 @@ def least_squares(
         if callback is not None:
             callback(intermediate_result)
 
-    call_kwargs: Dict[str, Any] = dict(kwargs)
+    call_kwargs: dict[str, Any] = dict(kwargs)
     call_kwargs["x_scale"] = x_scale
     # maxiter — унифицированный контракт бюджета (strategies передаёт его
     # screen_local оптимизаторам наравне с minimize_lbfgsb); scipy у

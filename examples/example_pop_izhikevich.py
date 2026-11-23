@@ -21,10 +21,10 @@ matplotlib.use("qt5agg")
 import matplotlib.pyplot as plt
 import numpy as np
 import tensorflow as tf
-from neuraltide.populations.izhikevich_mf import IzhikevichMeanField
-from neuraltide.integrators import RK4Integrator
-import neuraltide.config
 
+import neuraltide.config
+from neuraltide.integrators import RK4Integrator
+from neuraltide.populations.izhikevich_mf import IzhikevichMeanField
 
 DT = 0.05
 T = 200
@@ -63,19 +63,19 @@ print(
     f"  W_jump = {W_jump:.4f} pA, Delta_I = {Delta_I_dimensional:.4f} pA, I_ext = {I_ext_dimensional:.4f} pA"
 )
 
-dim_params = dict(
-    V_rest=V_rest,
-    V_T=V_T,
-    V_peak=V_peak,
-    V_reset=V_reset,
-    Cm=Cm,
-    K=K,
-    A=A,
-    B=B,
-    W_jump=W_jump,
-    Delta_I=Delta_I_dimensional,
-    I_ext=I_ext_dimensional,
-)
+dim_params = {
+    "V_rest": V_rest,
+    "V_T": V_T,
+    "V_peak": V_peak,
+    "V_reset": V_reset,
+    "Cm": Cm,
+    "K": K,
+    "A": A,
+    "B": B,
+    "W_jump": W_jump,
+    "Delta_I": Delta_I_dimensional,
+    "I_ext": I_ext_dimensional,
+}
 
 pop_dimensional = IzhikevichMeanField(dt=DT, params=dim_params)
 
@@ -214,9 +214,7 @@ axes[0].plot(t_values, fr_hist[:, 0], color="tab:blue", linewidth=1.0, label="Un
 axes[0].plot(t_values, fr_hist[:, 1], color="tab:orange", linewidth=1.0, label="Unit 1")
 axes[0].set_ylabel("r (dimensionless)")
 axes[0].set_title(
-    r"Population Firing Rate $r$ ($\tau_{{pop}}$ = {:.2f} ms)".format(
-        pop_multi.tau_pop.numpy()[0]
-    )
+    rf"Population Firing Rate $r$ ($\tau_{{pop}}$ = {pop_multi.tau_pop.numpy()[0]:.2f} ms)"
 )
 axes[0].legend()
 axes[0].grid(True, alpha=0.3)

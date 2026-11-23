@@ -76,11 +76,13 @@ CFL-субшагивание несовместимы с точной сегме
 n_forward. Eager-режим, batch=1, dtype — через neuraltide.config.
 """
 
+import itertools
 import time
 import warnings
+from collections.abc import Sequence
 from dataclasses import dataclass
 from numbers import Integral
-from typing import Any, Dict, List, Optional, Sequence, Tuple, Union
+from typing import Any
 
 import numpy as np
 import tensorflow as tf
@@ -107,9 +109,9 @@ from neuraltide.optimization.transforms import IdentityTransform
 from neuraltide.populations import BrunelFokkerPlanck
 
 __all__ = [
+    "MultipleShootingProblem",
     "ShootingConfig",
     "SingleShootingCheck",
-    "MultipleShootingProblem",
 ]
 
 # Популяции, несовместимые с точной сегментацией прогона (явный список).
@@ -118,13 +120,13 @@ _UNSUPPORTED_POPULATIONS = (BrunelFokkerPlanck,)
 _GAP_ZERO = {"max": 0.0, "mean": 0.0, "l2": 0.0}
 
 
-def _syn_state_offsets(network) -> Dict[str, Tuple[int, int]]:
+def _syn_state_offsets(network) -> dict[str, tuple[int, int]]:
     """(start, count) каждого синапса в плоском списке syn-состояний.
 
     Публичного аналога pop_state_offsets для синапсов в CORE нет;
     вычисление зеркалит NetworkRNN._build по graph.synapse_names.
     """
-    offsets: Dict[str, Tuple[int, int]] = {}
+    offsets: dict[str, tuple[int, int]] = {}
     idx = 0
     graph = network._graph
     for name in graph.synapse_names:
@@ -134,7 +136,7 @@ def _syn_state_offsets(network) -> Dict[str, Tuple[int, int]]:
     return offsets
 
 
-def _gap_stats(arr: np.ndarray) -> Dict[str, float]:
+def _gap_stats(arr: np.ndarray) -> dict[str, float]:
     """max/mean/L2 статистика разрывов одного стыка (abs-максимумы)."""
     if arr.size == 0:
         return dict(_GAP_ZERO)
@@ -146,10 +148,10 @@ def _gap_stats(arr: np.ndarray) -> Dict[str, float]:
     }
 
 
-def _gap_dict(gap_arrays: Sequence[np.ndarray]) -> Dict[str, Any]:
+def _gap_dict(gap_arrays: Sequence[np.ndarray]) -> dict[str, Any]:
     """Агрегаты разрывов по всем стыкам + per-joint статистика."""
-    joints: Dict[str, Dict[str, float]] = {}
-    pieces: List[np.ndarray] = []
+    joints: dict[str, dict[str, float]] = {}
+    pieces: list[np.ndarray] = []
     for k, arr in enumerate(gap_arrays):
         flat = np.asarray(arr, dtype=np.float64).reshape(-1)
         joints[f"{k}->{k + 1}"] = _gap_stats(flat)
@@ -179,9 +181,9 @@ class ShootingConfig:
     nodes <= T (иначе возникают пустые сегменты).
     """
 
-    nodes: Union[int, Sequence[int]]
+    nodes: int | Sequence[int]
 
-    def resolve(self, T: int) -> List[int]:
+    def resolve(self, T: int) -> list[int]:
         """Возвращает список границ [0, ..., T] для горизонта T шагов."""
         if isinstance(self.nodes, Integral):
             n = int(self.nodes)
@@ -203,7 +205,7 @@ class ShootingConfig:
             raise ValueError(
                 f"ShootingConfig: last node must be T={T}, got {bounds[-1]}."
             )
-        for prev, cur in zip(bounds, bounds[1:]):
+        for prev, cur in itertools.pairwise(bounds):
             if cur <= prev:
                 raise ValueError(
                     f"ShootingConfig: nodes must be strictly increasing, got {bounds}."
@@ -228,7 +230,7 @@ class SingleShootingCheck:
 
     loss_ms: float
     loss_single: float
-    gaps: Dict[str, Any]
+    gaps: dict[str, Any]
     consistent: bool
 
 
@@ -237,7 +239,7 @@ class _SegmentProtocol:
     """Протокол одного сегмента: срезы времени и входов."""
 
     t_sequence: TensorType
-    inputs: Optional[TensorType]
+    inputs: TensorType | None
 
 
 class MultipleShootingProblem:
@@ -269,7 +271,7 @@ class MultipleShootingProblem:
     def __init__(
         self,
         problem: CalibrationProblem,
-        config: Union[ShootingConfig, int, Sequence[int]],
+        config: ShootingConfig | int | Sequence[int],
         *,
         continuity_weight: float = 1.0,
         include_syn_states: bool = True,
@@ -329,13 +331,13 @@ class MultipleShootingProblem:
             )
         self._T = int(t_steps)
         self.nodes = config.resolve(self._T)
-        self._segments: List[Tuple[int, int]] = list(zip(self.nodes, self.nodes[1:]))
+        self._segments: list[tuple[int, int]] = list(zip(self.nodes, self.nodes[1:]))
         self.n_segments = len(self._segments)
 
         # Протоколы сегментов: через view-хелперы CORE (общие счётчики),
         # при недоступности time_slice — прямой срез тензоров.
         slicer = getattr(problem, "time_slice", None)
-        self._segment_views: List[_SegmentProtocol] = []
+        self._segment_views: list[_SegmentProtocol] = []
         for start, stop in self._segments:
             if callable(slicer):
                 view = slicer(start, stop)
@@ -356,17 +358,17 @@ class MultipleShootingProblem:
         self._space = ParameterSpace()
         for name, entry in self._base_space.phi_entries.items():
             self._space.add_entry(entry)
-        self._shooting: List[List[Tuple[str, ParameterEntry]]] = []
-        self._subst: List[List[Tuple[str, ParameterEntry, bool, int]]] = []
-        self._phi_index: Dict[str, Tuple[int, int]] = {}
+        self._shooting: list[list[tuple[str, ParameterEntry]]] = []
+        self._subst: list[list[tuple[str, ParameterEntry, bool, int]]] = []
+        self._phi_index: dict[str, tuple[int, int]] = {}
         pos = self._base_size
         pop_offsets = self.network.pop_state_offsets
         syn_offsets = (
             _syn_state_offsets(self.network) if self.include_syn_states else {}
         )
         for k in range(self.n_segments):
-            entries_k: List[Tuple[str, ParameterEntry]] = []
-            subst_k: List[Tuple[str, ParameterEntry, bool, int]] = []
+            entries_k: list[tuple[str, ParameterEntry]] = []
+            subst_k: list[tuple[str, ParameterEntry, bool, int]] = []
             if not (self.fix_first_segment and k == 0):
                 for pop_name in graph.dynamic_population_names:
                     pop = graph._populations[pop_name]
@@ -426,7 +428,7 @@ class MultipleShootingProblem:
             self._subst.append(subst_k)
 
         counters = getattr(problem, "_counters", None)
-        self._counters: Dict[str, Any] = (
+        self._counters: dict[str, Any] = (
             counters
             if counters is not None
             else {"n_forward": 0, "n_gradient": 0, "wall_time": 0.0}
@@ -458,7 +460,7 @@ class MultipleShootingProblem:
         return self._problem.t_sequence
 
     @property
-    def inputs(self) -> Optional[TensorType]:
+    def inputs(self) -> TensorType | None:
         return self._problem.inputs
 
     @property
@@ -493,7 +495,7 @@ class MultipleShootingProblem:
     # ------------------------------------------------------------------
     # pack / unpack / bounds
     # ------------------------------------------------------------------
-    def pack(self, phi: Optional[Any] = None) -> tf.Tensor:
+    def pack(self, phi: Any | None = None) -> tf.Tensor:
         """
         φ-вектор в координатах расширенного ParameterSpace.
 
@@ -518,17 +520,17 @@ class MultipleShootingProblem:
         )
         return phi_t
 
-    def unpack(self, phi: Optional[Any] = None) -> Dict[str, tf.Tensor]:
+    def unpack(self, phi: Any | None = None) -> dict[str, tf.Tensor]:
         """φ → физические θ всех записей (base + shooting)."""
         return self._space.unpack(self.pack(phi))
 
-    def bounds_phi(self) -> Tuple[np.ndarray, np.ndarray]:
+    def bounds_phi(self) -> tuple[np.ndarray, np.ndarray]:
         """Границы φ; shooting-записи без физических границ → ±inf."""
         return _bounds_phi_from_space(self._space)
 
     def search_box_phi(
         self, rel_margin: float = SEARCH_BOX_REL_MARGIN
-    ) -> Tuple[np.ndarray, np.ndarray]:
+    ) -> tuple[np.ndarray, np.ndarray]:
         """Поисковый бокс φ для глобальных методов (см. problem.py)."""
         return _search_box_phi_from_space(self._space, rel_margin)
 
@@ -568,7 +570,7 @@ class MultipleShootingProblem:
         dtype = neuraltide.config.get_dtype()
         init_pop = list(base_state[0])
         init_syn = list(base_state[1])
-        x0_map: Dict[str, tf.Tensor] = {}
+        x0_map: dict[str, tf.Tensor] = {}
         for name, entry, is_syn, idx in self._subst[k]:
             start, numel = self._phi_index[name]
             piece = tf.reshape(phi_t[start : start + numel], entry.shape)
@@ -580,10 +582,10 @@ class MultipleShootingProblem:
             x0_map[name] = value
         return (init_pop, init_syn), x0_map
 
-    def _gap_tensors(self, seg_outputs, start_states) -> List[tf.Tensor]:
+    def _gap_tensors(self, seg_outputs, start_states) -> list[tf.Tensor]:
         """Плоские разрывы x_end,k − s_{k+1} по зарегистрированным слотам."""
         dtype = neuraltide.config.get_dtype()
-        gaps: List[tf.Tensor] = []
+        gaps: list[tf.Tensor] = []
         for k in range(self.n_segments - 1):
             end_pop, end_syn = seg_outputs[k].final_state
             nxt_pop, nxt_syn = start_states[k + 1]
@@ -606,9 +608,9 @@ class MultipleShootingProblem:
         dtype = neuraltide.config.get_dtype()
         self._counters["n_forward"] += self.n_segments
         base_state, base_map = self._base_state(phi_t)
-        x0_map: Dict[str, tf.Tensor] = dict(base_map)
-        start_states: List[Tuple[List, List]] = []
-        seg_outputs: List[NetworkOutput] = []
+        x0_map: dict[str, tf.Tensor] = dict(base_map)
+        start_states: list[tuple[list, list]] = []
+        seg_outputs: list[NetworkOutput] = []
         for k in range(self.n_segments):
             state_k, x0_k = self._segment_state(k, phi_t, base_state)
             x0_map.update(x0_k)
@@ -646,9 +648,9 @@ class MultipleShootingProblem:
         loss_t: tf.Tensor,
         stitched: NetworkOutput,
         gaps: Sequence[tf.Tensor],
-        grad: Optional[tf.Tensor],
+        grad: tf.Tensor | None,
     ) -> Evaluation:
-        components: Dict[str, float] = {}
+        components: dict[str, float] = {}
         comp_fn = getattr(self.objective, "components", None)
         if callable(comp_fn):
             components = {
@@ -682,7 +684,7 @@ class MultipleShootingProblem:
     # ------------------------------------------------------------------
     # Публичные операции (duck parity с CalibrationProblem)
     # ------------------------------------------------------------------
-    def evaluate(self, phi: Optional[Any] = None) -> Evaluation:
+    def evaluate(self, phi: Any | None = None) -> Evaluation:
         """Скалярная потеря multiple shooting, компоненты и невязки."""
         self._require_objective()
         t0 = time.perf_counter()
@@ -693,8 +695,8 @@ class MultipleShootingProblem:
         return self._build_evaluation(t0, loss_t, stitched, gaps, grad=None)
 
     def value_and_gradient(
-        self, phi: Optional[Any] = None
-    ) -> Tuple[Evaluation, tf.Tensor]:
+        self, phi: Any | None = None
+    ) -> tuple[Evaluation, tf.Tensor]:
         """
         Потеря и градиент по φ одним проходом (chain-режим).
 
@@ -718,7 +720,7 @@ class MultipleShootingProblem:
         eval_result = self._build_evaluation(t0, loss_t, stitched, gaps, grad=grad_t)
         return eval_result, grad_t
 
-    def residual(self, phi: Optional[Any] = None) -> np.ndarray:
+    def residual(self, phi: Any | None = None) -> np.ndarray:
         """
         Вектор невязок r = [r_data; √w·gap_0; ...], 0.5·||r||² == loss_ms.
 
@@ -747,14 +749,14 @@ class MultipleShootingProblem:
             pieces.append(scale * tf.cast(gap, dtype))
         return np.asarray(tf.concat(pieces, axis=0))
 
-    def validate(self, phi: Optional[Any] = None) -> Dict[str, float]:
+    def validate(self, phi: Any | None = None) -> dict[str, float]:
         """Делегируется базовой задаче (held-out протоколы)."""
         if phi is None:
             return self._problem.validate()
         phi_t = self.pack(phi)
         return self._problem.validate(phi_t[: self._base_size])
 
-    def simulate_segment(self, phi: Optional[Any], k: int) -> NetworkOutput:
+    def simulate_segment(self, phi: Any | None, k: int) -> NetworkOutput:
         """
         Прямой прогон сегмента k из начального состояния s_k(φ).
 
@@ -780,7 +782,7 @@ class MultipleShootingProblem:
             initial_state=state_k,
         )
 
-    def continuity_gaps(self, phi: Optional[Any] = None) -> Dict[str, Any]:
+    def continuity_gaps(self, phi: Any | None = None) -> dict[str, Any]:
         """
         Разрывы стыков: max/mean/L2 по модулям (все стыки вместе и по
         отдельности). Только pop-состояния или pop+syn в зависимости от
@@ -795,9 +797,7 @@ class MultipleShootingProblem:
     # ------------------------------------------------------------------
     # Инициализация и финализация
     # ------------------------------------------------------------------
-    def initialize_from_single_shooting(
-        self, phi_base: Optional[Any] = None
-    ) -> tf.Tensor:
+    def initialize_from_single_shooting(self, phi_base: Any | None = None) -> tf.Tensor:
         """
         Инициализация shooting-состояний цепочкой сегментных прогонов
         (carry final_state → начало следующего сегмента) при параметрах

@@ -163,7 +163,7 @@ class TestBrunelFokkerPlanck:
             syn = {"I_syn": tf.constant([[i_syn]], dtype=tf.float32), "g_syn": zero}
 
             @tf.function
-            def step_n(state, n):
+            def step_n(state, n, integrator=integrator, syn=syn):
                 for _ in tf.range(n):
                     state, _ = integrator.step(pop, state, syn)
                 return state
@@ -224,8 +224,8 @@ class TestBrunelFokkerPlanck:
             dt=0.5, params=brunel_params, grid_size=100, v_min=-80.0
         )
         graph = NetworkGraph(dt=0.5)
+        graph.add_population("fp", pop)
         with pytest.warns(UserWarning, match="no incoming synapses"):
-            graph.add_population("fp", pop)
             graph.validate()
         network = NetworkRNN(graph, integrator=EulerIntegrator())
         t_seq = tf.constant(np.arange(0, 100, 0.5, dtype=np.float32)[None, :, None])

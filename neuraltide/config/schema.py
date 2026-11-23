@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from typing import Dict, List, Any, Optional, Tuple
+from typing import Any
 
 import neuraltide.config
 from neuraltide.core.network import NetworkGraph, NetworkRNN
@@ -13,7 +13,7 @@ class PopulationConfig:
     name: str
     model_class: str
     dt: float
-    params: Dict[str, Any]
+    params: dict[str, Any]
 
 
 @dataclass
@@ -25,8 +25,8 @@ class SynapseConfig:
     src: str
     tgt: str
     dt: float
-    params: Dict[str, Any]
-    components: Optional[List["SynapseConfig"]] = None
+    params: dict[str, Any]
+    components: list["SynapseConfig"] | None = None
 
 
 @dataclass
@@ -35,7 +35,7 @@ class InputConfig:
 
     name: str
     generator_class: str
-    params: Dict[str, Any]
+    params: dict[str, Any]
 
 
 @dataclass
@@ -44,9 +44,9 @@ class NetworkConfig:
 
     dt: float
     integrator: str
-    populations: List[PopulationConfig]
-    synapses: List[SynapseConfig]
-    inputs: List[InputConfig]
+    populations: list[PopulationConfig]
+    synapses: list[SynapseConfig]
+    inputs: list[InputConfig]
     stability_penalty_weight: float = 0.0
 
 
@@ -66,7 +66,7 @@ def _get_integrator(name: str) -> Any:
 
 def build_network_from_config(
     config: NetworkConfig,
-) -> Tuple[NetworkRNN, Dict[str, Any]]:
+) -> tuple[NetworkRNN, dict[str, Any]]:
     """
     Строит NetworkRNN из конфигурации.
 

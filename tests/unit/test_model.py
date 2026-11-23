@@ -4,11 +4,11 @@ import numpy as np
 import tensorflow as tf
 
 from neuraltide.core.network import NetworkGraph, NetworkRNN
-from neuraltide.populations import IzhikevichMeanField
-from neuraltide.synapses import TsodyksMarkramSynapse
 from neuraltide.inputs import VonMisesGenerator
 from neuraltide.integrators import RK4Integrator
-from neuraltide.training import MSELoss, CompositeLoss
+from neuraltide.populations import IzhikevichMeanField
+from neuraltide.synapses import TsodyksMarkramSynapse
+from neuraltide.training import CompositeLoss, MSELoss
 
 
 def _make_simple_network(dt=0.05):
@@ -66,7 +66,7 @@ class TestBrainModelKeras:
         """BrainModelKeras should be creatable."""
         from neuraltide.model import BrainModelKeras
 
-        graph, gen = _make_simple_network()
+        graph, _gen = _make_simple_network()
         model = BrainModelKeras(graph, RK4Integrator(), dt=0.05)
         assert model is not None
 
@@ -105,7 +105,7 @@ class TestBrainModelKeras:
         """trainable_variables should return network's trainable vars."""
         from neuraltide.model import BrainModelKeras
 
-        graph, gen = _make_simple_network()
+        graph, _gen = _make_simple_network()
         model = BrainModelKeras(graph, RK4Integrator(), dt=0.05)
 
         vars_ = model.trainable_variables
@@ -173,7 +173,7 @@ class TestBrainModelKeras:
         """model.network should return the inner NetworkRNN."""
         from neuraltide.model import BrainModelKeras
 
-        graph, gen = _make_simple_network()
+        graph, _gen = _make_simple_network()
         model = BrainModelKeras(graph, RK4Integrator(), dt=0.05)
 
         assert isinstance(model.network, NetworkRNN)

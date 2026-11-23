@@ -217,7 +217,7 @@ class TestRK4NetworkOrder:
 
     def _final_E(self, dt, mode):
         network, _, _ = _ee_tm_network(dt, RK4Integrator(), mode=mode)
-        n = int(round(self.T_END / dt))
+        n = round(self.T_END / dt)
         out = network(_t_seq(n, dt))
         return float(np.asarray(out.final_state[0][0]).ravel()[0])
 
@@ -252,7 +252,7 @@ class TestRosenbrockNetworkStiff:
     def test_rk4_network_diverges_rosenbrock_stable(self):
         """λ·h = −500: RK4 network-wide расходится, ROS2 — устойчив."""
         neuraltide.config.set_dtype(tf.float64)
-        n = int(round(STIFF_T_END / DT))
+        n = round(STIFF_T_END / DT)
         t_seq = _t_seq(n, DT)
 
         out_rk = _stiff_coupled_network(DT, RK4Integrator(), "network")(t_seq)
@@ -273,13 +273,13 @@ class TestRosenbrockNetworkStiff:
         neuraltide.config.set_dtype(tf.float64)
         # Референс: RK4 с мелким шагом (|λ·h| = 2 — на границе устойчивости).
         dt_fine = 0.002
-        n_fine = int(round(STIFF_T_END / dt_fine))
+        n_fine = round(STIFF_T_END / dt_fine)
         out_ref = _stiff_coupled_network(dt_fine, RK4Integrator(), "network")(
             _t_seq(n_fine, dt_fine)
         )
         s_ref = _final_pop_vector(out_ref)
 
-        n = int(round(STIFF_T_END / DT))
+        n = round(STIFF_T_END / DT)
         t_seq = _t_seq(n, DT)
         out_ros = _stiff_coupled_network(
             DT, RosenbrockIntegrator(n_substeps=8), "network"
@@ -291,7 +291,7 @@ class TestRosenbrockNetworkStiff:
     def test_rosenbrock_network_fd_jacobian_matches_jvp(self):
         """method='fd' даёт ту же траекторию, что и 'jvp'."""
         neuraltide.config.set_dtype(tf.float64)
-        n = int(round(STIFF_T_END / DT))
+        n = round(STIFF_T_END / DT)
         t_seq = _t_seq(n, DT)
         out_fd = _stiff_coupled_network(
             DT, RosenbrockIntegrator(n_substeps=4, jacobian_method="fd"), "network"
@@ -389,7 +389,7 @@ class TestEulerHeunNetworkWide:
 
         # Полный scan с InputPopulation не поддерживается (как в split) —
         # проверяем eager-вызов _step_fn, см. test_network_wide.py.
-        pop_carry, syn_carry, _ = _step_fn(
+        pop_carry, _syn_carry, _ = _step_fn(
             (
                 tuple(init_pop),
                 tuple(init_syn),
@@ -526,7 +526,7 @@ class TestBrunelFPNetworkParity:
         assert len(out_net.final_state[0]) == 3
         for s_n, s_s in zip(out_net.final_state[0], out_split.final_state[0]):
             np.testing.assert_allclose(s_n.numpy(), s_s.numpy(), rtol=1e-12, atol=1e-15)
-        assert out_net.final_state[0][2].shape == (1, int(round(2.0 / DT)))
+        assert out_net.final_state[0][2].shape == (1, round(2.0 / DT))
 
 
 # --------------------------------------------------------------------- #

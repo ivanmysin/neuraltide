@@ -39,31 +39,32 @@ non-trainable записи реестра вне вектора φ и в чув�
 
 import time
 import tracemalloc
+from collections.abc import Sequence
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any
 
 import numpy as np
 import tensorflow as tf
 
 import neuraltide.config
 from neuraltide.core.types import cast_if_needed
+from neuraltide.optimization.objectives import likelihood_row_scale
 from neuraltide.optimization.problem import (
+    CalibrationProblem,
     _chain_gradient,
     _literal_gradient_path,
     _materialize_initial_state,
     _phi_gradient,
-    CalibrationProblem,
 )
 from neuraltide.optimization.results import JacobianResult
-from neuraltide.optimization.objectives import likelihood_row_scale
 
 __all__ = [
     "CheckpointedGradient",
     "TruncatedResult",
-    "residual_jvp",
     "residual_jacobian",
-    "value_and_gradient_checkpointed",
+    "residual_jvp",
     "truncated_bptt",
+    "value_and_gradient_checkpointed",
 ]
 
 
@@ -92,7 +93,7 @@ class CheckpointedGradient:
     grad: np.ndarray
     segments: int
     wall_time: float
-    peak_memory: Optional[float] = None
+    peak_memory: float | None = None
 
     def __post_init__(self) -> None:
         self.loss = float(self.loss)
@@ -116,7 +117,7 @@ class TruncatedResult:
         notes: документация приближённости режима.
     """
 
-    history: List[Dict[str, float]] = field(default_factory=list)
+    history: list[dict[str, float]] = field(default_factory=list)
     final_loss: float = 0.0
     free_run_loss: float = 0.0
     notes: str = ""
@@ -145,9 +146,9 @@ def _tf_variable(var: tf.Variable) -> tf.Variable:
     return inner if isinstance(inner, tf.Variable) else var
 
 
-def _entry_offsets(space) -> Dict[str, Tuple[int, int]]:
+def _entry_offsets(space) -> dict[str, tuple[int, int]]:
     """Смещения trainable-записей ParameterSpace в плоском векторе φ."""
-    offsets: Dict[str, Tuple[int, int]] = {}
+    offsets: dict[str, tuple[int, int]] = {}
     start = 0
     for name, entry in space.phi_entries.items():
         offsets[name] = (start, entry.numel)
@@ -156,8 +157,8 @@ def _entry_offsets(space) -> Dict[str, Tuple[int, int]]:
 
 
 def _flat_state(
-    state: Tuple[Sequence[tf.Tensor], Sequence[tf.Tensor]],
-) -> Tuple[tf.Tensor, ...]:
+    state: tuple[Sequence[tf.Tensor], Sequence[tf.Tensor]],
+) -> tuple[tf.Tensor, ...]:
     """(pop, syn) -> плоский кортеж тензоров."""
     return tuple(state[0]) + tuple(state[1])
 
@@ -247,12 +248,12 @@ def _forward_jvp_only(
     residual_fn = getattr(problem.objective, "residual", None)
     if residual_fn is None:
         # Отражаем контракт problem.residual до любого прогона/мутации.
-        problem.residual(None)  # noqa: B018 — вызов ради понятной ошибки
+        problem.residual(None)
 
     space = problem.parameter_space
     offsets = _entry_offsets(space)
-    var_primals: List[tf.Tensor] = []
-    var_tangents: List[tf.Tensor] = []
+    var_primals: list[tf.Tensor] = []
+    var_tangents: list[tf.Tensor] = []
     for name, entry in space.phi_entries.items():
         if entry.kind != "model_var" or entry.variable is None:
             continue
@@ -287,9 +288,9 @@ def _forward_jvp_only(
 
 def residual_jvp(
     problem: CalibrationProblem,
-    phi: Optional[Any],
+    phi: Any | None,
     v: Any,
-) -> Tuple[np.ndarray, np.ndarray]:
+) -> tuple[np.ndarray, np.ndarray]:
     """
     Невязки и forward-mode JVP J·v в точке φ.
 
@@ -317,7 +318,7 @@ def residual_jvp(
     residual_fn = getattr(problem.objective, "residual", None)
     if residual_fn is None:
         # Отражаем контракт problem.residual до любого прогона/мутации.
-        problem.residual(phi)  # noqa: B018 — вызов ради понятной ошибки
+        problem.residual(phi)
 
     dtype = neuraltide.config.get_dtype()
     v_t = cast_if_needed(tf.convert_to_tensor(v), dtype)
@@ -343,7 +344,7 @@ def residual_jvp(
 
 def residual_jacobian(
     problem: CalibrationProblem,
-    phi: Optional[Any],
+    phi: Any | None,
     *,
     force: bool = False,
     max_params: int = 200,
@@ -424,7 +425,7 @@ def residual_jacobian(
 # Checkpointed BPTT
 # ---------------------------------------------------------------------------
 
-_RECOMPUTE_PROBE: Optional[bool] = None
+_RECOMPUTE_PROBE: bool | None = None
 
 
 def _probe_recompute_grad() -> bool:
@@ -479,7 +480,7 @@ def _select_checkpoint_backend() -> str:
 def _make_checkpoint_segment(
     problem: CalibrationProblem,
     t_k: tf.Tensor,
-    inputs_k: Optional[tf.Tensor],
+    inputs_k: tf.Tensor | None,
     n_pop: int,
     n_syn: int,
     s: int,
@@ -541,7 +542,7 @@ def _make_checkpoint_segment(
 def _make_recompute_segment(
     problem: CalibrationProblem,
     t_k: tf.Tensor,
-    inputs_k: Optional[tf.Tensor],
+    inputs_k: tf.Tensor | None,
     n_pop: int,
     n_syn: int,
     s: int,
@@ -576,7 +577,7 @@ def _make_recompute_segment(
 
 def value_and_gradient_checkpointed(
     problem: CalibrationProblem,
-    phi: Optional[Any],
+    phi: Any | None,
     segment_length: int,
 ) -> CheckpointedGradient:
     """
@@ -670,7 +671,7 @@ def value_and_gradient_checkpointed(
         if not was_tracing:
             _, mem_peak = tracemalloc.get_traced_memory()
             tracemalloc.stop()
-            peak_memory: Optional[float] = float(mem_peak)
+            peak_memory: float | None = float(mem_peak)
         else:
             _, mem_peak = tracemalloc.get_traced_memory()
             peak_memory = float(max(0, mem_peak - mem_peak0))
@@ -766,12 +767,12 @@ def truncated_bptt(
     step = horizon - warm_steps
     starts = list(range(0, T, step))
 
-    history: List[Dict[str, float]] = []
+    history: list[dict[str, float]] = []
     t_begin = time.perf_counter()
     last_window_loss = float("nan")
     for epoch in range(epochs):
-        carry: Optional[Tuple[List[tf.Tensor], List[tf.Tensor]]] = None
-        window_losses: List[float] = []
+        carry: tuple[list[tf.Tensor], list[tf.Tensor]] | None = None
+        window_losses: list[float] = []
         for s in starts:
             e = min(s + horizon, T)
             split = min(s + step, e)

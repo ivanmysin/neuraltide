@@ -55,40 +55,61 @@ from neuraltide.training import MSELoss
 dt = 0.5
 
 # Создание компонентов
-gen = SinusoidalGenerator(dt=dt, params={
-    'amplitude': 10.0, 'freq': 8.0, 'phase': 0.0, 'offset': 5.0,
-})
+gen = SinusoidalGenerator(
+    dt=dt,
+    params={
+        "amplitude": 10.0,
+        "freq": 8.0,
+        "phase": 0.0,
+        "offset": 5.0,
+    },
+)
 
-pop = IzhikevichMeanField(dt=dt, params={
-    'tau_pop': [1.0], 'alpha': [0.5], 'a': [0.02],
-    'b': [0.2], 'w_jump': [0.1], 'Delta_I': [0.5], 'I_ext': [1.0],
-})
+pop = IzhikevichMeanField(
+    dt=dt,
+    params={
+        "tau_pop": [1.0],
+        "alpha": [0.5],
+        "a": [0.02],
+        "b": [0.2],
+        "w_jump": [0.1],
+        "Delta_I": [0.5],
+        "I_ext": [1.0],
+    },
+)
 
-syn = StaticSynapse(n_pre=1, n_post=1, dt=dt, params={
-    'gsyn_max': 0.1, 'pconn': [[1.0]], 'e_r': 0.0,
-})
+syn = StaticSynapse(
+    n_pre=1,
+    n_post=1,
+    dt=dt,
+    params={
+        "gsyn_max": 0.1,
+        "pconn": [[1.0]],
+        "e_r": 0.0,
+    },
+)
 
 # Построение графа
 graph = NetworkGraph(dt=dt)
-graph.declare_input('input', n_units=gen.n_units)
-graph.add_population('exc', pop)
-graph.add_synapse('input->exc', syn, src='input', tgt='exc')
+graph.declare_input("input", n_units=gen.n_units)
+graph.add_population("exc", pop)
+graph.add_synapse("input->exc", syn, src="input", tgt="exc")
 
 # Целевые данные
 T = 1000
 t_values = np.arange(0, T, dt, dtype=np.float32)
 target_rates = 10.0 + 5.0 * np.sin(2 * np.pi * 8.0 * t_values / 1000.0)
-target = {
-    'exc': tf.constant(target_rates[None, :, None], dtype=tf.float32)
-}
+target = {"exc": tf.constant(target_rates[None, :, None], dtype=tf.float32)}
 
 # Входные данные
 t_seq = tf.constant(t_values[None, :, None])
-inputs = graph.pack_inputs({'input': gen(t_seq)})
+inputs = graph.pack_inputs({"input": gen(t_seq)})
 
 # Создание Keras-модели
 model = BrainModelKeras(
-    graph, RK4Integrator(), dt=dt,
+    graph,
+    RK4Integrator(),
+    dt=dt,
     loss_fn=MSELoss(target),
     stability_penalty_weight=1e-3,
 )
@@ -99,7 +120,7 @@ history = model.fit(inputs, target, epochs=100, verbose=1)
 
 # Предсказание
 output = model(inputs, training=False)
-print(output.firing_rates['exc'].shape)  # [1, T, 1]
+print(output.firing_rates["exc"].shape)  # [1, T, 1]
 ```
 
 ---
@@ -172,11 +193,12 @@ from tensorflow.keras.callbacks import EarlyStopping, ModelCheckpoint
 
 callbacks = [
     EarlyStopping(patience=20, restore_best_weights=True),
-    ModelCheckpoint('best_model.keras', save_best_only=True),
+    ModelCheckpoint("best_model.keras", save_best_only=True),
 ]
 
 history = model.fit(
-    inputs, target,
+    inputs,
+    target,
     epochs=500,
     batch_size=1,
     validation_split=0.2,
@@ -189,10 +211,10 @@ history = model.fit(
 
 ```python
 # Сохранение весов
-model.save_weights('model_weights.keras')
+model.save_weights("model_weights.keras")
 
 # Загрузка весов
-model.load_weights('model_weights.keras')
+model.load_weights("model_weights.keras")
 ```
 
 ### Доступ к NetworkRNN после обучения

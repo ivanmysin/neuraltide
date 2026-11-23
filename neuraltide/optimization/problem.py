@@ -86,8 +86,9 @@ ParameterSpace (``phi_entries``/``trainable_names``): non-trainable
 
 import time
 import warnings
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple, Union
+from typing import Any
 
 import numpy as np
 import tensorflow as tf
@@ -97,8 +98,8 @@ from neuraltide.core.network import NetworkOutput, NetworkRNN
 from neuraltide.core.types import TensorType, cast_if_needed
 from neuraltide.optimization._compiled import _CompiledCore
 from neuraltide.optimization._state import (
-    InitialState,
     _TENSOR_KINDS,
+    InitialState,
     _broadcast_or_validate_init,
     _concat_base_states,
     _literal_gradient_path,
@@ -113,17 +114,19 @@ from neuraltide.optimization._state import (
 # тесты импортируют эти имена из problem (явный alias — намеренный
 # реэкспорт).
 from neuraltide.optimization._state import (
-    _X0_OUTSIDE_CONTEXT_WARNED as _X0_OUTSIDE_CONTEXT_WARNED,
+    _X0_OUTSIDE_CONTEXT_WARNED as _X0_OUTSIDE_CONTEXT_WARNED,  # noqa: PLC0414
 )
-from neuraltide.optimization._state import _chain_gradient as _chain_gradient
+from neuraltide.optimization._state import (
+    _chain_gradient as _chain_gradient,  # noqa: PLC0414
+)
 from neuraltide.optimization.parameters import ParameterSpace
 from neuraltide.optimization.results import Evaluation
 
 __all__ = [
     "CalibrationProblem",
     "Experiment",
-    "MultiExperimentProblem",
     "FrozenProblem",
+    "MultiExperimentProblem",
 ]
 
 _GRAD_MODES = ("assign", "chain")
@@ -158,8 +161,8 @@ class Experiment:
 
     name: str
     t_sequence: TensorType
-    inputs: Optional[TensorType] = None
-    objective: Optional[Any] = None
+    inputs: TensorType | None = None
+    objective: Any | None = None
     initial_state: InitialState = None
 
 
@@ -168,7 +171,7 @@ class Experiment:
 # ---------------------------------------------------------------------------
 
 
-def _entry_bounds_phi(entry, dtype) -> Tuple[np.ndarray, np.ndarray]:
+def _entry_bounds_phi(entry, dtype) -> tuple[np.ndarray, np.ndarray]:
     """Границы одной trainable-записи в φ-координатах (поэлементно).
 
     min/max могут быть скалярами (broadcast на numel) или векторами
@@ -201,7 +204,7 @@ def _entry_bounds_phi(entry, dtype) -> Tuple[np.ndarray, np.ndarray]:
     return lo, hi
 
 
-def _bounds_phi_from_space(space: ParameterSpace) -> Tuple[np.ndarray, np.ndarray]:
+def _bounds_phi_from_space(space: ParameterSpace) -> tuple[np.ndarray, np.ndarray]:
     """Границы вектора φ из физических min/max trainable-записей ParameterSpace."""
     lower: list = []
     upper: list = []
@@ -222,7 +225,7 @@ SEARCH_BOX_REL_MARGIN = 0.01
 
 def _search_box_phi_from_space(
     space: ParameterSpace, rel_margin: float = SEARCH_BOX_REL_MARGIN
-) -> Tuple[np.ndarray, np.ndarray]:
+) -> tuple[np.ndarray, np.ndarray]:
     """
     Поисковый бокс φ для глобальных методов (DE, CMA-ES, ...).
 
@@ -287,11 +290,11 @@ def _entry_bounds_phi_value(value, numel: int, name: str) -> np.ndarray:
 def _make_evaluation(
     *,
     loss: float,
-    components: Optional[Dict[str, float]],
-    residuals: Optional[np.ndarray],
-    grad: Optional[tf.Tensor],
+    components: dict[str, float] | None,
+    residuals: np.ndarray | None,
+    grad: tf.Tensor | None,
     status: str,
-    counters: Dict[str, Any],
+    counters: dict[str, Any],
     elapsed: float,
     dt: float,
 ) -> Evaluation:
@@ -311,14 +314,14 @@ def _make_evaluation(
     )
 
 
-def _components_of(objective, output, network, prefix: str = "") -> Dict[str, float]:
+def _components_of(objective, output, network, prefix: str = "") -> dict[str, float]:
     components_fn = getattr(objective, "components", None)
     if components_fn is None:
         return {}
     return {f"{prefix}{k}": float(v) for k, v in components_fn(output, network).items()}
 
 
-def _residual_of(objective, output) -> Optional[np.ndarray]:
+def _residual_of(objective, output) -> np.ndarray | None:
     residual_fn = getattr(objective, "residual", None)
     if residual_fn is None:
         return None
@@ -384,13 +387,13 @@ class CalibrationProblem:
         network: NetworkRNN,
         parameter_space: ParameterSpace,
         t_sequence: TensorType,
-        inputs: Optional[TensorType] = None,
-        objective: Optional[Any] = None,
+        inputs: TensorType | None = None,
+        objective: Any | None = None,
         initial_state: InitialState = None,
         grad_mode: str = "assign",
-        held_out: Optional[Sequence[Experiment]] = None,
+        held_out: Sequence[Experiment] | None = None,
         compiled: bool = False,
-        chunk_length: Optional[int] = None,
+        chunk_length: int | None = None,
         chunk_grad: str = "checkpointed",
     ):
         if grad_mode not in _GRAD_MODES:
@@ -426,7 +429,7 @@ class CalibrationProblem:
         self.objective = objective
         self.initial_state = initial_state
         self.grad_mode = grad_mode
-        self.held_out: List[Experiment] = list(held_out or [])
+        self.held_out: list[Experiment] = list(held_out or [])
         self.compiled = bool(compiled)
         self.chunk_length = chunk_length
         self.chunk_grad = chunk_grad
@@ -434,9 +437,9 @@ class CalibrationProblem:
         # id(inputs), chunk_length, chunk_grad) — см. _get_compiled_core.
         # Начальное состояние протокола — аргумент ядра, материализуется
         # при каждом вызове.
-        self._core_cache: Dict[Any, _CompiledCore] = {}
+        self._core_cache: dict[Any, _CompiledCore] = {}
 
-        self._counters: Dict[str, Any] = {
+        self._counters: dict[str, Any] = {
             "n_forward": 0,
             "n_gradient": 0,
             "wall_time": 0.0,
@@ -488,7 +491,7 @@ class CalibrationProblem:
         """Размерность вектора φ."""
         return self.parameter_space.size
 
-    def pack(self, phi: Optional[Any] = None) -> tf.Tensor:
+    def pack(self, phi: Any | None = None) -> tf.Tensor:
         """
         φ-вектор в координатах ParameterSpace.
 
@@ -520,7 +523,7 @@ class CalibrationProblem:
         theta = self.parameter_space.unpack(phi_t)
         self.parameter_space.apply_to_model(theta)
 
-    def _prepare(self, phi: Optional[Any]) -> tf.Tensor:
+    def _prepare(self, phi: Any | None) -> tf.Tensor:
         """pack (+apply) без прогона; увеличивает n_forward."""
         phi_t = self.pack(phi)
         if phi is not None:
@@ -528,7 +531,7 @@ class CalibrationProblem:
         self._counters["n_forward"] += 1
         return phi_t
 
-    def _forward(self, phi: Optional[Any]) -> Tuple[tf.Tensor, NetworkOutput]:
+    def _forward(self, phi: Any | None) -> tuple[tf.Tensor, NetworkOutput]:
         """pack (+apply) и прямой прогон; увеличивает n_forward."""
         phi_t = self._prepare(phi)
         theta = self.parameter_space.unpack(phi_t)
@@ -552,7 +555,7 @@ class CalibrationProblem:
     # ------------------------------------------------------------------
     # compiled-ядро (compiled=True, см. __init__)
     # ------------------------------------------------------------------
-    def _materialized_base_init(self) -> Tuple[Tuple, Tuple]:
+    def _materialized_base_init(self) -> tuple[tuple, tuple]:
         """Протокольное начальное состояние полными (pop, syn) кортежами.
 
         Без кэша (eager-конструирование тензоров, дёшево): пересоздаётся
@@ -571,7 +574,7 @@ class CalibrationProblem:
         objective,
         t_sequence,
         inputs,
-        experiment: Optional[str] = None,
+        experiment: str | None = None,
     ) -> _CompiledCore:
         """Ленивое (построение при первом вызове) получение ядра из кэша.
 
@@ -609,9 +612,9 @@ class CalibrationProblem:
     def _build_compiled_evaluation(
         self,
         loss_t: tf.Tensor,
-        comps: Dict[str, tf.Tensor],
+        comps: dict[str, tf.Tensor],
         residual_t: tf.Tensor,
-        grad: Optional[tf.Tensor],
+        grad: tf.Tensor | None,
         t0: float,
     ) -> Evaluation:
         """numpy-сборка Evaluation из тензорных выходов ядра (eager)."""
@@ -637,7 +640,7 @@ class CalibrationProblem:
     # ------------------------------------------------------------------
     # Публичные операции
     # ------------------------------------------------------------------
-    def simulate(self, phi: Optional[Any] = None) -> NetworkOutput:
+    def simulate(self, phi: Any | None = None) -> NetworkOutput:
         """
         Прямой прогон сети.
 
@@ -648,7 +651,7 @@ class CalibrationProblem:
         _, output = self._forward(phi)
         return output
 
-    def evaluate(self, phi: Optional[Any] = None) -> Evaluation:
+    def evaluate(self, phi: Any | None = None) -> Evaluation:
         """Скалярная потеря, компоненты и невязки (без градиента)."""
         self._require_objective()
         t0 = time.perf_counter()
@@ -669,8 +672,8 @@ class CalibrationProblem:
         return eval_result
 
     def value_and_gradient(
-        self, phi: Optional[Any] = None
-    ) -> Tuple[Evaluation, tf.Tensor]:
+        self, phi: Any | None = None
+    ) -> tuple[Evaluation, tf.Tensor]:
         """
         Потеря и градиент по φ одним прогоном.
 
@@ -738,7 +741,7 @@ class CalibrationProblem:
         )
         return eval_result, grad_t
 
-    def residual(self, phi: Optional[Any] = None) -> np.ndarray:
+    def residual(self, phi: Any | None = None) -> np.ndarray:
         """
         Вектор нормированных невязок (numpy) для GN/LM/TRF.
 
@@ -769,7 +772,7 @@ class CalibrationProblem:
         r = residual_fn(output)
         return np.asarray(r)
 
-    def validate(self, phi: Optional[Any] = None) -> Dict[str, float]:
+    def validate(self, phi: Any | None = None) -> dict[str, float]:
         """
         Потери на held-out экспериментах (конструктор: held_out=[...]).
 
@@ -788,7 +791,7 @@ class CalibrationProblem:
         if phi is not None:
             self._apply_phi(phi_t)
         theta = self.parameter_space.unpack(phi_t)
-        results: Dict[str, float] = {}
+        results: dict[str, float] = {}
         t0 = time.perf_counter()
         for exp in self.held_out:
             objective = exp.objective if exp.objective is not None else self.objective
@@ -822,19 +825,19 @@ class CalibrationProblem:
     # ------------------------------------------------------------------
     def _spawn(self, **overrides: Any) -> "CalibrationProblem":
         """Новая CalibrationProblem поверх тех же объектов с общими counters."""
-        kwargs: Dict[str, Any] = dict(
-            network=self.network,
-            parameter_space=self.parameter_space,
-            t_sequence=self.t_sequence,
-            inputs=self.inputs,
-            objective=self.objective,
-            initial_state=self.initial_state,
-            grad_mode=self.grad_mode,
-            held_out=self.held_out,
-            compiled=self.compiled,
-            chunk_length=self.chunk_length,
-            chunk_grad=self.chunk_grad,
-        )
+        kwargs: dict[str, Any] = {
+            "network": self.network,
+            "parameter_space": self.parameter_space,
+            "t_sequence": self.t_sequence,
+            "inputs": self.inputs,
+            "objective": self.objective,
+            "initial_state": self.initial_state,
+            "grad_mode": self.grad_mode,
+            "held_out": self.held_out,
+            "compiled": self.compiled,
+            "chunk_length": self.chunk_length,
+            "chunk_grad": self.chunk_grad,
+        }
         kwargs.update(overrides)
         view = CalibrationProblem(**kwargs)
         view._counters = self._counters
@@ -852,11 +855,11 @@ class CalibrationProblem:
         inputs = None if self.inputs is None else self.inputs[:, start:stop]
         return self._spawn(t_sequence=t_seq, inputs=inputs)
 
-    def with_objective(self, objective: Optional[Any]) -> "CalibrationProblem":
+    def with_objective(self, objective: Any | None) -> "CalibrationProblem":
         """View с другой целевой функцией (тот же протокол)."""
         return self._spawn(objective=objective)
 
-    def with_inputs(self, inputs: Optional[TensorType]) -> "CalibrationProblem":
+    def with_inputs(self, inputs: TensorType | None) -> "CalibrationProblem":
         """View с другими упакованными входами (тот же протокол)."""
         return self._spawn(inputs=inputs)
 
@@ -867,7 +870,7 @@ class CalibrationProblem:
     # ------------------------------------------------------------------
     # Вспомогательные bounds в координатах φ
     # ------------------------------------------------------------------
-    def bounds_phi(self) -> Tuple[np.ndarray, np.ndarray]:
+    def bounds_phi(self) -> tuple[np.ndarray, np.ndarray]:
         """
         Границы вектора φ из физических min/max trainable-записей
         ParameterSpace (non-trainable записи вне φ не учитываются).
@@ -881,7 +884,7 @@ class CalibrationProblem:
 
     def search_box_phi(
         self, rel_margin: float = SEARCH_BOX_REL_MARGIN
-    ) -> Tuple[np.ndarray, np.ndarray]:
+    ) -> tuple[np.ndarray, np.ndarray]:
         """
         Поисковый бокс φ для глобальных методов: θ ∈ [min + δ·span,
         max − δ·span] в φ-координатах (не зависит от dtype и машинного
@@ -895,9 +898,9 @@ class CalibrationProblem:
     def _build_evaluation(
         self,
         output: NetworkOutput,
-        grad: Optional[tf.Tensor],
+        grad: tf.Tensor | None,
         t0: float,
-        loss_override: Optional[tf.Tensor] = None,
+        loss_override: tf.Tensor | None = None,
     ) -> Evaluation:
         if loss_override is not None:
             loss_t = loss_override
@@ -1108,10 +1111,10 @@ class MultiExperimentProblem:
         parameter_space: ParameterSpace,
         experiments: Sequence[Experiment],
         grad_mode: str = "assign",
-        held_out: Optional[Sequence[Experiment]] = None,
+        held_out: Sequence[Experiment] | None = None,
         compiled: bool = False,
         vectorize: bool = False,
-        chunk_length: Optional[int] = None,
+        chunk_length: int | None = None,
         chunk_grad: str = "checkpointed",
     ):
         if grad_mode not in _GRAD_MODES:
@@ -1136,8 +1139,8 @@ class MultiExperimentProblem:
             )
         self.network = network
         self.parameter_space = parameter_space
-        self.experiments: List[Experiment] = list(experiments)
-        self.held_out: List[Experiment] = list(held_out or [])
+        self.experiments: list[Experiment] = list(experiments)
+        self.held_out: list[Experiment] = list(held_out or [])
         self.grad_mode = grad_mode
         if not self.experiments:
             raise ValueError(
@@ -1194,7 +1197,7 @@ class MultiExperimentProblem:
                 UserWarning,
                 stacklevel=2,
             )
-        self._counters: Dict[str, Any] = {
+        self._counters: dict[str, Any] = {
             "n_forward": 0,
             "n_gradient": 0,
             "wall_time": 0.0,
@@ -1204,7 +1207,7 @@ class MultiExperimentProblem:
         # id(inputs)) — та же семантика, что у
         # CalibrationProblem._get_compiled_core. Начальное состояние
         # эксперимента — аргумент ядра, материализуется при каждом вызове.
-        self._core_cache: Dict[Any, _CompiledCore] = {}
+        self._core_cache: dict[Any, _CompiledCore] = {}
         self.chunk_length = chunk_length
         self.chunk_grad = chunk_grad
         self.vectorize = bool(vectorize)
@@ -1251,12 +1254,12 @@ class MultiExperimentProblem:
             )
         else:
             self._vectorized_objective = None
-        self._vcore_cache: Dict[Any, _CompiledCore] = {}
+        self._vcore_cache: dict[Any, _CompiledCore] = {}
 
     # ------------------------------------------------------------------
     # Векторный режим (vectorize=True): один батч-прогон на все эксперименты
     # ------------------------------------------------------------------
-    def _prepare_vectorized(self, phi: Optional[Any]) -> tf.Tensor:
+    def _prepare_vectorized(self, phi: Any | None) -> tf.Tensor:
         """pack (+apply); n_forward += 1 (один батч-прогон на всех)."""
         phi_t = self.pack(phi)
         if phi is not None:
@@ -1448,7 +1451,7 @@ class MultiExperimentProblem:
             dt=float(self.network._graph.dt),
         )
 
-    def _exp_base_init(self, exp: Experiment) -> Tuple[Tuple, Tuple]:
+    def _exp_base_init(self, exp: Experiment) -> tuple[tuple, tuple]:
         """Начальное состояние протокола эксперимента полными кортежами.
 
         Без кэша: пересоздаётся при каждом вызове, поэтому in-place смена
@@ -1521,7 +1524,7 @@ class MultiExperimentProblem:
     def size(self) -> int:
         return self.parameter_space.size
 
-    def pack(self, phi: Optional[Any] = None) -> tf.Tensor:
+    def pack(self, phi: Any | None = None) -> tf.Tensor:
         """См. CalibrationProblem.pack (общий ParameterSpace)."""
         if phi is None:
             return self.parameter_space.pack()
@@ -1538,17 +1541,17 @@ class MultiExperimentProblem:
         )
         return phi_t
 
-    def unpack(self, phi) -> Dict[str, tf.Tensor]:
+    def unpack(self, phi) -> dict[str, tf.Tensor]:
         """φ → физические θ (общий ParameterSpace)."""
         return self.parameter_space.unpack(phi)
 
-    def bounds_phi(self) -> Tuple[np.ndarray, np.ndarray]:
+    def bounds_phi(self) -> tuple[np.ndarray, np.ndarray]:
         """Границы φ общего ParameterSpace."""
         return _bounds_phi_from_space(self.parameter_space)
 
     def search_box_phi(
         self, rel_margin: float = SEARCH_BOX_REL_MARGIN
-    ) -> Tuple[np.ndarray, np.ndarray]:
+    ) -> tuple[np.ndarray, np.ndarray]:
         """Поисковый бокс φ общего ParameterSpace (см. CalibrationProblem)."""
         return _search_box_phi_from_space(self.parameter_space, rel_margin)
 
@@ -1559,7 +1562,7 @@ class MultiExperimentProblem:
         theta = self.parameter_space.unpack(phi_t)
         self.parameter_space.apply_to_model(theta)
 
-    def _prepare(self, phi: Optional[Any]) -> tf.Tensor:
+    def _prepare(self, phi: Any | None) -> tf.Tensor:
         """pack (+apply); n_forward += число обучающих экспериментов."""
         phi_t = self.pack(phi)
         if phi is not None:
@@ -1567,7 +1570,7 @@ class MultiExperimentProblem:
         self._counters["n_forward"] += len(self.experiments)
         return phi_t
 
-    def _resolve_experiment(self, experiment: Union[int, str, Experiment, None]):
+    def _resolve_experiment(self, experiment: int | str | Experiment | None):
         if experiment is None:
             return self.experiments[0]
         if isinstance(experiment, int):
@@ -1605,9 +1608,9 @@ class MultiExperimentProblem:
 
     def _aggregate(
         self, outputs: Sequence[NetworkOutput]
-    ) -> Tuple[Dict[str, float], np.ndarray, str]:
-        components: Dict[str, float] = {}
-        residuals: List[np.ndarray] = []
+    ) -> tuple[dict[str, float], np.ndarray, str]:
+        components: dict[str, float] = {}
+        residuals: list[np.ndarray] = []
         has_residual = True
         for exp, output in zip(self.experiments, outputs):
             components.update(
@@ -1631,8 +1634,8 @@ class MultiExperimentProblem:
     # ------------------------------------------------------------------
     def simulate(
         self,
-        phi: Optional[Any] = None,
-        experiment: Union[int, str, Experiment, None] = None,
+        phi: Any | None = None,
+        experiment: int | str | Experiment | None = None,
     ) -> NetworkOutput:
         """
         Прямой прогон одного эксперимента (по умолчанию первого).
@@ -1680,7 +1683,7 @@ class MultiExperimentProblem:
         self._counters["n_forward"] += 1
         return output
 
-    def evaluate(self, phi: Optional[Any] = None) -> Evaluation:
+    def evaluate(self, phi: Any | None = None) -> Evaluation:
         """Суммарная потеря обучающих экспериментов (без градиента).
 
         vectorize=True: потеря — СРЕДНЕЕ по экспериментам (один
@@ -1696,9 +1699,9 @@ class MultiExperimentProblem:
             )
         phi_t = self._prepare(phi)
         if self.compiled:
-            total: Optional[tf.Tensor] = None
-            components: Dict[str, float] = {}
-            residuals: List[np.ndarray] = []
+            total: tf.Tensor | None = None
+            components: dict[str, float] = {}
+            residuals: list[np.ndarray] = []
             has_residual = True
             for exp in self.experiments:
                 core = self._get_compiled_core(exp)
@@ -1730,8 +1733,8 @@ class MultiExperimentProblem:
                 dt=float(self.network._graph.dt),
             )
         theta = self.parameter_space.unpack(phi_t)
-        total: Optional[tf.Tensor] = None
-        outputs: List[NetworkOutput] = []
+        total: tf.Tensor | None = None
+        outputs: list[NetworkOutput] = []
         for exp in self.experiments:
             output, _ = self._run_experiment(exp, theta)
             outputs.append(output)
@@ -1750,8 +1753,8 @@ class MultiExperimentProblem:
         )
 
     def value_and_gradient(
-        self, phi: Optional[Any] = None
-    ) -> Tuple[Evaluation, tf.Tensor]:
+        self, phi: Any | None = None
+    ) -> tuple[Evaluation, tf.Tensor]:
         """
         Суммарная потеря и градиент по φ (все прогоны в одной ленте).
 
@@ -1776,10 +1779,10 @@ class MultiExperimentProblem:
             return eval_result, grad_t
         phi_t = self._prepare(phi)
         if self.compiled:
-            losses: List[tf.Tensor] = []
-            grads: List[tf.Tensor] = []
-            components: Dict[str, float] = {}
-            residuals: List[np.ndarray] = []
+            losses: list[tf.Tensor] = []
+            grads: list[tf.Tensor] = []
+            components: dict[str, float] = {}
+            residuals: list[np.ndarray] = []
             has_residual = True
             for exp in self.experiments:
                 core = self._get_compiled_core(exp)
@@ -1821,11 +1824,11 @@ class MultiExperimentProblem:
         with tf.GradientTape(persistent=persistent) as tape:
             tape.watch(phi_t)
             theta = self.parameter_space.unpack(phi_t)
-            losses: List[tf.Tensor] = []
-            outputs: List[NetworkOutput] = []
+            losses: list[tf.Tensor] = []
+            outputs: list[NetworkOutput] = []
             # Тензор x0 создаётся заново в каждом эксперименте: собираем все,
             # иначе градиент по x0 учитывал бы только последний эксперимент.
-            x0_map: Dict[str, List[tf.Tensor]] = {}
+            x0_map: dict[str, list[tf.Tensor]] = {}
             for exp in self.experiments:
                 output, x0_e = self._run_experiment(exp, theta)
                 outputs.append(output)
@@ -1854,7 +1857,7 @@ class MultiExperimentProblem:
         )
         return eval_result, grad_t
 
-    def residual(self, phi: Optional[Any] = None) -> np.ndarray:
+    def residual(self, phi: Any | None = None) -> np.ndarray:
         """Конкатенированные невязки обучающих экспериментов (numpy)."""
         t0 = time.perf_counter()
         if self.vectorize:
@@ -1883,7 +1886,7 @@ class MultiExperimentProblem:
                         f"'{type(exp.objective).__name__}' эксперимента "
                         f"'{exp.name}' не предоставляет residual(predictions)."
                     )
-            residuals: List[np.ndarray] = []
+            residuals: list[np.ndarray] = []
             for exp in self.experiments:
                 core = self._get_compiled_core(exp)
                 _, _, residual_e = core.eval_core(phi_t, *self._exp_base_init(exp))
@@ -1891,7 +1894,7 @@ class MultiExperimentProblem:
             self._counters["wall_time"] += time.perf_counter() - t0
             return np.concatenate(residuals)
         theta = self.parameter_space.unpack(phi_t)
-        residuals: List[np.ndarray] = []
+        residuals: list[np.ndarray] = []
         for exp in self.experiments:
             output, _ = self._run_experiment(exp, theta)
             r = _residual_of(exp.objective, output)
@@ -1905,7 +1908,7 @@ class MultiExperimentProblem:
         self._counters["wall_time"] += time.perf_counter() - t0
         return np.concatenate(residuals)
 
-    def validate(self, phi: Optional[Any] = None) -> Dict[str, float]:
+    def validate(self, phi: Any | None = None) -> dict[str, float]:
         """
         Потери на held-out экспериментах (только они, не обучающие).
 
@@ -1922,7 +1925,7 @@ class MultiExperimentProblem:
         if phi is not None:
             self._apply_phi(phi_t)
         theta = self.parameter_space.unpack(phi_t)
-        results: Dict[str, float] = {}
+        results: dict[str, float] = {}
         t0 = time.perf_counter()
         if self.vectorize and self._held_out_can_batch():
             for exp in self.held_out:
@@ -2006,8 +2009,8 @@ class FrozenProblem:
     def __init__(
         self,
         problem,
-        free_names: Optional[Sequence[str]] = None,
-        fixed: Optional[Mapping[str, Any]] = None,
+        free_names: Sequence[str] | None = None,
+        fixed: Mapping[str, Any] | None = None,
     ):
         self._problem = problem
         space = problem.parameter_space
@@ -2044,11 +2047,11 @@ class FrozenProblem:
                 raise ValueError(
                     f"FrozenProblem: names both free and fixed: {overlap}."
                 )
-        self._free_names: List[str] = free
+        self._free_names: list[str] = free
         self._has_fixed = bool(fixed)
 
         dtype = neuraltide.config.get_dtype()
-        self._full_offsets: Dict[str, Tuple[int, int]] = {}
+        self._full_offsets: dict[str, tuple[int, int]] = {}
         start = 0
         for name, entry in entries.items():
             self._full_offsets[name] = (start, entry.numel)
@@ -2077,7 +2080,7 @@ class FrozenProblem:
             phi_base[s : s + n] = np.asarray(phi_piece, dtype=np.float64).reshape(-1)
         self._phi_base = phi_base
 
-        free_index: List[np.ndarray] = []
+        free_index: list[np.ndarray] = []
         pos = 0
         for name in self._free_names:
             s, n = self._full_offsets[name]
@@ -2100,13 +2103,13 @@ class FrozenProblem:
         return self._problem.parameter_space
 
     @property
-    def free_names(self) -> List[str]:
+    def free_names(self) -> list[str]:
         return list(self._free_names)
 
     @property
     def size(self) -> int:
         """Размерность reduced-вектора φ (свободные координаты)."""
-        return int(len(self._free_index))
+        return len(self._free_index)
 
     @property
     def n_forward(self) -> int:
@@ -2135,7 +2138,7 @@ class FrozenProblem:
         full[self._free_index] = phi_np
         return tf.constant(full, dtype=neuraltide.config.get_dtype())
 
-    def pack(self, phi: Optional[Any] = None) -> tf.Tensor:
+    def pack(self, phi: Any | None = None) -> tf.Tensor:
         """
         Reduced φ текущей точки.
 
@@ -2155,19 +2158,19 @@ class FrozenProblem:
             )
         return tf.constant(phi_np, dtype=neuraltide.config.get_dtype())
 
-    def unpack(self, phi) -> Dict[str, tf.Tensor]:
+    def unpack(self, phi) -> dict[str, tf.Tensor]:
         """Reduced φ → физические θ свободных записей."""
         theta_full = self.parameter_space.unpack(self._compose(phi))
         return {n: theta_full[n] for n in self._free_names}
 
-    def bounds_phi(self) -> Tuple[np.ndarray, np.ndarray]:
+    def bounds_phi(self) -> tuple[np.ndarray, np.ndarray]:
         """Границы reduced φ (строки bounds_phi базовой задачи)."""
         lower, upper = self._problem.bounds_phi()
         return lower[self._free_index], upper[self._free_index]
 
     def search_box_phi(
         self, rel_margin: float = SEARCH_BOX_REL_MARGIN
-    ) -> Tuple[np.ndarray, np.ndarray]:
+    ) -> tuple[np.ndarray, np.ndarray]:
         """Поисковый бокс reduced φ (строки бокса базовой задачи)."""
         fn = getattr(self._problem, "search_box_phi", None)
         lower, upper = fn(rel_margin) if callable(fn) else self._problem.bounds_phi()
@@ -2176,7 +2179,7 @@ class FrozenProblem:
     # ------------------------------------------------------------------
     # Операции (делегирование с compose)
     # ------------------------------------------------------------------
-    def _full_phi(self, phi: Optional[Any]) -> Optional[tf.Tensor]:
+    def _full_phi(self, phi: Any | None) -> tf.Tensor | None:
         """
         phi_full для делегирования: compose(phi); при phi=None — None (без
         мутации), если fixed пуст, и compose(pack()) иначе (см. контракт).
@@ -2187,13 +2190,13 @@ class FrozenProblem:
             return self._compose(self.pack())
         return None
 
-    def evaluate(self, phi: Optional[Any] = None) -> Evaluation:
+    def evaluate(self, phi: Any | None = None) -> Evaluation:
         """Потеря базовой задачи в точке phi_full = compose(phi)."""
         return self._problem.evaluate(self._full_phi(phi))
 
     def value_and_gradient(
-        self, phi: Optional[Any] = None
-    ) -> Tuple[Evaluation, tf.Tensor]:
+        self, phi: Any | None = None
+    ) -> tuple[Evaluation, tf.Tensor]:
         """
         Потеря и reduced-градиент (координаты free_names).
 
@@ -2204,15 +2207,15 @@ class FrozenProblem:
         grad_free = tf.gather(tf.convert_to_tensor(grad_full), self._free_index)
         return eval_result, grad_free
 
-    def residual(self, phi: Optional[Any] = None) -> np.ndarray:
+    def residual(self, phi: Any | None = None) -> np.ndarray:
         """Невязки базовой задачи в точке phi_full = compose(phi)."""
         return self._problem.residual(self._full_phi(phi))
 
-    def validate(self, phi: Optional[Any] = None) -> Dict[str, float]:
+    def validate(self, phi: Any | None = None) -> dict[str, float]:
         """validate базовой задачи в точке phi_full = compose(phi)."""
         return self._problem.validate(self._full_phi(phi))
 
-    def simulate(self, phi: Optional[Any] = None, experiment=None) -> NetworkOutput:
+    def simulate(self, phi: Any | None = None, experiment=None) -> NetworkOutput:
         """simulate базовой задачи (experiment — для MultiExperimentProblem)."""
         full = self._full_phi(phi)
         if experiment is None:

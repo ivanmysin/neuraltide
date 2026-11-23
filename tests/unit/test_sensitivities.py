@@ -25,12 +25,12 @@ import pytest
 import tensorflow as tf
 
 import neuraltide.config
-import neuraltide.optimization.sensitivities as sensitivities
 from neuraltide.optimization import (
     CalibrationProblem,
     JacobianResult,
     ParameterEntry,
     ParameterSpace,
+    sensitivities,
 )
 from neuraltide.optimization.local import least_squares
 from neuraltide.optimization.sensitivities import (

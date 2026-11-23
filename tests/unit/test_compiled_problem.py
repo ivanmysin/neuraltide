@@ -58,7 +58,7 @@ def _build_pair(l0_factory, compiled_kwargs=None):
     """Пара идентичных задач (eager, compiled) на L0."""
     net_e, space_e, t_seq_e, inputs_e, loss_e = l0_factory()
     net_c, space_c, t_seq_c, inputs_c, loss_c = l0_factory()
-    common = dict(inputs=inputs_e, objective=loss_e)
+    common = {"inputs": inputs_e, "objective": loss_e}
     prob_e = CalibrationProblem(net_e, space_e, t_seq_e, **common)
     prob_c = CalibrationProblem(
         net_c,
@@ -283,7 +283,7 @@ class TestCompiledMultiExperiment:
         """Градиент по exp-specific x0 не смешивается между экспериментами:
         сверка с разностью потерь (шаг по этой координате меняет только
         exp2)."""
-        prob_e, prob_c, space = _build_multi_pair(l0_factory, with_exp_x0=True)
+        _prob_e, prob_c, space = _build_multi_pair(l0_factory, with_exp_x0=True)
         rng = np.random.default_rng(6)
         phi = _phi_from_model(space, jitter=0.02, rng=rng)
         _, g_c = prob_c.value_and_gradient(phi)

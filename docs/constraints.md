@@ -46,11 +46,11 @@ def __call__(self, w: tf.Tensor) -> tf.Tensor:
 **Ограничение диапазона [0, 1]**:
 ```python
 params = {
-    'rate': {
-        'value': 0.5,
-        'trainable': True,
-        'min': 0.0,
-        'max': 1.0,
+    "rate": {
+        "value": 0.5,
+        "trainable": True,
+        "min": 0.0,
+        "max": 1.0,
     }
 }
 ```
@@ -58,10 +58,10 @@ params = {
 **Только нижняя граница**:
 ```python
 params = {
-    'gsyn_max': {
-        'value': 0.1,
-        'trainable': True,
-        'min': 0.0,  # только min, max не ограничен
+    "gsyn_max": {
+        "value": 0.1,
+        "trainable": True,
+        "min": 0.0,  # только min, max не ограничен
     }
 }
 ```
@@ -69,10 +69,10 @@ params = {
 **Только верхняя граница**:
 ```python
 params = {
-    'Delta_I': {
-        'value': 0.5,
-        'trainable': True,
-        'max': 2.0,  # только max, min не ограничен
+    "Delta_I": {
+        "value": 0.5,
+        "trainable": True,
+        "max": 2.0,  # только max, min не ограничен
     }
 }
 ```
@@ -80,24 +80,32 @@ params = {
 ### Использование с популяциями
 
 ```python
-pop = IzhikevichMeanField(dt=0.5, params={
-    'Delta_I': {'value': [0.5, 0.6], 'trainable': True, 'min': 0.01, 'max': 2.0},
-    'I_ext': {'value': [1.0, 1.2], 'trainable': True, 'min': -2.0, 'max': 2.0},
-})
+pop = IzhikevichMeanField(
+    dt=0.5,
+    params={
+        "Delta_I": {"value": [0.5, 0.6], "trainable": True, "min": 0.01, "max": 2.0},
+        "I_ext": {"value": [1.0, 1.2], "trainable": True, "min": -2.0, "max": 2.0},
+    },
+)
 ```
 
 ### Использование с синапсами
 
 ```python
-syn = TsodyksMarkramSynapse(n_pre=1, n_post=2, dt=0.5, params={
-    'gsyn_max': {'value': 0.1, 'trainable': True},
-    'tau_f': {'value': 20.0, 'trainable': True, 'min': 6.0, 'max': 240.0},
-    'tau_d': {'value': 5.0, 'trainable': True, 'min': 2.0, 'max': 15.0},
-    'tau_r': {'value': 200.0, 'trainable': True, 'min': 91.0, 'max': 1300.0},
-    'Uinc': {'value': 0.2, 'trainable': True, 'min': 0.04, 'max': 0.7},
-    'pconn': {'value': [[1.0, 1.0]], 'trainable': False},
-    'e_r': {'value': 0.0, 'trainable': False},
-})
+syn = TsodyksMarkramSynapse(
+    n_pre=1,
+    n_post=2,
+    dt=0.5,
+    params={
+        "gsyn_max": {"value": 0.1, "trainable": True},
+        "tau_f": {"value": 20.0, "trainable": True, "min": 6.0, "max": 240.0},
+        "tau_d": {"value": 5.0, "trainable": True, "min": 2.0, "max": 15.0},
+        "tau_r": {"value": 200.0, "trainable": True, "min": 91.0, "max": 1300.0},
+        "Uinc": {"value": 0.2, "trainable": True, "min": 0.04, "max": 0.7},
+        "pconn": {"value": [[1.0, 1.0]], "trainable": False},
+        "e_r": {"value": 0.0, "trainable": False},
+    },
+)
 ```
 
 ---
@@ -125,11 +133,16 @@ class NonNegConstraint(tf.keras.constraints.Constraint):
 ### Пример
 
 ```python
-syn = StaticSynapse(n_pre=1, n_post=2, dt=0.5, params={
-    'gsyn_max': {'value': 0.1, 'trainable': True},  # автоматически NonNegConstraint
-    'pconn': {'value': [[1.0, 1.0]], 'trainable': False},
-    'e_r': {'value': 0.0, 'trainable': False},
-})
+syn = StaticSynapse(
+    n_pre=1,
+    n_post=2,
+    dt=0.5,
+    params={
+        "gsyn_max": {"value": 0.1, "trainable": True},  # автоматически NonNegConstraint
+        "pconn": {"value": [[1.0, 1.0]], "trainable": False},
+        "e_r": {"value": 0.0, "trainable": False},
+    },
+)
 ```
 
 При этом ограничение `gsyn_max` автоматически применяется через `parameter_spec`.
@@ -161,10 +174,18 @@ class UnitIntervalConstraint(tf.keras.constraints.Constraint):
 ### Пример
 
 ```python
-syn = NMDASynapse(n_pre=1, n_post=2, dt=0.5, params={
-    # ...
-    'pconn_nmda': {'value': [[1.0, 1.0]], 'trainable': False},  # UnitIntervalConstraint
-})
+syn = NMDASynapse(
+    n_pre=1,
+    n_post=2,
+    dt=0.5,
+    params={
+        # ...
+        "pconn_nmda": {
+            "value": [[1.0, 1.0]],
+            "trainable": False,
+        },  # UnitIntervalConstraint
+    },
+)
 ```
 
 ---
@@ -175,17 +196,17 @@ syn = NMDASynapse(n_pre=1, n_post=2, dt=0.5, params={
 
 ```python
 {
-    'gsyn_max': {
-        'shape': (n_pre, n_post),
-        'trainable': True,
-        'constraint': 'NonNegConstraint',  # имя класса ограничения
-        'units': 'mS/cm^2',
+    "gsyn_max": {
+        "shape": (n_pre, n_post),
+        "trainable": True,
+        "constraint": "NonNegConstraint",  # имя класса ограничения
+        "units": "mS/cm^2",
     },
-    'pconn': {
-        'shape': (n_pre, n_post),
-        'trainable': False,
-        'constraint': 'UnitIntervalConstraint',
-        'units': 'dimensionless',
+    "pconn": {
+        "shape": (n_pre, n_post),
+        "trainable": False,
+        "constraint": "UnitIntervalConstraint",
+        "units": "dimensionless",
     },
 }
 ```
@@ -282,6 +303,7 @@ def check_constraints(network):
                 print(f"Warning: {var.name} violates constraint")
                 print(f"  Original: {var.value()}")
                 print(f"  Constrained: {constrained}")
+
 
 check_constraints(network)
 ```

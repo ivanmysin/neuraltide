@@ -20,8 +20,8 @@ from neuraltide.core.network import NetworkGraph, NetworkRNN
 from neuraltide.integrators import EulerIntegrator
 from neuraltide.optimization import (
     IdentityTransform,
-    LogTransform,
     LogitTransform,
+    LogTransform,
     ParameterEntry,
     ParameterSpace,
     ScaledSigmoidTransform,

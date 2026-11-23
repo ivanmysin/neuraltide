@@ -20,8 +20,8 @@ import tensorflow as tf
 import neuraltide.config
 from neuraltide.utils import seed_everything
 
-neuraltide.config.set_dtype(tf.float64)   # до создания любых моделей
-seed_everything(42)                        # seed NumPy и TensorFlow
+neuraltide.config.set_dtype(tf.float64)  # до создания любых моделей
+seed_everything(42)  # seed NumPy и TensorFlow
 ```
 
 `seed_everything` фиксирует генераторы случайных чисел; учтите, что
@@ -62,7 +62,9 @@ Kwargs `NetworkRNN(graph, integrator=...)`, модель менять не ну�
 
 ```python
 from neuraltide.integrators import (
-    RK4Integrator, AdaptiveRKIntegrator, RosenbrockIntegrator,
+    RK4Integrator,
+    AdaptiveRKIntegrator,
+    RosenbrockIntegrator,
 )
 
 network = NetworkRNN(graph, integrator=RK4Integrator())
@@ -108,7 +110,7 @@ TM-сети показывает порядок ~4.
 network = NetworkRNN(
     graph,
     integrator=RK4Integrator(),
-    integration_mode="network",   # 'split' (по умолчанию) | 'network'
+    integration_mode="network",  # 'split' (по умолчанию) | 'network'
 )
 ```
 
@@ -146,7 +148,9 @@ init_pop, init_syn = network.get_initial_state(batch_size=1)
 # Своя инициализация: слоты — это список тензоров [1, n_units] модели;
 # смысл слотов определяется конкретной популяцией. Тензоры приводите
 # к глобальному dtype (config.get_dtype()).
-init_pop[0] = tf.constant([[0.5]], dtype=neuraltide.config.get_dtype())   # например, E для WilsonCowan
+init_pop[0] = tf.constant(
+    [[0.5]], dtype=neuraltide.config.get_dtype()
+)  # например, E для WilsonCowan
 init_pop[1] = tf.constant([[0.1]], dtype=neuraltide.config.get_dtype())
 
 out1 = network(t_seq, inputs=inputs, initial_state=(init_pop, init_syn))
@@ -184,7 +188,7 @@ network = NetworkRNN(
     stability_penalty_weight=1e-3,
 )
 output = network(t_seq, inputs=inputs)
-print(output.stability_loss)   # 0 или малое при устойчивом шаге
+print(output.stability_loss)  # 0 или малое при устойчивом шаге
 ```
 
 **Типичные ошибки и ограничения:**
@@ -213,8 +217,12 @@ from neuraltide.integrators import EulerIntegrator
 pop = BrunelFokkerPlanck(
     dt=0.5,
     params={
-        "tau_m": 20.0, "v_theta": 20.0, "v_reset": 10.0,
-        "tau_rp": 2.0, "mu_0": 18.0, "sigma_ext": 3.0,
+        "tau_m": 20.0,
+        "v_theta": 20.0,
+        "v_reset": 10.0,
+        "tau_rp": 2.0,
+        "mu_0": 18.0,
+        "sigma_ext": 3.0,
     },
     grid_size=250,
     v_min=-80.0,
@@ -225,7 +233,7 @@ syn = {"I_syn": zero, "g_syn": zero}
 for _ in range(2000):
     state, _ = EulerIntegrator().step(pop, state, syn)
 rate = pop.get_firing_rate(state)
-mass = tf.reduce_sum(state[0]) * pop.dV + state[1]   # ∫P dV + p_r
+mass = tf.reduce_sum(state[0]) * pop.dV + state[1]  # ∫P dV + p_r
 ```
 
 **Типичные ошибки и ограничения:**
@@ -260,7 +268,7 @@ from neuraltide.integrators import classify_failure
 
 output = network(t_seq, inputs=inputs)
 status = classify_failure(output)
-print(status)   # {'status': 'ok' | 'nan' | 'diverged', 'max_abs': float}
+print(status)  # {'status': 'ok' | 'nan' | 'diverged', 'max_abs': float}
 ```
 
 **2. Шаг устойчив.** Диагностика жёсткости даёт предельный шаг для

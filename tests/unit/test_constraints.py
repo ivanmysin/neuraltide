@@ -1,4 +1,5 @@
 import json
+from itertools import pairwise
 
 import numpy as np
 import pytest
@@ -366,9 +367,7 @@ class TestAugmentedLagrangianQuadratic:
         # Строгое убывание на шумо-свободном префиксе (1/31 за итерацию);
         # дальше последовательность упирается в точность внутреннего
         # решателя (gtol), поэтому проверяем итоговое сокращение в eta раз.
-        assert all(
-            v_next < v_prev for v_prev, v_next in zip(violations[:4], violations[1:4])
-        )
+        assert all(v_next < v_prev for v_prev, v_next in pairwise(violations[:4]))
         assert violations[-1] < 0.25 * violations[0]
         assert violations[-1] < 1e-6
         assert result.n_outer == 8
@@ -648,7 +647,7 @@ class TestConstrainedProblemL0:
         cp = ConstrainedProblem(problem, [spec])
         phi0 = _l0_shifted_start(problem)
         n_fwd, n_grad = problem.n_forward, problem.n_gradient
-        eval_res, grad = cp.value_and_gradient(phi0)
+        eval_res, _grad = cp.value_and_gradient(phi0)
         # data loss и AL-член в одном прогоне/ленте
         assert problem.n_forward - n_fwd == 1
         assert problem.n_gradient - n_grad == 1

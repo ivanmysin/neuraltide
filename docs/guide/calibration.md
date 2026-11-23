@@ -41,18 +41,20 @@ CalibrationProblem                      ← simulate / evaluate / residual / ∇
 ```python
 from neuraltide.optimization import ObservationSpec, ResidualLoss
 
-objective = ResidualLoss([
-    ObservationSpec(
-        name="exc",             # уникальное имя (ключ в components)
-        population="exc",       # имя популяции в NetworkGraph
-        target=target_exc,      # [batch, T, n_units]
-        sigma=2.0,              # масштаб шума; вклад делится на sigma**2
-        weight=1.0,
-        kind="l2",              # l2|relative|msle|huber|pseudo_huber|cauchy|tukey
-    ),
-])
-ev_components = objective.components(predictions, network)   # вклады по именам
-r = objective.residual(predictions)                          # плоский вектор невязок
+objective = ResidualLoss(
+    [
+        ObservationSpec(
+            name="exc",  # уникальное имя (ключ в components)
+            population="exc",  # имя популяции в NetworkGraph
+            target=target_exc,  # [batch, T, n_units]
+            sigma=2.0,  # масштаб шума; вклад делится на sigma**2
+            weight=1.0,
+            kind="l2",  # l2|relative|msle|huber|pseudo_huber|cauchy|tukey
+        ),
+    ]
+)
+ev_components = objective.components(predictions, network)  # вклады по именам
+r = objective.residual(predictions)  # плоский вектор невязок
 ```
 
 Здесь `predictions` — объект `NetworkOutput` (результат вызова
@@ -102,19 +104,24 @@ r = objective.residual(predictions)                          # плоский в
 
 ```python
 from neuraltide.optimization import (
-    BoundedLogTransform, LogTransform, ParameterSpace,
+    BoundedLogTransform,
+    LogTransform,
+    ParameterSpace,
 )
 
-space = ParameterSpace.from_network(network, transforms={
-    "exc/tau": LogTransform(),                      # theta > 0
-    "in->exc/gsyn_max": LogTransform(),
-    "exc/Delta_I": BoundedLogTransform(min=0.01, max=2.0),  # 0 < min < max
-})
+space = ParameterSpace.from_network(
+    network,
+    transforms={
+        "exc/tau": LogTransform(),  # theta > 0
+        "in->exc/gsyn_max": LogTransform(),
+        "exc/Delta_I": BoundedLogTransform(min=0.01, max=2.0),  # 0 < min < max
+    },
+)
 
-phi = space.pack()                # текущие θ -> φ
-theta = space.unpack(phi)         # φ -> θ (дифференцируемо)
-space.apply_to_model({"exc/tau": tf.constant([[12.0]])})   # явная запись θ
-lo, hi = problem.bounds_phi()     # границы по φ (problem — см. ниже)
+phi = space.pack()  # текущие θ -> φ
+theta = space.unpack(phi)  # φ -> θ (дифференцируемо)
+space.apply_to_model({"exc/tau": tf.constant([[12.0]])})  # явная запись θ
+lo, hi = problem.bounds_phi()  # границы по φ (problem — см. ниже)
 ```
 
 Выбор преобразования:
@@ -159,16 +166,16 @@ problem = CalibrationProblem(
     network,
     space,
     t_seq,
-    inputs=inputs,            # упакованные входы (или None)
-    objective=objective,      # ResidualLoss или callable(predictions, network)
-    initial_state=None,       # (pop, syn) — при необходимости
+    inputs=inputs,  # упакованные входы (или None)
+    objective=objective,  # ResidualLoss или callable(predictions, network)
+    initial_state=None,  # (pop, syn) — при необходимости
 )
 
-ev = problem.evaluate()                    # Evaluation: loss, components, residuals
-out = problem.simulate()                   # прямой прогон NetworkOutput
-ev, grad = problem.value_and_gradient()    # потеря и ∇ по φ
-r = problem.residual()                     # вектор невязок (np.ndarray)
-lo, hi = problem.bounds_phi()              # физические границы в координатах φ
+ev = problem.evaluate()  # Evaluation: loss, components, residuals
+out = problem.simulate()  # прямой прогон NetworkOutput
+ev, grad = problem.value_and_gradient()  # потеря и ∇ по φ
+r = problem.residual()  # вектор невязок (np.ndarray)
+lo, hi = problem.bounds_phi()  # физические границы в координатах φ
 ```
 
 Контракт мутации: вызов с `phi=None` не меняет модель; вызов с явным
@@ -191,8 +198,9 @@ lo, hi = problem.bounds_phi()              # физические границы
 компиляцию задачи:
 
 ```python
-problem = CalibrationProblem(network, space, t_seq, inputs=inputs,
-                             objective=loss, compiled=True)
+problem = CalibrationProblem(
+    network, space, t_seq, inputs=inputs, objective=loss, compiled=True
+)
 ```
 
 `value_and_gradient` / `evaluate` / `residual` пойдут через
@@ -217,13 +225,17 @@ L-BFGS-B.
 ```python
 import numpy as np
 from neuraltide.optimization import (
-    compare_bptt_adjoint, dt_convergence, taylor_test,
+    compare_bptt_adjoint,
+    dt_convergence,
+    taylor_test,
 )
+
 
 # 1. Направленный Taylor test: наклоны ≈ 1 и ≈ 2
 def value_and_grad(phi_np):
     ev, grad = problem.value_and_gradient(phi_np)
     return ev.loss, np.asarray(grad)
+
 
 report = taylor_test(value_and_grad, np.asarray(problem.pack()) + 0.25)
 print(report["slope_R0_median"], report["slope_R1_median"])
@@ -270,7 +282,7 @@ print(result.base.loss_best, result.success, result.message)
 
 # Gauss–Newton/TRF по вектору невязок (forward-якобиан при size <= 200)
 fit = least_squares(problem, method="trf")
-print(fit.base.loss_best, fit.bounds_active)   # координаты на границе
+print(fit.base.loss_best, fit.bounds_active)  # координаты на границе
 ```
 
 Детали, влияющие на устойчивость:
@@ -313,7 +325,9 @@ print(fit.base.loss_best, fit.bounds_active)   # координаты на гр�
 
 ```python
 from neuraltide.optimization import (
-    global_search, multistart, sample_phi0s,
+    global_search,
+    multistart,
+    sample_phi0s,
 )
 
 # Дизайн стартовых точек в допустимой области:
@@ -336,7 +350,7 @@ gs = global_search(
     problem,
     method="de",
     max_evals=500,
-    refine_top_k=1,          # доводка лучших локальным методом
+    refine_top_k=1,  # доводка лучших локальным методом
     local="lbfgsb",
     seed=7,
     options={"popsize": 10, "polish": False},
@@ -379,8 +393,13 @@ gs = global_search(
 
 ```python
 from neuraltide.optimization import (
-    ContinuationScheduler, Stage, dt_continuation, horizon_growth,
-    objective_schedule, smooth_objective, subset_continuation,
+    ContinuationScheduler,
+    Stage,
+    dt_continuation,
+    horizon_growth,
+    objective_schedule,
+    smooth_objective,
+    subset_continuation,
     teacher_forcing_schedule,
 )
 
@@ -394,11 +413,17 @@ res_sub = subset_continuation(
 )
 
 # 3. Расписание стадий с переносом phi между ними:
-scheduler = ContinuationScheduler([
-    Stage("rough",  problem.with_objective(smooth_objective(objective, window=5)), maxiter=50),
-    Stage("fine",   problem, maxiter=200),
-])
-schedule = scheduler.run(problem)          # ScheduleResult с free_run_check
+scheduler = ContinuationScheduler(
+    [
+        Stage(
+            "rough",
+            problem.with_objective(smooth_objective(objective, window=5)),
+            maxiter=50,
+        ),
+        Stage("fine", problem, maxiter=200),
+    ]
+)
+schedule = scheduler.run(problem)  # ScheduleResult с free_run_check
 ```
 
 Teacher forcing — отдельный случай: для автономных (замкнутых) сетей
@@ -407,8 +432,9 @@ Teacher forcing — отдельный случай: для автономных
 исходных входах:
 
 ```python
-stages = teacher_forcing_schedule(problem, target_rates=recorded_rates,
-                                  alphas=[0.8, 0.5, 0.2, 0.0])
+stages = teacher_forcing_schedule(
+    problem, target_rates=recorded_rates, alphas=[0.8, 0.5, 0.2, 0.0]
+)
 result = ContinuationScheduler(stages).run(problem)
 ```
 
@@ -439,16 +465,21 @@ objectives)` — по смене целевой функции; scheduler гар
 
 ```python
 from neuraltide.optimization import (
-    MultipleShootingProblem, ShootingConfig, minimize_lbfgsb,
+    MultipleShootingProblem,
+    ShootingConfig,
+    minimize_lbfgsb,
 )
 
-ms_config = ShootingConfig(nodes=5)               # или явные границы [0, t1, ..., T]
+ms_config = ShootingConfig(nodes=5)  # или явные границы [0, t1, ..., T]
 ms_problem = MultipleShootingProblem(
-    problem, ms_config, continuity_weight=1.0, include_syn_states=True,
+    problem,
+    ms_config,
+    continuity_weight=1.0,
+    include_syn_states=True,
 )
-phi_ms = ms_problem.initialize_from_single_shooting()   # gaps ≈ 0
+phi_ms = ms_problem.initialize_from_single_shooting()  # gaps ≈ 0
 res = minimize_lbfgsb(ms_problem, phi_ms, maxiter=200)
-check = ms_problem.finalize(res.base.phi_best)    # SingleShootingCheck
+check = ms_problem.finalize(res.base.phi_best)  # SingleShootingCheck
 print(check.consistent, check.gaps["max"])
 ```
 
@@ -479,18 +510,23 @@ print(check.consistent, check.gaps["max"])
 
 ```python
 from neuraltide.optimization import (
-    Experiment, MultiExperimentProblem, ParameterSpace,
+    Experiment,
+    MultiExperimentProblem,
+    ParameterSpace,
 )
 
-train_a = Experiment(name="freq8",  t_sequence=t_seq, inputs=inputs_a, objective=obj_a)
+train_a = Experiment(name="freq8", t_sequence=t_seq, inputs=inputs_a, objective=obj_a)
 train_b = Experiment(name="freq16", t_sequence=t_seq, inputs=inputs_b, objective=obj_b)
 holdout = Experiment(name="holdout", t_sequence=t_seq, inputs=inputs_h, objective=obj_h)
 
 problem = MultiExperimentProblem(
-    network, space, experiments=[train_a, train_b], held_out=[holdout],
+    network,
+    space,
+    experiments=[train_a, train_b],
+    held_out=[holdout],
 )
-ev, grad = problem.value_and_gradient()      # сумма потерь в одной GradientTape
-validation = problem.validate(phi_best)      # {'holdout': loss}
+ev, grad = problem.value_and_gradient()  # сумма потерь в одной GradientTape
+validation = problem.validate(phi_best)  # {'holdout': loss}
 ```
 
 Начальные состояния тоже могут быть параметрами. Общие компоненты
@@ -499,11 +535,11 @@ validation = problem.validate(phi_best)      # {'holdout': loss}
 
 ```python
 space = ParameterSpace.from_network(network)
-space.add_initial_state_entries(network)                 # x0/<pop>/<slot> — общие
+space.add_initial_state_entries(network)  # x0/<pop>/<slot> — общие
 space.add_experiment_initial_state_entries(network, "stim")  # x0/stim/<pop>/<slot>
 
 space_c = ParameterSpace.from_network(network)
-space_c.add_initial_state_entries(network, include=[("exc", 0)])   # только слот 0
+space_c.add_initial_state_entries(network, include=[("exc", 0)])  # только слот 0
 ```
 
 `FrozenProblem(problem, free_names=..., fixed=...)` строит задачу над

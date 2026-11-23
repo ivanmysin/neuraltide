@@ -1,13 +1,12 @@
 from collections import namedtuple
 from dataclasses import dataclass
-from typing import Dict, List, Tuple, Optional
 
 import tensorflow as tf
 
 import neuraltide
 import neuraltide.config
 from neuraltide.core.base import PopulationModel, SynapseModel
-from neuraltide.core.types import TensorType, StateList
+from neuraltide.core.types import StateList, TensorType
 from neuraltide.integrators.base import BaseIntegrator
 
 
@@ -51,20 +50,20 @@ class NetworkGraph:
 
     def __init__(self, dt: float):
         self.dt = dt
-        self._populations: Dict[str, PopulationModel] = {}
-        self._synapses: Dict[str, _SynapseEntry] = {}
+        self._populations: dict[str, PopulationModel] = {}
+        self._synapses: dict[str, _SynapseEntry] = {}
         # Внешние входы
-        self._external_inputs: Dict[str, int] = {}  # name -> n_units
-        self._input_names: List[str] = []  # ordered by declaration
-        self._input_offsets: Dict[str, int] = {}  # name -> offset in stacked tensor
+        self._external_inputs: dict[str, int] = {}  # name -> n_units
+        self._input_names: list[str] = []  # ordered by declaration
+        self._input_offsets: dict[str, int] = {}  # name -> offset in stacked tensor
         self._total_input_units: int = 0
         # Кэшированные списки для ускорения итераций
-        self._cached_population_names: Optional[List[str]] = None
-        self._cached_synapse_names: Optional[List[str]] = None
-        self._cached_dynamic_population_names: Optional[List[str]] = None
-        self._pop_info_cache: List[Tuple[str, PopulationModel, int]] = []
-        self._syn_info_cache: List[Tuple[str, _SynapseEntry, int]] = []
-        self._dynamic_pop_indices: List[int] = []
+        self._cached_population_names: list[str] | None = None
+        self._cached_synapse_names: list[str] | None = None
+        self._cached_dynamic_population_names: list[str] | None = None
+        self._pop_info_cache: list[tuple[str, PopulationModel, int]] = []
+        self._syn_info_cache: list[tuple[str, _SynapseEntry, int]] = []
+        self._dynamic_pop_indices: list[int] = []
 
     def add_population(self, name: str, model: PopulationModel) -> None:
         """Регистрирует популяцию (динамическую или InputPopulation)."""
@@ -174,7 +173,7 @@ class NetworkGraph:
                     f"Synapse '{syn_name}': n_post={entry.model.n_post} "
                     f"!= tgt '{entry.tgt}' n_units={tgt_pop.n_units}."
                 )
-        for pop_name, pop in self._populations.items():
+        for pop_name in self._populations:
             has_input = any(e.tgt == pop_name for e in self._synapses.values())
             if not has_input:
                 import warnings
@@ -187,31 +186,31 @@ class NetworkGraph:
         self._build_caches()
 
     @property
-    def population_names(self) -> List[str]:
+    def population_names(self) -> list[str]:
         if self._cached_population_names is None:
             self._build_caches()
         return self._cached_population_names  # type: ignore
 
     @property
-    def synapse_names(self) -> List[str]:
+    def synapse_names(self) -> list[str]:
         if self._cached_synapse_names is None:
             self._build_caches()
         return self._cached_synapse_names  # type: ignore
 
     @property
-    def dynamic_population_names(self) -> List[str]:
+    def dynamic_population_names(self) -> list[str]:
         """Имена динамических популяций."""
         if self._cached_dynamic_population_names is None:
             self._build_caches()
         return self._cached_dynamic_population_names  # type: ignore
 
     @property
-    def input_names(self) -> List[str]:
+    def input_names(self) -> list[str]:
         """Имена объявленных внешних входов (в порядке объявления)."""
         return list(self._input_names)
 
     @property
-    def input_offsets(self) -> Dict[str, int]:
+    def input_offsets(self) -> dict[str, int]:
         """Offsets каждого входа в стекированном тензоре."""
         return dict(self._input_offsets)
 
@@ -220,7 +219,7 @@ class NetworkGraph:
         """Общее число входных каналов."""
         return self._total_input_units
 
-    def pack_inputs(self, input_dict: Dict[str, TensorType]) -> TensorType:
+    def pack_inputs(self, input_dict: dict[str, TensorType]) -> TensorType:
         """Складывает именованные входные тензоры в один.
 
         Args:
@@ -250,7 +249,7 @@ def unpack_state(
     graph: NetworkGraph,
     flat_pop_states: StateList,
     flat_syn_states: StateList,
-) -> Tuple[Dict[str, StateList], Dict[str, StateList]]:
+) -> tuple[dict[str, StateList], dict[str, StateList]]:
     """
     Unpack flat state lists into dictionaries keyed by population/synapse name.
 
@@ -281,8 +280,8 @@ def unpack_state(
 
 def get_firing_rates(
     graph: NetworkGraph,
-    pop_states_dict: Dict[str, StateList],
-) -> Dict[str, TensorType]:
+    pop_states_dict: dict[str, StateList],
+) -> dict[str, TensorType]:
     """
     Get firing rates for all dynamic populations.
 
@@ -346,7 +345,7 @@ class _JointNetworkRHS:
     def __init__(
         self,
         graph: NetworkGraph,
-        input_rates: Optional[Dict[str, TensorType]],
+        input_rates: dict[str, TensorType] | None,
     ):
         self._graph = graph
         self._input_rates = input_rates if input_rates is not None else {}
@@ -355,7 +354,7 @@ class _JointNetworkRHS:
         self,
         pop_states: StateList,
         syn_states: StateList,
-    ) -> Tuple[StateList, StateList]:
+    ) -> tuple[StateList, StateList]:
         graph = self._graph
         dtype = neuraltide.config.get_dtype()
         input_rates = self._input_rates
@@ -376,16 +375,16 @@ class _JointNetworkRHS:
         batch = _infer_batch_size(list(pop_states) + list(syn_states))
 
         # Инициализация синаптических токов для динамических популяций
-        syn_I: Dict[str, TensorType] = {}
-        syn_g: Dict[str, TensorType] = {}
+        syn_I: dict[str, TensorType] = {}
+        syn_g: dict[str, TensorType] = {}
         for name in graph.dynamic_population_names:
             n = graph._populations[name].n_units
             syn_I[name] = tf.zeros([batch, n], dtype=dtype)
             syn_g[name] = tf.zeros([batch, n], dtype=dtype)
 
         # Кэширование firing_rates и observables для каждой популяции
-        cached_rates: Dict[str, TensorType] = {}
-        cached_obs: Dict[str, Dict[str, TensorType]] = {}
+        cached_rates: dict[str, TensorType] = {}
+        cached_obs: dict[str, dict[str, TensorType]] = {}
         for pop_name in graph._populations:
             pop = graph._populations[pop_name]
             pop_state = pop_states_dict[pop_name]
@@ -426,14 +425,14 @@ class _JointNetworkRHS:
 
 
 def _step_fn(
-    states: Tuple[StateList, StateList, TensorType],
+    states: tuple[StateList, StateList, TensorType],
     t: TensorType,
-    input_rates: Optional[Dict[str, TensorType]],
+    input_rates: dict[str, TensorType] | None,
     graph: NetworkGraph,
     integrator: BaseIntegrator,
     *,
     integration_mode: str = "split",
-) -> Tuple[StateList, StateList, TensorType]:
+) -> tuple[StateList, StateList, TensorType]:
     """
     Один шаг симуляции сети. Используется с tf.scan.
 
@@ -493,8 +492,8 @@ def _step_fn(
     batch = _infer_batch_size(list(pop_states) + list(syn_states))
 
     # Инициализация синаптических токов для динамических популяций
-    syn_I: Dict[str, TensorType] = {}
-    syn_g: Dict[str, TensorType] = {}
+    syn_I: dict[str, TensorType] = {}
+    syn_g: dict[str, TensorType] = {}
     for name in graph.dynamic_population_names:
         n = graph._populations[name].n_units
         syn_I[name] = tf.zeros([batch, n], dtype=dtype)
@@ -502,8 +501,8 @@ def _step_fn(
 
     # Кэширование firing_rates и observables для каждой популяции (T1)
     # Вычисляем один раз, а не на каждый синапс
-    cached_rates: Dict[str, TensorType] = {}
-    cached_obs: Dict[str, Dict[str, TensorType]] = {}
+    cached_rates: dict[str, TensorType] = {}
+    cached_obs: dict[str, dict[str, TensorType]] = {}
     for pop_name in graph._populations:
         pop = graph._populations[pop_name]
         pop_state = pop_states_dict[pop_name]
@@ -684,8 +683,8 @@ class NetworkRNN(tf.keras.layers.Layer):
         batch_size = 1
 
         self._init_pop_states: StateList = []
-        self._pop_state_offsets: Dict[str, int] = {}
-        self._pop_state_shapes: List[tf.TensorShape] = []
+        self._pop_state_offsets: dict[str, int] = {}
+        self._pop_state_shapes: list[tf.TensorShape] = []
         for name in self._graph.population_names:
             pop = self._graph._populations[name]
             self._pop_state_offsets[name] = len(self._init_pop_states)
@@ -693,8 +692,8 @@ class NetworkRNN(tf.keras.layers.Layer):
             self._pop_state_shapes.extend(pop.state_size)
 
         self._init_syn_states: StateList = []
-        self._syn_state_offsets: Dict[str, int] = {}
-        self._syn_state_shapes: List[tf.TensorShape] = []
+        self._syn_state_offsets: dict[str, int] = {}
+        self._syn_state_shapes: list[tf.TensorShape] = []
         for name in self._graph.synapse_names:
             entry = self._graph._synapses[name]
             self._syn_state_offsets[name] = len(self._init_syn_states)
@@ -708,10 +707,10 @@ class NetworkRNN(tf.keras.layers.Layer):
         # при смене батча нет. state_size популяций уже содержит батч-ось
         # ([1, n] → [None, n]); у синапсов per-sample форма [n_pre, n_post]
         # без батч-оси — она дописывается вперёд ([None, n_pre, n_post]).
-        self._pop_state_elem_shapes: List[tf.TensorShape] = [
+        self._pop_state_elem_shapes: list[tf.TensorShape] = [
             _with_free_batch(s) for s in self._pop_state_shapes
         ]
-        self._syn_state_elem_shapes: List[tf.TensorShape] = [
+        self._syn_state_elem_shapes: list[tf.TensorShape] = [
             tf.TensorShape([None]).concatenate(s) for s in self._syn_state_shapes
         ]
 
@@ -755,7 +754,7 @@ class NetworkRNN(tf.keras.layers.Layer):
             jit_compile=self._jit_compile,
         )
 
-    def _collect_trainable_vars(self) -> List[tf.Variable]:
+    def _collect_trainable_vars(self) -> list[tf.Variable]:
         vars_ = list(super().trainable_variables)
         for pop in self._graph._populations.values():
             vars_.extend(pop.trainable_variables)
@@ -766,16 +765,16 @@ class NetworkRNN(tf.keras.layers.Layer):
     def _scan_forward_states(
         self,
         t_sequence: TensorType,
-        init_pop: Tuple[TensorType, ...],
-        init_syn: Tuple[TensorType, ...],
-        inputs: Optional[TensorType] = None,
-    ) -> Tuple[
-        Dict[str, TensorType],
+        init_pop: tuple[TensorType, ...],
+        init_syn: tuple[TensorType, ...],
+        inputs: TensorType | None = None,
+    ) -> tuple[
+        dict[str, TensorType],
         TensorType,
-        Tuple[TensorType, ...],
-        Tuple[TensorType, ...],
-        Tuple[TensorType, ...],
-        Tuple[TensorType, ...],
+        tuple[TensorType, ...],
+        tuple[TensorType, ...],
+        tuple[TensorType, ...],
+        tuple[TensorType, ...],
     ]:
         """Скан с возвратом stacked-тензоров состояний.
 
@@ -800,16 +799,16 @@ class NetworkRNN(tf.keras.layers.Layer):
     def _scan_forward_impl(
         self,
         t_sequence: TensorType,
-        init_pop: Tuple[TensorType, ...],
-        init_syn: Tuple[TensorType, ...],
+        init_pop: tuple[TensorType, ...],
+        init_syn: tuple[TensorType, ...],
         inputs: TensorType,
-    ) -> Tuple[
-        Dict[str, TensorType],
+    ) -> tuple[
+        dict[str, TensorType],
         TensorType,
-        Tuple[TensorType, ...],
-        Tuple[TensorType, ...],
-        Tuple[TensorType, ...],
-        Tuple[TensorType, ...],
+        tuple[TensorType, ...],
+        tuple[TensorType, ...],
+        tuple[TensorType, ...],
+        tuple[TensorType, ...],
     ]:
         """Тело скана (tf.while_loop + TensorArray). Трассируется внутри
         self._scan_compiled (см. _make_scan_function); при прямом вызове
@@ -912,7 +911,7 @@ class NetworkRNN(tf.keras.layers.Layer):
         # с TensorArray иначе не компилируется (требуется фиксированный
         # размер tensor list). На семантику не влияет: _cond всё равно
         # останавливается на i == T.
-        (*_, final_pop, final_syn, _, pop_arrs, syn_arrs, stab_arr) = tf.while_loop(
+        (*_, _final_pop, _final_syn, _, pop_arrs, syn_arrs, stab_arr) = tf.while_loop(
             _cond,
             _body,
             loop_vars,
@@ -952,10 +951,10 @@ class NetworkRNN(tf.keras.layers.Layer):
     def call(
         self,
         t_sequence: TensorType,
-        inputs: Optional[TensorType] = None,
-        initial_state: Optional[Tuple[StateList, StateList]] = None,
-        training: Optional[bool] = None,
-        chunk_length: Optional[int] = None,
+        inputs: TensorType | None = None,
+        initial_state: tuple[StateList, StateList] | None = None,
+        training: bool | None = None,
+        chunk_length: int | None = None,
         chunk_grad: str = "checkpointed",
         return_rates: bool = True,
     ) -> NetworkOutput:
@@ -1279,7 +1278,7 @@ class NetworkRNN(tf.keras.layers.Layer):
         pop_names = self._graph.dynamic_population_names
         n_seg = -(-T // chunk_length)
         carry_pop, carry_syn = init_pop, init_syn
-        rates_parts: List[Dict[str, TensorType]] = []
+        rates_parts: list[dict[str, TensorType]] = []
         stab_weighted = tf.zeros((), dtype=self._scan_dtype)
         for k in range(n_seg):
             s = k * chunk_length
@@ -1331,7 +1330,7 @@ class NetworkRNN(tf.keras.layers.Layer):
         return self._jit_compile
 
     @property
-    def pop_state_offsets(self) -> Dict[str, Tuple[int, int]]:
+    def pop_state_offsets(self) -> dict[str, tuple[int, int]]:
         """
         Отображение имя популяции -> (start, count) в плоском списке
         начальных состояний популяций (первый элемент кортежа
@@ -1347,10 +1346,10 @@ class NetworkRNN(tf.keras.layers.Layer):
         }
 
     @property
-    def trainable_variables(self) -> List[tf.Variable]:
+    def trainable_variables(self) -> list[tf.Variable]:
         return self._cached_trainable_vars
 
-    def get_initial_state(self, batch_size: int = 1) -> Tuple[StateList, StateList]:
+    def get_initial_state(self, batch_size: int = 1) -> tuple[StateList, StateList]:
         """Возвращает начальное состояние сети для батча batch_size.
 
         Популяции — тензоры [batch_size, n_i], синапсы —

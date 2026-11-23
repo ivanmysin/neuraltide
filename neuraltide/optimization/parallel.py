@@ -87,16 +87,17 @@ spawn + повторный импорт TensorFlow в worker'ах амортиз
 import multiprocessing
 import pickle
 import time
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, List, Optional, Sequence, Union
+from typing import Any, Union
 
 import numpy as np
 
 __all__ = [
     "CandidateTask",
     "EvalRecord",
-    "SerialPool",
     "ProcessPool",
+    "SerialPool",
     "evaluate_candidates",
     "make_evaluator",
 ]
@@ -125,7 +126,7 @@ class CandidateTask:
 
     index: int
     phi: np.ndarray
-    seed: Optional[int] = None
+    seed: int | None = None
 
     def __post_init__(self) -> None:
         self.index = int(self.index)
@@ -152,10 +153,10 @@ class EvalRecord:
 
     index: int
     loss: float
-    components: Dict[str, float] = field(default_factory=dict)
+    components: dict[str, float] = field(default_factory=dict)
     wall_time: float = 0.0
     n_forward: int = 0
-    error: Optional[str] = None
+    error: str | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -188,7 +189,7 @@ def _check_picklable_factory(build_problem: Callable[[], Any]) -> None:
         ) from exc
 
 
-def _check_tf_threads(tf_threads: Optional[int]) -> Optional[int]:
+def _check_tf_threads(tf_threads: int | None) -> int | None:
     """
     Валидирует tf_threads до запуска процессов.
 
@@ -213,7 +214,7 @@ def _check_tf_threads(tf_threads: Optional[int]) -> Optional[int]:
     return value
 
 
-def _derived_seeds(seed: Optional[int], n: int) -> List[Optional[int]]:
+def _derived_seeds(seed: int | None, n: int) -> list[int | None]:
     """
     Детерминированные per-candidate сиды из np.random.SeedSequence(seed).
 
@@ -227,8 +228,8 @@ def _derived_seeds(seed: Optional[int], n: int) -> List[Optional[int]]:
 
 
 def _normalize_candidates(
-    candidates: Sequence[CandidateLike], seed: Optional[int]
-) -> List[CandidateTask]:
+    candidates: Sequence[CandidateLike], seed: int | None
+) -> list[CandidateTask]:
     """
     Приводит сырые массивы к CandidateTask, сохраняя явные задачи как есть.
 
@@ -238,7 +239,7 @@ def _normalize_candidates(
     """
     items = list(candidates)
     seeds = _derived_seeds(seed, len(items))
-    tasks: List[CandidateTask] = []
+    tasks: list[CandidateTask] = []
     for i, item in enumerate(items):
         if isinstance(item, CandidateTask):
             tasks.append(item)
@@ -247,7 +248,7 @@ def _normalize_candidates(
     return tasks
 
 
-def _count_forward_delta(problem: Any, counter_before: Optional[int]) -> int:
+def _count_forward_delta(problem: Any, counter_before: int | None) -> int:
     """Дельта счётчика n_forward задачи; 0, если счётчика нет."""
     if counter_before is None:
         return 0
@@ -280,7 +281,7 @@ def _evaluate_one(problem: Any, fn: str, task: CandidateTask) -> EvalRecord:
             if raw_components is None
             else {str(k): float(v) for k, v in dict(raw_components).items()}
         )
-    except Exception as exc:  # noqa: BLE001 — ошибки worker'ов безопасны
+    except Exception as exc:
         return EvalRecord(
             index=task.index,
             loss=FAILED_LOSS,
@@ -303,13 +304,13 @@ def _evaluate_one(problem: Any, fn: str, task: CandidateTask) -> EvalRecord:
 # Worker-процесс ProcessPool (module-level — требование pickle/spawn)
 # ---------------------------------------------------------------------------
 
-_WORKER: Dict[str, Any] = {}
+_WORKER: dict[str, Any] = {}
 
 
 def _init_worker(
     build_problem: Callable[[], Any],
     fn: str,
-    tf_threads: Optional[int] = 1,
+    tf_threads: int | None = 1,
 ) -> None:
     """
     Initializer процесса: ограничивает TF-потоки, запоминает фабрику.
@@ -348,7 +349,7 @@ def _worker_evaluate(task: CandidateTask) -> EvalRecord:
     if problem is None:
         try:
             problem = _WORKER["build_problem"]()
-        except Exception as exc:  # noqa: BLE001 — см. политику ошибок
+        except Exception as exc:
             return EvalRecord(
                 index=task.index,
                 loss=FAILED_LOSS,
@@ -395,17 +396,17 @@ class SerialPool:
 
     def map(
         self, tasks: Sequence[CandidateTask], *, ordered: bool = True
-    ) -> List[EvalRecord]:
+    ) -> list[EvalRecord]:
         problem = self._ensure_problem()
         return [_evaluate_one(problem, self._fn, task) for task in tasks]
 
     def close(self) -> None:
         """Совместимость с ProcessPool; освобождать нечего."""
 
-    def __enter__(self) -> "SerialPool":
+    def __enter__(self) -> "SerialPool":  # noqa: PYI034 — ложный positive на string-аннотации
         return self
 
-    def __exit__(self, *exc_info: Any) -> None:
+    def __exit__(self, *exc_info: object) -> None:
         self.close()
 
 
@@ -435,7 +436,7 @@ class ProcessPool:
         build_problem: Callable[[], Any],
         fn: str = "evaluate",
         n_workers: int = 2,
-        tf_threads: Optional[int] = 1,
+        tf_threads: int | None = 1,
     ):
         _check_picklable_factory(build_problem)
         n_workers = int(n_workers)
@@ -447,7 +448,7 @@ class ProcessPool:
         self._build_problem = build_problem
         self._fn = str(fn)
         self.n_workers = n_workers
-        self._pool: Optional[Any] = None
+        self._pool: Any | None = None
 
     def _ensure_pool(self) -> Any:
         if self._pool is None:
@@ -461,7 +462,7 @@ class ProcessPool:
 
     def map(
         self, tasks: Sequence[CandidateTask], *, ordered: bool = True
-    ) -> List[EvalRecord]:
+    ) -> list[EvalRecord]:
         task_list = list(tasks)
         if not task_list:
             return []
@@ -484,10 +485,10 @@ class ProcessPool:
             self._pool.join()
             self._pool = None
 
-    def __enter__(self) -> "ProcessPool":
+    def __enter__(self) -> "ProcessPool":  # noqa: PYI034 — ложный positive на string-аннотации
         return self
 
-    def __exit__(self, *exc_info: Any) -> None:
+    def __exit__(self, *exc_info: object) -> None:
         self.close()
 
 
@@ -502,10 +503,10 @@ def evaluate_candidates(
     *,
     fn: str = "evaluate",
     n_workers: int = 1,
-    seed: Optional[int] = None,
+    seed: int | None = None,
     ordered: bool = True,
-    tf_threads: Optional[int] = 1,
-) -> List[EvalRecord]:
+    tf_threads: int | None = 1,
+) -> list[EvalRecord]:
     """
     Оценивает список кандидатов и возвращает EvalRecord на каждого.
 
@@ -538,7 +539,7 @@ def evaluate_candidates(
     tf_threads = _check_tf_threads(tf_threads)
     tasks = _normalize_candidates(candidates, seed)
     if int(n_workers) <= 1:
-        pool: Union[SerialPool, ProcessPool] = SerialPool(build_problem, fn=fn)
+        pool: SerialPool | ProcessPool = SerialPool(build_problem, fn=fn)
     else:
         pool = ProcessPool(
             build_problem, fn=fn, n_workers=n_workers, tf_threads=tf_threads
@@ -554,10 +555,10 @@ def evaluate_candidates(
 def make_evaluator(
     build_problem: Callable[[], Any],
     n_workers: int = 1,
-    seed: Optional[int] = None,
+    seed: int | None = None,
     *,
     fn: str = "evaluate",
-    tf_threads: Optional[int] = 1,
+    tf_threads: int | None = 1,
 ) -> Callable[[Sequence[np.ndarray]], Sequence[float]]:
     """
     Переиспользуемый evaluator потерь для инъекции в global_search.
@@ -575,7 +576,7 @@ def make_evaluator(
     (по умолчанию 1; None — не трогать потоки TF, старое поведение).
     """
 
-    def _evaluate(candidates: Sequence[np.ndarray]) -> List[float]:
+    def _evaluate(candidates: Sequence[np.ndarray]) -> list[float]:
         tasks = _normalize_candidates(candidates, seed)
         if not tasks:
             return []
@@ -583,7 +584,7 @@ def make_evaluator(
 
     tf_threads = _check_tf_threads(tf_threads)
     if int(n_workers) <= 1:
-        pool: Union[SerialPool, ProcessPool] = SerialPool(build_problem, fn=fn)
+        pool: SerialPool | ProcessPool = SerialPool(build_problem, fn=fn)
     else:
         pool = ProcessPool(
             build_problem, fn=fn, n_workers=n_workers, tf_threads=tf_threads

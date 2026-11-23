@@ -28,8 +28,9 @@ inputs; последний alpha обязан быть 0 (иначе ValueError 
 
 import dataclasses
 import time
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Union
+from typing import Any
 
 import numpy as np
 import tensorflow as tf
@@ -45,13 +46,13 @@ from neuraltide.optimization.results import (
 from neuraltide.optimization.strategies import resolve_local_optimizer
 
 __all__ = [
-    "Stage",
-    "ScheduleResult",
     "ContinuationScheduler",
+    "ScheduleResult",
+    "Stage",
     "horizon_growth",
-    "teacher_forcing_schedule",
     "objective_schedule",
     "smooth_objective",
+    "teacher_forcing_schedule",
 ]
 
 
@@ -78,9 +79,9 @@ class Stage:
 
     name: str
     problem: Any
-    optimizer: Union[str, Callable] = "lbfgsb"
+    optimizer: str | Callable = "lbfgsb"
     maxiter: int = 200
-    meta: Dict[str, Any] = field(default_factory=dict)
+    meta: dict[str, Any] = field(default_factory=dict)
 
 
 def _jsonable(value: Any) -> Any:
@@ -111,11 +112,11 @@ def _result_from_dict(data: Any) -> Any:
     return data
 
 
-def _evaluation_to_dict(evaluation: Optional[Evaluation]) -> Any:
+def _evaluation_to_dict(evaluation: Evaluation | None) -> Any:
     return None if evaluation is None else evaluation.to_dict()
 
 
-def _evaluation_from_dict(data: Any) -> Optional[Evaluation]:
+def _evaluation_from_dict(data: Any) -> Evaluation | None:
     if data is None:
         return None
     return Evaluation(
@@ -149,14 +150,14 @@ class ScheduleResult(_JsonDTO):
         wall_time: суммарное время, секунды.
     """
 
-    stage_results: List[Any] = field(default_factory=list)
+    stage_results: list[Any] = field(default_factory=list)
     final_result: Any = None
-    alpha_history: List[float] = field(default_factory=list)
-    free_run_check: Optional[Evaluation] = None
-    history: List[Dict[str, Any]] = field(default_factory=list)
+    alpha_history: list[float] = field(default_factory=list)
+    free_run_check: Evaluation | None = None
+    history: list[dict[str, Any]] = field(default_factory=list)
     wall_time: float = 0.0
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "stage_results": [_result_to_dict(r) for r in self.stage_results],
             "final_result": _result_to_dict(self.final_result),
@@ -242,8 +243,8 @@ class ContinuationScheduler:
             )
         t_begin = time.perf_counter()
         phi = np.asarray(problem.pack(), dtype=np.float64).reshape(-1)
-        stage_results: List[Any] = []
-        history: List[Dict[str, Any]] = []
+        stage_results: list[Any] = []
+        history: list[dict[str, Any]] = []
         for stage in self.stages:
             t0 = time.perf_counter()
             result, opt_name = self._run_stage(stage, phi)
@@ -339,7 +340,7 @@ def _slice_objective(objective, start: int, stop: int):
     return type(objective)(sliced)
 
 
-def horizon_growth(base_problem, horizons, *, build_inputs=None) -> List[Stage]:
+def horizon_growth(base_problem, horizons, *, build_inputs=None) -> list[Stage]:
     """
     Расписание «короткий горизонт -> длинный».
 
@@ -358,7 +359,7 @@ def horizon_growth(base_problem, horizons, *, build_inputs=None) -> List[Stage]:
     """
     t_seq = base_problem.t_sequence
     total = int(t_seq.shape[1])
-    spans: List[tuple] = []
+    spans: list[tuple] = []
     for horizon in horizons:
         if isinstance(horizon, (tuple, list)):
             start, stop = int(horizon[0]), int(horizon[1])
@@ -370,7 +371,7 @@ def horizon_growth(base_problem, horizons, *, build_inputs=None) -> List[Stage]:
                 f"при T={total}."
             )
         spans.append((start, stop))
-    stages: List[Stage] = []
+    stages: list[Stage] = []
     for start, stop in spans:
         view = base_problem.time_slice(start, stop)
         if build_inputs is not None:
@@ -388,7 +389,7 @@ def horizon_growth(base_problem, horizons, *, build_inputs=None) -> List[Stage]:
     return stages
 
 
-def teacher_forcing_schedule(base_problem, target_rates, alphas) -> List[Stage]:
+def teacher_forcing_schedule(base_problem, target_rates, alphas) -> list[Stage]:
     """
     Расписание teacher forcing «открытая сеть -> замкнутая».
 
@@ -433,7 +434,7 @@ def teacher_forcing_schedule(base_problem, target_rates, alphas) -> List[Stage]:
             f"{inputs.shape.as_list()}."
         )
     dtype = neuraltide.config.get_dtype()
-    stages: List[Stage] = []
+    stages: list[Stage] = []
     for alpha in alphas:
         mixed = cast_if_needed((1.0 - alpha) * inputs + alpha * target, dtype)
         stages.append(
@@ -446,7 +447,7 @@ def teacher_forcing_schedule(base_problem, target_rates, alphas) -> List[Stage]:
     return stages
 
 
-def objective_schedule(base_problem, objectives) -> List[Stage]:
+def objective_schedule(base_problem, objectives) -> list[Stage]:
     """
     Расписание «сначала один objective -> затем другой» (например,
     feature-based -> pointwise): каждая стадия — view с новым objective.
@@ -454,7 +455,7 @@ def objective_schedule(base_problem, objectives) -> List[Stage]:
     objectives = list(objectives)
     if not objectives:
         raise ValueError("objective_schedule: непустой objectives обязателен.")
-    stages: List[Stage] = []
+    stages: list[Stage] = []
     for index, objective in enumerate(objectives):
         if not callable(objective):
             raise TypeError(

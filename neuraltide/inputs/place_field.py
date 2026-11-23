@@ -1,6 +1,7 @@
+from typing import Any
+
 import numpy as np
 import tensorflow as tf
-from typing import Any, Dict, Optional, Tuple
 
 import neuraltide.config
 from neuraltide.core.base import BaseInputGenerator, _get_constraint_name
@@ -85,8 +86,8 @@ class PlaceFieldGenerator(BaseInputGenerator):
     def __init__(
         self,
         dt: float,
-        params: Dict[str, Any],
-        arena_size: Tuple[Tuple[float, float], Tuple[float, float]] = (
+        params: dict[str, Any],
+        arena_size: tuple[tuple[float, float], tuple[float, float]] = (
             (-100.0, 100.0),
             (-100.0, 100.0),
         ),
@@ -145,7 +146,7 @@ class PlaceFieldGenerator(BaseInputGenerator):
         self._kappa_mean = float(np.mean(kappa_np))
 
     @property
-    def arena_size(self) -> Tuple[Tuple[float, float], Tuple[float, float]]:
+    def arena_size(self) -> tuple[tuple[float, float], tuple[float, float]]:
         return self._arena_size
 
     @property
@@ -180,9 +181,7 @@ class PlaceFieldGenerator(BaseInputGenerator):
         self._two_pi = 2.0 * np.pi
         self._ms_per_s = 1000.0
 
-    def call(
-        self, t: TensorType, extra_inputs: Optional[TensorType] = None
-    ) -> TensorType:
+    def call(self, t: TensorType, extra_inputs: TensorType | None = None) -> TensorType:
         """
         Args:
             t: время в мс, shape [batch, T, 1], [batch, T] или [T].
@@ -274,7 +273,7 @@ class PlaceFieldGenerator(BaseInputGenerator):
             py = tf.zeros([batch_n, T_n, 1], dtype=dtype)
             return px, py, spatial, dphi
 
-        pos_x, pos_y, spatial, dphi = tf.cond(
+        _pos_x, _pos_y, spatial, dphi = tf.cond(
             tf.greater_equal(extra_cols, 2), _has_position, _no_position
         )
 
@@ -296,7 +295,7 @@ class PlaceFieldGenerator(BaseInputGenerator):
         return rate
 
     @property
-    def parameter_spec(self) -> Dict[str, Dict[str, Any]]:
+    def parameter_spec(self) -> dict[str, dict[str, Any]]:
         return {
             "center_x": {
                 "shape": (self.n_units,),
@@ -372,5 +371,5 @@ class PlaceFieldGenerator(BaseInputGenerator):
             },
         }
 
-    def _get_constraint_name(self, var: tf.Variable) -> Optional[str]:
+    def _get_constraint_name(self, var: tf.Variable) -> str | None:
         return _get_constraint_name(var)

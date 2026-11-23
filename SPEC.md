@@ -198,10 +198,12 @@ import tensorflow as tf
 
 _DTYPE = tf.float32
 
+
 def set_dtype(dtype: tf.DType) -> None:
     """Устанавливает глобальный тип данных. Должен вызываться до создания любых объектов."""
     global _DTYPE
     _DTYPE = dtype
+
 
 def get_dtype() -> tf.DType:
     """Возвращает текущий глобальный тип данных."""
@@ -213,17 +215,20 @@ def get_dtype() -> tf.DType:
 ```python
 from typing import Dict, Type
 
-POPULATION_REGISTRY: Dict[str, Type] = {}   # заполняется при импорте встроенных классов
-SYNAPSE_REGISTRY:    Dict[str, Type] = {}
-INPUT_REGISTRY:      Dict[str, Type] = {}
+POPULATION_REGISTRY: Dict[str, Type] = {}  # заполняется при импорте встроенных классов
+SYNAPSE_REGISTRY: Dict[str, Type] = {}
+INPUT_REGISTRY: Dict[str, Type] = {}
+
 
 def register_population(name: str, cls: Type) -> None:
     """Регистрирует пользовательский класс PopulationModel для config-first API."""
     POPULATION_REGISTRY[name] = cls
 
+
 def register_synapse(name: str, cls: Type) -> None:
     """Регистрирует пользовательский класс SynapseModel."""
     SYNAPSE_REGISTRY[name] = cls
+
 
 def register_input(name: str, cls: Type) -> None:
     """Регистрирует пользовательский класс BaseInputGenerator."""
@@ -239,14 +244,16 @@ import tensorflow as tf
 from typing import Dict, List, Tuple, Optional, Any, Type
 import neuraltide.config as _config
 
+
 def get_pi() -> tf.Tensor:
     """Возвращает π с текущим глобальным dtype."""
     return tf.constant(3.14159265358979323846, dtype=_config.get_dtype())
 
+
 # Алиасы типов
-TensorType  = tf.Tensor
-StateList   = List[TensorType]
-ParamDict   = Dict[str, Any]
+TensorType = tf.Tensor
+StateList = List[TensorType]
+ParamDict = Dict[str, Any]
 ```
 
 ---
@@ -286,8 +293,7 @@ class PopulationModel(tf.keras.layers.Layer):
         name (str): имя слоя Keras.
     """
 
-    def __init__(self, n_units: int, dt: float,
-                 name: str = "population", **kwargs):
+    def __init__(self, n_units: int, dt: float, name: str = "population", **kwargs):
         super().__init__(name=name, **kwargs)
         self.n_units = n_units
         self.dt = dt
@@ -331,12 +337,12 @@ class PopulationModel(tf.keras.layers.Layer):
                 f"parameter '{name}' not found in params."
             )
         if not isinstance(spec, dict):
-            spec = {'value': spec, 'trainable': False}
+            spec = {"value": spec, "trainable": False}
 
-        raw   = spec['value']
-        train = spec.get('trainable', False)
-        lo    = spec.get('min', None)
-        hi    = spec.get('max', None)
+        raw = spec["value"]
+        train = spec.get("trainable", False)
+        lo = spec.get("min", None)
+        hi = spec.get("max", None)
 
         value = tf.constant(raw, dtype=neuraltide.config.get_dtype())
         if value.shape.rank == 0:
@@ -349,8 +355,10 @@ class PopulationModel(tf.keras.layers.Layer):
                 )
 
         from neuraltide.constraints import MinMaxConstraint
-        constraint = MinMaxConstraint(lo, hi) \
-                     if (lo is not None or hi is not None) else None
+
+        constraint = (
+            MinMaxConstraint(lo, hi) if (lo is not None or hi is not None) else None
+        )
 
         return self.add_weight(
             shape=(self.n_units,),
@@ -436,7 +444,7 @@ class PopulationModel(tf.keras.layers.Layer):
         По умолчанию возвращает только {'firing_rate': get_firing_rate(state)}.
         Подкласс переопределяет для добавления дополнительных наблюдаемых.
         """
-        return {'firing_rate': self.get_firing_rate(state)}
+        return {"firing_rate": self.get_firing_rate(state)}
 
     @property
     @abstractmethod
@@ -494,12 +502,13 @@ class SynapseModel(tf.keras.layers.Layer):
         name (str): имя слоя Keras.
     """
 
-    def __init__(self, n_pre: int, n_post: int, dt: float,
-                 name: str = "synapse", **kwargs):
+    def __init__(
+        self, n_pre: int, n_post: int, dt: float, name: str = "synapse", **kwargs
+    ):
         super().__init__(name=name, **kwargs)
-        self.n_pre  = n_pre
+        self.n_pre = n_pre
         self.n_post = n_post
-        self.dt     = dt
+        self.dt = dt
         # state_size ДОЛЖЕН быть задан в подклассе
 
     def _make_param(self, params: dict, name: str) -> tf.Variable:
@@ -535,23 +544,24 @@ class SynapseModel(tf.keras.layers.Layer):
         spec = params.get(name)
         if spec is None:
             raise ValueError(
-                f"SynapseModel '{self.name}': "
-                f"parameter '{name}' not found in params."
+                f"SynapseModel '{self.name}': parameter '{name}' not found in params."
             )
         if not isinstance(spec, dict):
-            spec = {'value': spec, 'trainable': False}
+            spec = {"value": spec, "trainable": False}
 
-        raw   = spec['value']
-        train = spec.get('trainable', False)
-        lo    = spec.get('min', None)
-        hi    = spec.get('max', None)
+        raw = spec["value"]
+        train = spec.get("trainable", False)
+        lo = spec.get("min", None)
+        hi = spec.get("max", None)
 
         value = tf.constant(raw, dtype=neuraltide.config.get_dtype())
-        value = self._broadcast_to_matrix(value, name)   # → [n_pre, n_post]
+        value = self._broadcast_to_matrix(value, name)  # → [n_pre, n_post]
 
         from neuraltide.constraints import MinMaxConstraint
-        constraint = MinMaxConstraint(lo, hi) \
-                     if (lo is not None or hi is not None) else None
+
+        constraint = (
+            MinMaxConstraint(lo, hi) if (lo is not None or hi is not None) else None
+        )
 
         return self.add_weight(
             shape=(self.n_pre, self.n_post),
@@ -572,22 +582,17 @@ class SynapseModel(tf.keras.layers.Layer):
         rank = value.shape.rank
 
         if rank == 0:
-            return tf.broadcast_to(
-                tf.reshape(value, [1, 1]),
-                [self.n_pre, self.n_post]
-            )
+            return tf.broadcast_to(tf.reshape(value, [1, 1]), [self.n_pre, self.n_post])
 
         elif rank == 1:
             length = int(value.shape[0])
             if length == self.n_pre:
                 return tf.broadcast_to(
-                    tf.reshape(value, [self.n_pre, 1]),
-                    [self.n_pre, self.n_post]
+                    tf.reshape(value, [self.n_pre, 1]), [self.n_pre, self.n_post]
                 )
             elif length == self.n_post and self.n_pre != self.n_post:
                 return tf.broadcast_to(
-                    tf.reshape(value, [1, self.n_post]),
-                    [self.n_pre, self.n_post]
+                    tf.reshape(value, [1, self.n_post]), [self.n_pre, self.n_post]
                 )
             else:
                 raise ValueError(
@@ -621,9 +626,9 @@ class SynapseModel(tf.keras.layers.Layer):
     def forward(
         self,
         pre_firing_rate: TensorType,
-        post_voltage:    TensorType,
-        state:           StateList,
-        dt:              float,
+        post_voltage: TensorType,
+        state: StateList,
+        dt: float,
     ) -> Tuple[Dict[str, TensorType], StateList]:
         """
         Вычисляет новое состояние синапса и возвращает синаптический ток.
@@ -691,8 +696,9 @@ class BaseInputGenerator(tf.keras.layers.Layer):
         name: имя слоя Keras.
     """
 
-    def __init__(self, params: Dict[str, Any], dt: float,
-                 name: str = "input_generator", **kwargs):
+    def __init__(
+        self, params: Dict[str, Any], dt: float, name: str = "input_generator", **kwargs
+    ):
         super().__init__(name=name, **kwargs)
         self.dt = dt
         self._params = params
@@ -707,7 +713,7 @@ class BaseInputGenerator(tf.keras.layers.Layer):
         max_len = 1
         for key, spec in self._params.items():
             if isinstance(spec, dict):
-                value = spec.get('value', None)
+                value = spec.get("value", None)
             else:
                 value = spec
             if value is not None and isinstance(value, (list, tuple)):
@@ -760,13 +766,9 @@ class InputPopulation(PopulationModel):
     """
 
     def __init__(self, generator: BaseInputGenerator, **kwargs):
-        super().__init__(
-            n_units=generator.n_units,
-            dt=generator.dt,
-            **kwargs
-        )
+        super().__init__(n_units=generator.n_units, dt=generator.dt, **kwargs)
         self.generator = generator
-        self.state_size = [tf.TensorShape([1, 1])]   # [t_current]
+        self.state_size = [tf.TensorShape([1, 1])]  # [t_current]
 
     def get_initial_state(self, batch_size: int = 1) -> StateList:
         return [tf.zeros([1, 1], dtype=neuraltide.config.get_dtype())]
@@ -785,12 +787,12 @@ class InputPopulation(PopulationModel):
         Returns:
             tf.Tensor, shape [1, n_units], в Гц.
         """
-        t = state[0]   # [1, 1]
+        t = state[0]  # [1, 1]
         rate = self.generator(t)
         return tf.reshape(rate, [1, self.n_units])
 
     def observables(self, state: StateList) -> Dict[str, TensorType]:
-        return {'firing_rate': self.get_firing_rate(state)}
+        return {"firing_rate": self.get_firing_rate(state)}
 
     @property
     def parameter_spec(self) -> Dict[str, Dict[str, Any]]:
@@ -824,8 +826,9 @@ class NetworkState:
         затем все синапсы (в порядке регистрации),
         затем один скалярный тензор stability_error shape [1].
     """
+
     population_states: Dict[str, StateList]
-    synapse_states:    Dict[str, StateList]
+    synapse_states: Dict[str, StateList]
 
     def to_flat_list(self) -> StateList:
         """
@@ -842,22 +845,22 @@ class NetworkState:
     @staticmethod
     def from_flat_list(
         flat: StateList,
-        pop_names:    List[str],
-        pop_sizes:    Dict[str, int],   # name → число тензоров в state
-        syn_names:    List[str],
-        syn_sizes:    Dict[str, int],
-    ) -> 'NetworkState':
+        pop_names: List[str],
+        pop_sizes: Dict[str, int],  # name → число тензоров в state
+        syn_names: List[str],
+        syn_sizes: Dict[str, int],
+    ) -> "NetworkState":
         """Десериализует из плоского списка."""
         idx = 0
         pop_states = {}
         for name in pop_names:
             n = pop_sizes[name]
-            pop_states[name] = flat[idx:idx+n]
+            pop_states[name] = flat[idx : idx + n]
             idx += n
         syn_states = {}
         for name in syn_names:
             n = syn_sizes[name]
-            syn_states[name] = flat[idx:idx+n]
+            syn_states[name] = flat[idx : idx + n]
             idx += n
         return NetworkState(
             population_states=pop_states,
@@ -875,8 +878,9 @@ class NetworkState:
 @dataclass
 class _SynapseEntry:
     model: SynapseModel
-    src:   str
-    tgt:   str
+    src: str
+    tgt: str
+
 
 class NetworkGraph:
     """
@@ -913,8 +917,8 @@ class NetworkGraph:
 
     def __init__(self, dt: float):
         self.dt = dt
-        self._populations: OrderedDict[str, PopulationModel]  = OrderedDict()
-        self._synapses:    OrderedDict[str, _SynapseEntry]    = OrderedDict()
+        self._populations: OrderedDict[str, PopulationModel] = OrderedDict()
+        self._synapses: OrderedDict[str, _SynapseEntry] = OrderedDict()
 
     def add_population(self, name: str, model: PopulationModel) -> None:
         """
@@ -933,7 +937,7 @@ class NetworkGraph:
 
     def add_input_population(
         self,
-        name:      str,
+        name: str,
         generator: BaseInputGenerator,
     ) -> None:
         """
@@ -953,16 +957,15 @@ class NetworkGraph:
                               TsodyksMarkramSynapse(n_pre=1, n_post=4, ...),
                               src='theta', tgt='exc')
         """
-        pop = InputPopulation(generator=generator, dt=self.dt,
-                              name=name + '_input_pop')
+        pop = InputPopulation(generator=generator, dt=self.dt, name=name + "_input_pop")
         self.add_population(name, pop)
 
     def add_synapse(
         self,
-        name:  str,
+        name: str,
         model: SynapseModel,
-        src:   str,
-        tgt:   str,
+        src: str,
+        tgt: str,
     ) -> None:
         """
         Регистрирует синаптическую проекцию.
@@ -1026,14 +1029,12 @@ class NetworkGraph:
         for pop_name, pop in self._populations.items():
             if isinstance(pop, InputPopulation):
                 continue
-            has_input = any(
-                e.tgt == pop_name for e in self._synapses.values()
-            )
+            has_input = any(e.tgt == pop_name for e in self._synapses.values())
             if not has_input:
                 import warnings
+
                 warnings.warn(
-                    f"Population '{pop_name}' has no incoming synapses.",
-                    UserWarning
+                    f"Population '{pop_name}' has no incoming synapses.", UserWarning
                 )
 
     @property
@@ -1048,7 +1049,8 @@ class NetworkGraph:
     def dynamic_population_names(self) -> List[str]:
         """Имена только динамических популяций (без InputPopulation)."""
         return [
-            name for name, pop in self._populations.items()
+            name
+            for name, pop in self._populations.items()
             if not isinstance(pop, InputPopulation)
         ]
 
@@ -1056,7 +1058,8 @@ class NetworkGraph:
     def input_population_names(self) -> List[str]:
         """Имена только входных популяций."""
         return [
-            name for name, pop in self._populations.items()
+            name
+            for name, pop in self._populations.items()
             if isinstance(pop, InputPopulation)
         ]
 ```
@@ -1110,11 +1113,10 @@ class NetworkRNNCell(tf.keras.layers.AbstractRNNCell):
         sum(n_units для динамических популяций) + 1 (stability_error).
     """
 
-    def __init__(self, graph: NetworkGraph,
-                 integrator: 'BaseIntegrator', **kwargs):
+    def __init__(self, graph: NetworkGraph, integrator: "BaseIntegrator", **kwargs):
         super().__init__(**kwargs)
         graph.validate()
-        self.graph      = graph
+        self.graph = graph
         self.integrator = integrator
         self._build_size_maps()
 
@@ -1151,9 +1153,9 @@ class NetworkRNNCell(tf.keras.layers.AbstractRNNCell):
         # dynamic firing rates + stability_error
         return self._total_dynamic_units + 1
 
-    def get_initial_state(self, inputs=None,
-                          batch_size: int = 1,
-                          dtype=None) -> StateList:
+    def get_initial_state(
+        self, inputs=None, batch_size: int = 1, dtype=None
+    ) -> StateList:
         """Собирает начальные состояния всех популяций и синапсов."""
         flat = []
         for pop in self.graph._populations.values():
@@ -1178,15 +1180,15 @@ class NetworkRNNCell(tf.keras.layers.AbstractRNNCell):
                 new_states: обновлённый flat list.
         """
         dtype = neuraltide.config.get_dtype()
-        t     = inputs   # [batch, 1]
+        t = inputs  # [batch, 1]
 
         # 1. Распаковать состояние
         net_state = NetworkState.from_flat_list(
-            flat      = list(states),
-            pop_names = self.graph.population_names,
-            pop_sizes = self._pop_state_sizes,
-            syn_names = self.graph.synapse_names,
-            syn_sizes = self._syn_state_sizes,
+            flat=list(states),
+            pop_names=self.graph.population_names,
+            pop_sizes=self._pop_state_sizes,
+            syn_names=self.graph.synapse_names,
+            syn_sizes=self._syn_state_sizes,
         )
 
         # 2. Обновить InputPopulation (состояние = текущее t)
@@ -1203,38 +1205,35 @@ class NetworkRNNCell(tf.keras.layers.AbstractRNNCell):
             syn_g[name] = tf.zeros([1, n], dtype=dtype)
 
         for syn_name, entry in self.graph._synapses.items():
-            src_pop   = self.graph._populations[entry.src]
-            tgt_pop   = self.graph._populations[entry.tgt]
+            src_pop = self.graph._populations[entry.src]
+            tgt_pop = self.graph._populations[entry.tgt]
             src_state = net_state.population_states[entry.src]
             tgt_state = net_state.population_states[entry.tgt]
             syn_state = net_state.synapse_states[syn_name]
 
-            pre_rate = src_pop.get_firing_rate(src_state)   # [1, n_pre]
+            pre_rate = src_pop.get_firing_rate(src_state)  # [1, n_pre]
 
-            tgt_obs  = tgt_pop.observables(tgt_state)
-            post_v   = tgt_obs.get(
-                'v_mean',
-                tf.zeros([1, tgt_pop.n_units], dtype=dtype)
-            )                                                # [1, n_post]
+            tgt_obs = tgt_pop.observables(tgt_state)
+            post_v = tgt_obs.get(
+                "v_mean", tf.zeros([1, tgt_pop.n_units], dtype=dtype)
+            )  # [1, n_post]
 
             current_dict, new_syn_state = entry.model.forward(
                 pre_rate, post_v, syn_state, entry.model.dt
             )
 
-            syn_I[entry.tgt] += current_dict['I_syn']
-            syn_g[entry.tgt] += current_dict['g_syn']
+            syn_I[entry.tgt] += current_dict["I_syn"]
+            syn_g[entry.tgt] += current_dict["g_syn"]
             net_state.synapse_states[syn_name] = new_syn_state
 
         # 4. Обновить динамические популяции
         stability_error = tf.zeros([1], dtype=dtype)
         for name in self.graph.dynamic_population_names:
-            pop       = self.graph._populations[name]
+            pop = self.graph._populations[name]
             pop_state = net_state.population_states[name]
-            total_syn = {'I_syn': syn_I[name], 'g_syn': syn_g[name]}
+            total_syn = {"I_syn": syn_I[name], "g_syn": syn_g[name]}
 
-            new_pop_state, local_err = self.integrator.step(
-                pop, pop_state, total_syn
-            )
+            new_pop_state, local_err = self.integrator.step(pop, pop_state, total_syn)
             net_state.population_states[name] = new_pop_state
             stability_error += local_err
 
@@ -1246,13 +1245,12 @@ class NetworkRNNCell(tf.keras.layers.AbstractRNNCell):
                 )
                 for name in self.graph.dynamic_population_names
             ],
-            axis=-1
-        )   # [1, total_n_dynamic_units]
+            axis=-1,
+        )  # [1, total_n_dynamic_units]
 
         output = tf.concat(
-            [rates, stability_error[tf.newaxis, :]],
-            axis=-1
-        )   # [1, total_n_dynamic_units + 1]
+            [rates, stability_error[tf.newaxis, :]], axis=-1
+        )  # [1, total_n_dynamic_units + 1]
 
         # 6. Упаковать новое состояние
         new_states_flat = net_state.to_flat_list()
@@ -1288,8 +1286,9 @@ class NetworkOutput:
             Суммарная оценка численной ошибки интегрирования по всем шагам.
             0.0 если используется EulerIntegrator.
     """
-    firing_rates:    Dict[str, TensorType]
-    stability_loss:  TensorType
+
+    firing_rates: Dict[str, TensorType]
+    stability_loss: TensorType
 
 
 class NetworkRNN(tf.keras.layers.Layer):
@@ -1329,17 +1328,17 @@ class NetworkRNN(tf.keras.layers.Layer):
 
     def __init__(
         self,
-        graph:                    NetworkGraph,
-        integrator:               'BaseIntegrator',
-        return_sequences:         bool  = True,
-        return_hidden_states:     bool  = False,
+        graph: NetworkGraph,
+        integrator: "BaseIntegrator",
+        return_sequences: bool = True,
+        return_hidden_states: bool = False,
         stability_penalty_weight: float = 0.0,
         **kwargs,
     ):
         super().__init__(**kwargs)
-        self._cell                    = NetworkRNNCell(graph, integrator)
-        self._graph                   = graph
-        self._return_hidden_states    = return_hidden_states
+        self._cell = NetworkRNNCell(graph, integrator)
+        self._graph = graph
+        self._return_hidden_states = return_hidden_states
         self._stability_penalty_weight = stability_penalty_weight
         self._rnn = tf.keras.layers.RNN(
             self._cell,
@@ -1349,35 +1348,34 @@ class NetworkRNN(tf.keras.layers.Layer):
 
     def call(
         self,
-        t_sequence:    TensorType,
+        t_sequence: TensorType,
         initial_state: Optional[StateList] = None,
-        training:      bool = False,
+        training: bool = False,
     ) -> NetworkOutput:
         if initial_state is None:
             initial_state = self._cell.get_initial_state(batch_size=1)
 
-        raw = self._rnn(t_sequence, initial_state=initial_state,
-                        training=training)
+        raw = self._rnn(t_sequence, initial_state=initial_state, training=training)
         # raw shape: [batch, T, total_n_dynamic_units + 1]
 
         total_units = self._cell._total_dynamic_units
-        raw_rates   = raw[:, :, :total_units]          # [batch, T, total_units]
-        raw_err     = raw[:, :, total_units:]           # [batch, T, 1]
+        raw_rates = raw[:, :, :total_units]  # [batch, T, total_units]
+        raw_err = raw[:, :, total_units:]  # [batch, T, 1]
 
         # Разбить по популяциям
         firing_rates: Dict[str, TensorType] = {}
         offset = 0
         for name in self._graph.dynamic_population_names:
             n = self._graph._populations[name].n_units
-            firing_rates[name] = raw_rates[:, :, offset:offset + n]
+            firing_rates[name] = raw_rates[:, :, offset : offset + n]
             offset += n
 
         stability_loss = self._stability_penalty_weight * tf.reduce_mean(raw_err)
 
         return NetworkOutput(
-            firing_rates   = firing_rates,
-            hidden_states  = None,   # TODO: return_hidden_states в v0.2
-            stability_loss = stability_loss,
+            firing_rates=firing_rates,
+            hidden_states=None,  # TODO: return_hidden_states в v0.2
+            stability_loss=stability_loss,
         )
 ```
 
@@ -1405,8 +1403,8 @@ class BaseIntegrator:
     @abstractmethod
     def step(
         self,
-        population:        PopulationModel,
-        state:             StateList,
+        population: PopulationModel,
+        state: StateList,
         total_synaptic_input: Dict[str, TensorType],
     ) -> Tuple[StateList, TensorType]:
         """
@@ -1500,14 +1498,14 @@ return tf.nn.relu(r)  # dimensionless rate
 
 **`derivatives(state, total_synaptic_input)`:**
 ```python
-r, v, w    = state
-g_syn_tot  = total_synaptic_input['g_syn']   # [1, n_units]
-I_syn      = total_synaptic_input['I_syn']   # [1, n_units]
-PI         = get_pi()
+r, v, w = state
+g_syn_tot = total_synaptic_input["g_syn"]  # [1, n_units]
+I_syn = total_synaptic_input["I_syn"]  # [1, n_units]
+PI = get_pi()
 
-drdt = Delta_I/PI + 2*r*v - (alpha + g_syn_tot)*r
-dvdt = v**2 - alpha*v - w + I_ext + I_syn - (PI*r)**2
-dwdt = a*(b*v - w) + w_jump*r
+drdt = Delta_I / PI + 2 * r * v - (alpha + g_syn_tot) * r
+dvdt = v**2 - alpha * v - w + I_ext + I_syn - (PI * r) ** 2
+dwdt = a * (b * v - w) + w_jump * r
 return [drdt, dvdt, dwdt]
 ```
 
@@ -1579,34 +1577,34 @@ return J_out * tf.ones([1, 1])  # scalar firing rate
 **`forward()` логика:**
 ```python
 # Нормализованная пресинаптическая активность
-firing_probs   = dt * pre_firing_rate / 1000.0    # [1, n_pre] → вероятность в dt
-firing_probs_T = tf.transpose(firing_probs)        # [n_pre, 1]
-FRpre_normed   = pconn * firing_probs_T            # [n_pre, n_post]  ← маска топологии
+firing_probs = dt * pre_firing_rate / 1000.0  # [1, n_pre] → вероятность в dt
+firing_probs_T = tf.transpose(firing_probs)  # [n_pre, 1]
+FRpre_normed = pconn * firing_probs_T  # [n_pre, n_post]  ← маска топологии
 
 # Аналитическое решение
-tau1r   = tf.where(tau_d != tau_r, tau_d/(tau_d - tau_r), 1e-13)
-exp_d   = tf.exp(-dt / tau_d)
-exp_f   = tf.exp(-dt / tau_f)
-exp_r   = tf.exp(-dt / tau_r)
+tau1r = tf.where(tau_d != tau_r, tau_d / (tau_d - tau_r), 1e-13)
+exp_d = tf.exp(-dt / tau_d)
+exp_f = tf.exp(-dt / tau_f)
+exp_r = tf.exp(-dt / tau_r)
 
-a_   = A * exp_d
-r_   = 1 + (R - 1 + tau1r*A)*exp_r - tau1r*A
-u_   = U * exp_f
+a_ = A * exp_d
+r_ = 1 + (R - 1 + tau1r * A) * exp_r - tau1r * A
+u_ = U * exp_f
 
 released = U * r_ * FRpre_normed
 
-U_new = u_ + Uinc*(1 - u_)*FRpre_normed
+U_new = u_ + Uinc * (1 - u_) * FRpre_normed
 A_new = a_ + released
 R_new = r_ - released
 
 # Синаптический ток
-g_eff   = gsyn_max * A_new                         # [n_pre, n_post]
-post_v_T = tf.transpose(post_voltage)              # [n_post, 1]
-I_pair   = g_eff * (e_r - post_v_T)               # [n_pre, n_post]
-I_syn    = tf.reduce_sum(I_pair,  axis=0, keepdims=True)  # [1, n_post]
-g_syn    = tf.reduce_sum(g_eff,   axis=0, keepdims=True)  # [1, n_post]
+g_eff = gsyn_max * A_new  # [n_pre, n_post]
+post_v_T = tf.transpose(post_voltage)  # [n_post, 1]
+I_pair = g_eff * (e_r - post_v_T)  # [n_pre, n_post]
+I_syn = tf.reduce_sum(I_pair, axis=0, keepdims=True)  # [1, n_post]
+g_syn = tf.reduce_sum(g_eff, axis=0, keepdims=True)  # [1, n_post]
 
-return ({'I_syn': I_syn, 'g_syn': g_syn}, [R_new, U_new, A_new])
+return ({"I_syn": I_syn, "g_syn": g_syn}, [R_new, U_new, A_new])
 ```
 
 **Замечание о кэшировании экспонент:**
@@ -1637,24 +1635,25 @@ return ({'I_syn': I_syn, 'g_syn': g_syn}, [R_new, U_new, A_new])
 **`forward()` логика:**
 ```python
 firing_probs_T = tf.transpose(dt * pre_firing_rate / 1000.0)
-s_input        = pconn_nmda * firing_probs_T           # [n_pre, n_post]
+s_input = pconn_nmda * firing_probs_T  # [n_pre, n_post]
 
 # Euler для 2-го порядка ОДУ двойной экспоненты
-dgnmda_new = dgnmda + dt*(s_input - gnmda
-             - (tau1_nmda + tau2_nmda)*dgnmda) \
-             / (tau1_nmda * tau2_nmda)
-gnmda_new  = gnmda + dt * dgnmda_new
+dgnmda_new = dgnmda + dt * (s_input - gnmda - (tau1_nmda + tau2_nmda) * dgnmda) / (
+    tau1_nmda * tau2_nmda
+)
+gnmda_new = gnmda + dt * dgnmda_new
 
 # Магниевый блок (использует post_voltage)
-post_v_T = tf.transpose(post_voltage)                  # [n_post, 1]
-mg_block = 1.0 / (1.0 + Mgb*tf.exp(-av_nmda*(post_v_T - v_ref)))
+post_v_T = tf.transpose(post_voltage)  # [n_post, 1]
+mg_block = 1.0 / (1.0 + Mgb * tf.exp(-av_nmda * (post_v_T - v_ref)))
 
-g_eff    = gsyn_max_nmda * gnmda_new * mg_block        # [n_pre, n_post]
-I_syn    = tf.reduce_sum(g_eff*(e_r_nmda - post_v_T),
-                         axis=0, keepdims=True)        # [1, n_post]
-g_syn    = tf.reduce_sum(g_eff, axis=0, keepdims=True) # [1, n_post]
+g_eff = gsyn_max_nmda * gnmda_new * mg_block  # [n_pre, n_post]
+I_syn = tf.reduce_sum(
+    g_eff * (e_r_nmda - post_v_T), axis=0, keepdims=True
+)  # [1, n_post]
+g_syn = tf.reduce_sum(g_eff, axis=0, keepdims=True)  # [1, n_post]
 
-return ({'I_syn': I_syn, 'g_syn': g_syn}, [gnmda_new, dgnmda_new])
+return ({"I_syn": I_syn, "g_syn": g_syn}, [gnmda_new, dgnmda_new])
 ```
 
 ---
@@ -1666,13 +1665,12 @@ return ({'I_syn': I_syn, 'g_syn': g_syn}, [gnmda_new, dgnmda_new])
 ```python
 def forward(self, pre_firing_rate, post_voltage, state, dt):
     firing_probs_T = tf.transpose(dt * pre_firing_rate / 1000.0)
-    FRpre_normed   = pconn * firing_probs_T              # [n_pre, n_post]
-    post_v_T       = tf.transpose(post_voltage)
-    I_pair = gsyn_max * FRpre_normed * (e_r - post_v_T) # [n_pre, n_post]
-    I_syn  = tf.reduce_sum(I_pair, axis=0, keepdims=True)
-    g_syn  = tf.reduce_sum(gsyn_max * FRpre_normed,
-                           axis=0, keepdims=True)
-    return ({'I_syn': I_syn, 'g_syn': g_syn}, [])
+    FRpre_normed = pconn * firing_probs_T  # [n_pre, n_post]
+    post_v_T = tf.transpose(post_voltage)
+    I_pair = gsyn_max * FRpre_normed * (e_r - post_v_T)  # [n_pre, n_post]
+    I_syn = tf.reduce_sum(I_pair, axis=0, keepdims=True)
+    g_syn = tf.reduce_sum(gsyn_max * FRpre_normed, axis=0, keepdims=True)
+    return ({"I_syn": I_syn, "g_syn": g_syn}, [])
 ```
 
 ---
@@ -1683,11 +1681,13 @@ def forward(self, pre_firing_rate, post_voltage, state, dt):
 
 ```python
 syn = CompositeSynapse(
-    n_pre=4, n_post=3, dt=0.5,
+    n_pre=4,
+    n_post=3,
+    dt=0.5,
     components=[
-        ('ampa', TsodyksMarkramSynapse(...)),
-        ('nmda', NMDASynapse(...)),
-    ]
+        ("ampa", TsodyksMarkramSynapse(...)),
+        ("nmda", NMDASynapse(...)),
+    ],
 )
 ```
 
@@ -1805,21 +1805,26 @@ gen = ConstantRateGenerator(
 graph = NetworkGraph(dt=0.5)
 
 # Один вход (n_pre=1)
-gen1 = VonMisesGenerator(dt=0.5, params={'mean_rate': 20.0, 'R': 0.8, 'freq': 8.0, 'phase': 0.0})
-graph.add_input_population('theta', gen1)
+gen1 = VonMisesGenerator(
+    dt=0.5, params={"mean_rate": 20.0, "R": 0.8, "freq": 8.0, "phase": 0.0}
+)
+graph.add_input_population("theta", gen1)
 
 # Несколько входов (n_pre=3)
-gen2 = VonMisesGenerator(dt=0.5, params={
-    'mean_rate': [20.0, 15.0, 10.0],
-    'R': [0.9, 0.7, 0.5],
-    'freq': [8.0, 10.0, 12.0],
-    'phase': [0.0, np.pi/2, np.pi],
-})
-graph.add_input_population('inputs', gen2)
+gen2 = VonMisesGenerator(
+    dt=0.5,
+    params={
+        "mean_rate": [20.0, 15.0, 10.0],
+        "R": [0.9, 0.7, 0.5],
+        "freq": [8.0, 10.0, 12.0],
+        "phase": [0.0, np.pi / 2, np.pi],
+    },
+)
+graph.add_input_population("inputs", gen2)
 
 # Синапс: 3 входа → 4 популяции
 syn = TsodyksMarkramSynapse(n_pre=3, n_post=4, dt=0.5, params={...})
-graph.add_synapse('inputs->exc', syn, src='inputs', tgt='exc')
+graph.add_synapse("inputs->exc", syn, src="inputs", tgt="exc")
 ```
 
 ---
@@ -1868,18 +1873,19 @@ class BaseReadout(tf.keras.layers.Layer):
 ```python
 def build(self, input_shape):
     from scipy.signal import firwin
+
     nyq = 0.5 * (1000.0 / self.dt)
     # firwin вычисляет коэффициенты FIR-фильтра
     # Сохраняются как нетренируемый tf.constant
     self._kernel = tf.constant(
-        coeffs[None, :, None],
-        dtype=neuraltide.config.get_dtype()
+        coeffs[None, :, None], dtype=neuraltide.config.get_dtype()
     )
+
 
 def call(self, x):
     # x: [batch, T, n_units]
     # tf.nn.conv1d применяет фильтр к каждому каналу
-    return tf.nn.conv1d(x, self._kernel, stride=1, padding='SAME')
+    return tf.nn.conv1d(x, self._kernel, stride=1, padding="SAME")
 ```
 
 ---
@@ -1900,11 +1906,10 @@ class CompositeLoss:
         loss = loss_fn(output, network)
     """
 
-    def __init__(self, terms: List[Tuple[float, 'BaseLoss']]):
+    def __init__(self, terms: List[Tuple[float, "BaseLoss"]]):
         self.terms = terms
 
-    def __call__(self, predictions: NetworkOutput,
-                 model: NetworkRNN) -> TensorType:
+    def __call__(self, predictions: NetworkOutput, model: NetworkRNN) -> TensorType:
         total = tf.zeros([], dtype=neuraltide.config.get_dtype())
         for weight, loss_obj in self.terms:
             total += weight * loss_obj(predictions, model)
@@ -1940,6 +1945,7 @@ class StabilityPenalty(BaseLoss):
     Ненулевой только при RK4Integrator или HeunIntegrator.
     Вес определяется в CompositeLoss.
     """
+
     def __call__(self, predictions, model):
         return predictions.stability_loss
 
@@ -1984,7 +1990,7 @@ class Trainer:
     def train_step(self, t_sequence: TensorType) -> Dict[str, float]:
         with tf.GradientTape() as tape:
             output = self.network(t_sequence, training=True)
-            loss   = self.loss_fn(output, self.network)
+            loss = self.loss_fn(output, self.network)
 
         grads = tape.gradient(loss, self.network.trainable_variables)
 
@@ -1996,10 +2002,8 @@ class Trainer:
             if g is None:
                 tf.print("WARNING: None gradient for", v.name)
 
-        self.optimizer.apply_gradients(
-            zip(grads, self.network.trainable_variables)
-        )
-        return {'loss': loss}
+        self.optimizer.apply_gradients(zip(grads, self.network.trainable_variables))
+        return {"loss": loss}
 ```
 
 **`save_experiment()` структура директории:**
@@ -2084,36 +2088,39 @@ T = trainable, F = frozen
 ```python
 @dataclass
 class PopulationConfig:
-    name:        str
-    model_class: str            # ключ в POPULATION_REGISTRY
-    dt:          float
-    params:      Dict[str, Any] # каждый элемент — значение или {'value', 'trainable', ...}
+    name: str
+    model_class: str  # ключ в POPULATION_REGISTRY
+    dt: float
+    params: Dict[str, Any]  # каждый элемент — значение или {'value', 'trainable', ...}
+
 
 @dataclass
 class SynapseConfig:
-    name:         str
-    synapse_class: str          # ключ в SYNAPSE_REGISTRY
-    src:          str
-    tgt:          str
-    dt:           float
-    params:       Dict[str, Any]
-    components:   Optional[List['SynapseConfig']] = None  # для Composite
+    name: str
+    synapse_class: str  # ключ в SYNAPSE_REGISTRY
+    src: str
+    tgt: str
+    dt: float
+    params: Dict[str, Any]
+    components: Optional[List["SynapseConfig"]] = None  # для Composite
+
 
 @dataclass
 class InputConfig:
-    name:            str
-    generator_class: str        # ключ в INPUT_REGISTRY
-    params:          Dict[str, Any]
+    name: str
+    generator_class: str  # ключ в INPUT_REGISTRY
+    params: Dict[str, Any]
+
 
 @dataclass
 class NetworkConfig:
-    dt:                       float
-    integrator:               str    # 'euler', 'heun', 'rk4'
-    populations:              List[PopulationConfig]
-    synapses:                 List[SynapseConfig]
-    inputs:                   List[InputConfig]
+    dt: float
+    integrator: str  # 'euler', 'heun', 'rk4'
+    populations: List[PopulationConfig]
+    synapses: List[SynapseConfig]
+    inputs: List[InputConfig]
     stability_penalty_weight: float = 0.0
-    return_hidden_states:     bool  = False
+    return_hidden_states: bool = False
 ```
 
 **`build_network_from_config(config: NetworkConfig) → NetworkRNN`:**
@@ -2136,30 +2143,33 @@ import pytest
 import tensorflow as tf
 import neuraltide
 
+
 @pytest.fixture(autouse=True)
 def reset_dtype():
     neuraltide.config.set_dtype(tf.float32)
     yield
 
+
 @pytest.fixture
 def dt():
     return 0.5
+
 
 @pytest.fixture
 def n_steps():
     return 100
 
+
 @pytest.fixture
 def small_izh_params():
     """Минимальные параметры IzhikevichMeanField для n_units=2."""
     return {
-        'alpha':     {'value': [0.5, 0.5],    'trainable': False},
-        'a':         {'value': [0.02, 0.02],  'trainable': False},
-        'b':         {'value': [0.2, 0.2],    'trainable': False},
-        'w_jump':    {'value': [0.1, 0.1],    'trainable': False},
-        'Delta_I':   {'value': [0.5, 0.6],    'trainable': True,
-                      'min': 0.01, 'max': 2.0},
-        'I_ext':     {'value': [1.0, 1.2],    'trainable': True},
+        "alpha": {"value": [0.5, 0.5], "trainable": False},
+        "a": {"value": [0.02, 0.02], "trainable": False},
+        "b": {"value": [0.2, 0.2], "trainable": False},
+        "w_jump": {"value": [0.1, 0.1], "trainable": False},
+        "Delta_I": {"value": [0.5, 0.6], "trainable": True, "min": 0.01, "max": 2.0},
+        "I_ext": {"value": [1.0, 1.2], "trainable": True},
     }
 ```
 
@@ -2382,6 +2392,7 @@ def small_izh_params():
 тета-ритмический вход через обучаемый синапс.
 Цель: воспроизвести заданную firing rate траекторию.
 """
+
 import numpy as np
 import tensorflow as tf
 import neuraltide
@@ -2395,79 +2406,94 @@ from neuraltide.utils import seed_everything, print_summary
 
 seed_everything(42)
 
-dt = 0.5   # мс
-T  = 2000  # шагов = 1 секунда
+dt = 0.5  # мс
+T = 2000  # шагов = 1 секунда
 
 # --- Популяция ---
-pop = IzhikevichMeanField(n_units=2, dt=dt, params={
-    'alpha':     {'value': [0.5, 0.5],   'trainable': False},
-    'a':         {'value': [0.02, 0.02], 'trainable': False},
-    'b':         {'value': [0.2, 0.2],   'trainable': False},
-    'w_jump':    {'value': [0.1, 0.1],   'trainable': False},
-    'Delta_I':   {'value': [0.5, 0.6],   'trainable': True,
-                  'min': 0.01, 'max': 2.0},
-    'I_ext':     {'value': [1.0, 1.2],   'trainable': True},
-})
+pop = IzhikevichMeanField(
+    n_units=2,
+    dt=dt,
+    params={
+        "alpha": {"value": [0.5, 0.5], "trainable": False},
+        "a": {"value": [0.02, 0.02], "trainable": False},
+        "b": {"value": [0.2, 0.2], "trainable": False},
+        "w_jump": {"value": [0.1, 0.1], "trainable": False},
+        "Delta_I": {"value": [0.5, 0.6], "trainable": True, "min": 0.01, "max": 2.0},
+        "I_ext": {"value": [1.0, 1.2], "trainable": True},
+    },
+)
 
 # --- Входной генератор ---
-gen = VonMisesGenerator(params=[
-    {'MeanFiringRate': 20.0, 'R': 0.5, 'ThetaFreq': 8.0, 'ThetaPhase': 0.0},
-], name='theta_gen')
+gen = VonMisesGenerator(
+    params=[
+        {"MeanFiringRate": 20.0, "R": 0.5, "ThetaFreq": 8.0, "ThetaPhase": 0.0},
+    ],
+    name="theta_gen",
+)
 
 # --- Синапс вход → популяция ---
-syn_in = TsodyksMarkramSynapse(n_pre=1, n_post=2, dt=dt, params={
-    'gsyn_max': {'value': [[0.1, 0.1]], 'trainable': True},
-    'tau_f':    {'value': 20.0,  'trainable': True, 'min': 6.0,  'max': 240.0},
-    'tau_d':    {'value': 5.0,   'trainable': True, 'min': 2.0,  'max': 15.0},
-    'tau_r':    {'value': 200.0, 'trainable': True, 'min': 91.0, 'max': 1300.0},
-    'Uinc':     {'value': 0.2,   'trainable': True, 'min': 0.04, 'max': 0.7},
-    'pconn':    {'value': [[1.0, 1.0]], 'trainable': False},
-    'e_r':      {'value': 0.0,   'trainable': False},
-})
+syn_in = TsodyksMarkramSynapse(
+    n_pre=1,
+    n_post=2,
+    dt=dt,
+    params={
+        "gsyn_max": {"value": [[0.1, 0.1]], "trainable": True},
+        "tau_f": {"value": 20.0, "trainable": True, "min": 6.0, "max": 240.0},
+        "tau_d": {"value": 5.0, "trainable": True, "min": 2.0, "max": 15.0},
+        "tau_r": {"value": 200.0, "trainable": True, "min": 91.0, "max": 1300.0},
+        "Uinc": {"value": 0.2, "trainable": True, "min": 0.04, "max": 0.7},
+        "pconn": {"value": [[1.0, 1.0]], "trainable": False},
+        "e_r": {"value": 0.0, "trainable": False},
+    },
+)
 
 # --- Рекуррентный синапс ---
-syn_rec = TsodyksMarkramSynapse(n_pre=2, n_post=2, dt=dt, params={
-    'gsyn_max': {'value': 0.05,  'trainable': True},
-    'tau_f':    {'value': 20.0,  'trainable': True, 'min': 6.0,  'max': 240.0},
-    'tau_d':    {'value': 5.0,   'trainable': True, 'min': 2.0,  'max': 15.0},
-    'tau_r':    {'value': 200.0, 'trainable': True, 'min': 91.0, 'max': 1300.0},
-    'Uinc':     {'value': 0.2,   'trainable': True, 'min': 0.04, 'max': 0.7},
-    'pconn':    {'value': [[1, 1], [1, 1]], 'trainable': False},
-    'e_r':      {'value': 0.0,   'trainable': False},
-})
+syn_rec = TsodyksMarkramSynapse(
+    n_pre=2,
+    n_post=2,
+    dt=dt,
+    params={
+        "gsyn_max": {"value": 0.05, "trainable": True},
+        "tau_f": {"value": 20.0, "trainable": True, "min": 6.0, "max": 240.0},
+        "tau_d": {"value": 5.0, "trainable": True, "min": 2.0, "max": 15.0},
+        "tau_r": {"value": 200.0, "trainable": True, "min": 91.0, "max": 1300.0},
+        "Uinc": {"value": 0.2, "trainable": True, "min": 0.04, "max": 0.7},
+        "pconn": {"value": [[1, 1], [1, 1]], "trainable": False},
+        "e_r": {"value": 0.0, "trainable": False},
+    },
+)
 
 # --- Топология ---
 graph = NetworkGraph(dt=dt)
-graph.add_input_population('theta', gen)
-graph.add_population('exc', pop)
-graph.add_synapse('theta->exc', syn_in,  src='theta', tgt='exc')
-graph.add_synapse('exc->exc',   syn_rec, src='exc',   tgt='exc')
+graph.add_input_population("theta", gen)
+graph.add_population("exc", pop)
+graph.add_synapse("theta->exc", syn_in, src="theta", tgt="exc")
+graph.add_synapse("exc->exc", syn_rec, src="exc", tgt="exc")
 
-network = NetworkRNN(graph, integrator=RK4Integrator(),
-                     stability_penalty_weight=1e-3)
+network = NetworkRNN(graph, integrator=RK4Integrator(), stability_penalty_weight=1e-3)
 print_summary(network)
 
 # --- Временна́я ось ---
 t_values = np.arange(T, dtype=np.float32) * dt
-t_seq    = tf.constant(t_values[None, :, None])   # [1, T, 1]
+t_seq = tf.constant(t_values[None, :, None])  # [1, T, 1]
 
 # --- Целевая траектория ---
-target_0 = 10.0 + 5.0*np.sin(2*np.pi*8.0*t_values/1000.0)
-target_1 = 8.0  + 4.0*np.sin(2*np.pi*8.0*t_values/1000.0 + 0.5)
+target_0 = 10.0 + 5.0 * np.sin(2 * np.pi * 8.0 * t_values / 1000.0)
+target_1 = 8.0 + 4.0 * np.sin(2 * np.pi * 8.0 * t_values / 1000.0 + 0.5)
 target = {
-    'exc': tf.constant(
-        np.stack([target_0, target_1], axis=-1)[None, :, :],
-        dtype=tf.float32
-    )   # [1, T, 2]
+    "exc": tf.constant(
+        np.stack([target_0, target_1], axis=-1)[None, :, :], dtype=tf.float32
+    )  # [1, T, 2]
 }
 
 # --- Обучение ---
-loss_fn = CompositeLoss([
-    (1.0,  MSELoss(target)),
-    (1e-3, StabilityPenalty()),
-])
-trainer = Trainer(network, loss_fn,
-                  optimizer=tf.keras.optimizers.Adam(1e-3))
+loss_fn = CompositeLoss(
+    [
+        (1.0, MSELoss(target)),
+        (1e-3, StabilityPenalty()),
+    ]
+)
+trainer = Trainer(network, loss_fn, optimizer=tf.keras.optimizers.Adam(1e-3))
 history = trainer.fit(t_seq, epochs=200, verbose=1)
 ```
 
@@ -2483,34 +2509,45 @@ history = trainer.fit(t_seq, epochs=200, verbose=1)
 Частичные наблюдения: target только для exc.
 BandpassReadout: loss считается только в тета-диапазоне.
 """
+
 from neuraltide.synapses import CompositeSynapse, NMDASynapse
 from neuraltide.training.readouts import BandpassReadout
 
 # exc→exc: AMPA + NMDA
 ampa_ee = TsodyksMarkramSynapse(n_pre=4, n_post=4, dt=dt, params={...})
-nmda_ee = NMDASynapse(n_pre=4, n_post=4, dt=dt, params={
-    'gsyn_max_nmda': {'value': 0.05,  'trainable': True},
-    'tau1_nmda':     {'value': 2.0,   'trainable': False},
-    'tau2_nmda':     {'value': 100.0, 'trainable': False},
-    'Mgb':           {'value': 1.0,   'trainable': False},
-    'av_nmda':       {'value': 0.062, 'trainable': False},
-    'pconn_nmda':    {'value': 1.0,   'trainable': False},
-    'e_r_nmda':      {'value': 0.0,   'trainable': False},
-    'v_ref':         {'value': 1.0,   'trainable': False},
-})
+nmda_ee = NMDASynapse(
+    n_pre=4,
+    n_post=4,
+    dt=dt,
+    params={
+        "gsyn_max_nmda": {"value": 0.05, "trainable": True},
+        "tau1_nmda": {"value": 2.0, "trainable": False},
+        "tau2_nmda": {"value": 100.0, "trainable": False},
+        "Mgb": {"value": 1.0, "trainable": False},
+        "av_nmda": {"value": 0.062, "trainable": False},
+        "pconn_nmda": {"value": 1.0, "trainable": False},
+        "e_r_nmda": {"value": 0.0, "trainable": False},
+        "v_ref": {"value": 1.0, "trainable": False},
+    },
+)
 
-graph.add_synapse('exc->exc',
-    CompositeSynapse(n_pre=4, n_post=4, dt=dt,
-                     components=[('ampa', ampa_ee), ('nmda', nmda_ee)]),
-    src='exc', tgt='exc'
+graph.add_synapse(
+    "exc->exc",
+    CompositeSynapse(
+        n_pre=4, n_post=4, dt=dt, components=[("ampa", ampa_ee), ("nmda", nmda_ee)]
+    ),
+    src="exc",
+    tgt="exc",
 )
 
 # Частичные наблюдения + тета-фильтр
 theta_readout = BandpassReadout(f_low=4.0, f_high=12.0, dt=dt)
-loss_fn = CompositeLoss([
-    (1.0,  MSELoss({'exc': target_exc}, readout=theta_readout)),
-    (1e-3, StabilityPenalty()),
-])
+loss_fn = CompositeLoss(
+    [
+        (1.0, MSELoss({"exc": target_exc}, readout=theta_readout)),
+        (1e-3, StabilityPenalty()),
+    ]
+)
 ```
 
 ---
@@ -2522,42 +2559,52 @@ loss_fn = CompositeLoss([
 Пример 3: Пользовательская популяционная модель.
 Минимальный контракт: derivatives, get_initial_state, get_firing_rate, parameter_spec.
 """
+
 import neuraltide
 from neuraltide.core.base import PopulationModel
 from neuraltide.config import register_population
+
 
 class MyRateModel(PopulationModel):
     """tau * dr/dt = -r + tanh(I_ext + I_syn)"""
 
     def __init__(self, n_units, dt, params, **kwargs):
         super().__init__(n_units=n_units, dt=dt, **kwargs)
-        self.tau   = self._make_param(params, 'tau')
-        self.I_ext = self._make_param(params, 'I_ext')
+        self.tau = self._make_param(params, "tau")
+        self.I_ext = self._make_param(params, "I_ext")
         self.state_size = [tf.TensorShape([1, n_units])]
 
     def get_initial_state(self, batch_size=1):
-        return [tf.zeros([1, self.n_units],
-                         dtype=neuraltide.config.get_dtype())]
+        return [tf.zeros([1, self.n_units], dtype=neuraltide.config.get_dtype())]
 
     def derivatives(self, state, total_synaptic_input):
-        r     = state[0]
-        I_tot = self.I_ext + total_synaptic_input['I_syn']
-        drdt  = (-r + tf.nn.tanh(I_tot)) / self.tau
+        r = state[0]
+        I_tot = self.I_ext + total_synaptic_input["I_syn"]
+        drdt = (-r + tf.nn.tanh(I_tot)) / self.tau
         return [drdt]
 
     def get_firing_rate(self, state):
-        return tf.nn.relu(state[0]) * 100.0   # Гц
+        return tf.nn.relu(state[0]) * 100.0  # Гц
 
     @property
     def parameter_spec(self):
         return {
-            'tau':   {'shape': (self.n_units,), 'trainable': False,
-                      'constraint': None, 'units': 'ms'},
-            'I_ext': {'shape': (self.n_units,), 'trainable': True,
-                      'constraint': None, 'units': 'dimensionless'},
+            "tau": {
+                "shape": (self.n_units,),
+                "trainable": False,
+                "constraint": None,
+                "units": "ms",
+            },
+            "I_ext": {
+                "shape": (self.n_units,),
+                "trainable": True,
+                "constraint": None,
+                "units": "dimensionless",
+            },
         }
 
-register_population('MyRateModel', MyRateModel)
+
+register_population("MyRateModel", MyRateModel)
 ```
 
 ---
@@ -2603,6 +2650,7 @@ from neuraltide import config
 from neuraltide.core.network import NetworkGraph, NetworkRNN
 from neuraltide.utils.reproducibility import seed_everything
 from neuraltide.utils.summary import print_summary
+
 __version__ = "0.1.0"
 ```
 

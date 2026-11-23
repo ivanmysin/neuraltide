@@ -47,8 +47,8 @@ duplicate-check), но исключены из ``size``, ``pack``, ``unpack``,
 """
 
 import warnings
+from collections.abc import Mapping
 from dataclasses import dataclass, field
-from typing import Dict, List, Mapping, Optional, Tuple
 
 import tensorflow as tf
 
@@ -81,8 +81,7 @@ def _full_name(owner: str, var: tf.Variable) -> str:
     путь ('exc/Delta_I:0') — тогда оно используется как есть (минус ':0').
     """
     raw = var.name
-    if raw.endswith(":0"):
-        raw = raw[:-2]
+    raw = raw.removesuffix(":0")
     if "/" in raw:
         return raw
     return f"{owner}/{raw}"
@@ -121,7 +120,7 @@ class StateLocator:
 
     population: str
     slot: int
-    experiment: Optional[str] = None
+    experiment: str | None = None
 
 
 @dataclass
@@ -157,13 +156,13 @@ class ParameterEntry:
     full_name: str
     shape: tf.TensorShape
     transform: Transform = field(default_factory=IdentityTransform)
-    min: Optional[float] = None
-    max: Optional[float] = None
+    min: float | None = None
+    max: float | None = None
     group: str = "population"
     trainable: bool = True
-    variable: Optional[tf.Variable] = None
+    variable: tf.Variable | None = None
     kind: str = "model_var"
-    locator: Optional[StateLocator] = None
+    locator: StateLocator | None = None
 
     def __post_init__(self) -> None:
         self.shape = tf.TensorShape(self.shape)
@@ -205,7 +204,7 @@ class ParameterSpace:
     """
 
     def __init__(self) -> None:
-        self._entries: Dict[str, ParameterEntry] = {}
+        self._entries: dict[str, ParameterEntry] = {}
 
     # ------------------------------------------------------------------
     # Построение
@@ -214,7 +213,7 @@ class ParameterSpace:
     def from_network(
         cls,
         network,
-        transforms: Optional[Mapping[str, Transform]] = None,
+        transforms: Mapping[str, Transform] | None = None,
     ) -> "ParameterSpace":
         """
         Собирает ParameterSpace из NetworkRNN.
@@ -232,7 +231,7 @@ class ParameterSpace:
         """
         space = cls()
         graph = network._graph
-        remaining: Dict[str, Transform] = dict(transforms or {})
+        remaining: dict[str, Transform] = dict(transforms or {})
 
         matched = set()
 
@@ -305,10 +304,10 @@ class ParameterSpace:
     def add_initial_state_entries(
         self,
         network,
-        include: Optional[object] = None,
-        transforms: Optional[Mapping[str, Transform]] = None,
-        bounds: Optional[Mapping[str, Tuple[Optional[float], Optional[float]]]] = None,
-    ) -> List[str]:
+        include: object | None = None,
+        transforms: Mapping[str, Transform] | None = None,
+        bounds: Mapping[str, tuple[float | None, float | None]] | None = None,
+    ) -> list[str]:
         """
         Регистрирует общие (common) компоненты начального состояния сети.
 
@@ -353,10 +352,10 @@ class ParameterSpace:
         self,
         network,
         experiment: str,
-        include: Optional[object] = None,
-        transforms: Optional[Mapping[str, Transform]] = None,
-        bounds: Optional[Mapping[str, Tuple[Optional[float], Optional[float]]]] = None,
-    ) -> List[str]:
+        include: object | None = None,
+        transforms: Mapping[str, Transform] | None = None,
+        bounds: Mapping[str, tuple[float | None, float | None]] | None = None,
+    ) -> list[str]:
         """
         Регистрирует эксперимент-специфичные компоненты начального
         состояния сети.
@@ -417,11 +416,11 @@ class ParameterSpace:
     def _add_x0_entries(
         self,
         network,
-        experiment: Optional[str],
-        include: Optional[object],
-        transforms: Optional[Mapping[str, Transform]],
-        bounds: Optional[Mapping[str, Tuple[Optional[float], Optional[float]]]],
-    ) -> List[str]:
+        experiment: str | None,
+        include: object | None,
+        transforms: Mapping[str, Transform] | None,
+        bounds: Mapping[str, tuple[float | None, float | None]] | None,
+    ) -> list[str]:
         """
         Общая реализация add_initial_state_entries (experiment=None) и
         add_experiment_initial_state_entries. experiment задаёт префикс
@@ -429,12 +428,12 @@ class ParameterSpace:
         <slot>') и поле StateLocator.experiment; остальное поведение
         одинаково.
         """
-        remaining_transforms: Dict[str, Transform] = dict(transforms or {})
-        remaining_bounds: Dict[str, Tuple[Optional[float], Optional[float]]] = dict(
+        remaining_transforms: dict[str, Transform] = dict(transforms or {})
+        remaining_bounds: dict[str, tuple[float | None, float | None]] = dict(
             bounds or {}
         )
         include_set = self._normalize_include(include, experiment)
-        registered: List[str] = []
+        registered: list[str] = []
         prefix = "x0" if experiment is None else f"x0/{experiment}"
 
         # Кандидаты: все непустые слоты динамических популяций. include
@@ -506,8 +505,8 @@ class ParameterSpace:
 
     @staticmethod
     def _normalize_include(
-        include: Optional[object], experiment: Optional[str] = None
-    ) -> Optional[set]:
+        include: object | None, experiment: str | None = None
+    ) -> set | None:
         """
         Приводит include к множеству полных имён; None — без фильтра.
 
@@ -559,11 +558,11 @@ class ParameterSpace:
         return dict(self._entries)
 
     @property
-    def names(self) -> List[str]:
+    def names(self) -> list[str]:
         return list(self._entries.keys())
 
     @property
-    def trainable_names(self) -> List[str]:
+    def trainable_names(self) -> list[str]:
         """Имена trainable-записей в порядке регистрации — координаты φ."""
         return [n for n, e in self._entries.items() if e.trainable]
 
@@ -580,12 +579,12 @@ class ParameterSpace:
         return {n: e for n, e in self._entries.items() if e.trainable}
 
     @property
-    def model_entry_names(self) -> List[str]:
+    def model_entry_names(self) -> list[str]:
         """Имена записей параметров модели (kind == 'model_var')."""
         return [n for n, e in self._entries.items() if e.kind == "model_var"]
 
     @property
-    def tensor_entry_names(self) -> List[str]:
+    def tensor_entry_names(self) -> list[str]:
         """Имена тензорных записей состояния ('initial_state'/'shooting_state')."""
         return [n for n, e in self._entries.items() if e.kind in _TENSOR_KINDS]
 
@@ -603,7 +602,7 @@ class ParameterSpace:
     # ------------------------------------------------------------------
     # pack / unpack
     # ------------------------------------------------------------------
-    def _offsets(self) -> Dict[str, tuple]:
+    def _offsets(self) -> dict[str, tuple]:
         offsets = {}
         start = 0
         for name, entry in self.phi_entries.items():
@@ -635,7 +634,7 @@ class ParameterSpace:
                 )
         return tf.reshape(tensor, entry.shape)
 
-    def pack(self, values: Optional[Mapping[str, object]] = None) -> tf.Tensor:
+    def pack(self, values: Mapping[str, object] | None = None) -> tf.Tensor:
         """
         Физические θ → плоский вектор φ = inverse(θ) trainable-записей.
 
@@ -670,7 +669,7 @@ class ParameterSpace:
             return tf.zeros([0], dtype=dtype)
         return tf.concat(pieces, axis=0)
 
-    def unpack(self, phi) -> Dict[str, tf.Tensor]:
+    def unpack(self, phi) -> dict[str, tf.Tensor]:
         """
         Плоский вектор φ → физические θ = forward(φ) по trainable-именам.
 
@@ -691,7 +690,7 @@ class ParameterSpace:
             tf.size(phi), self.size, message="ParameterSpace: bad phi size"
         )
         offsets = self._offsets()
-        result: Dict[str, tf.Tensor] = {}
+        result: dict[str, tf.Tensor] = {}
         for name, entry in self.phi_entries.items():
             start, numel = offsets[name]
             piece = tf.reshape(phi[start : start + numel], entry.shape)

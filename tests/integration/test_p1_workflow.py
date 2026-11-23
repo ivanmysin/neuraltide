@@ -24,6 +24,7 @@ import neuraltide.config
 import neuraltide.optimization as opt
 from neuraltide.optimization import (
     CalibrationProblem,
+    CheckpointedGradient,
     CollinearityPair,
     ContinuationResult,
     ContinuationScheduler,
@@ -33,8 +34,8 @@ from neuraltide.optimization import (
     FrozenProblem,
     JacobianResult,
     LocalOptimizerResult,
-    MultistartResult,
     MultipleShootingProblem,
+    MultistartResult,
     ProfileResult,
     RunCheckpoint,
     ScheduleResult,
@@ -44,7 +45,6 @@ from neuraltide.optimization import (
     StartResult,
     SubsetResult,
     TruncatedResult,
-    CheckpointedGradient,
     compute_fim,
     dt_continuation,
     horizon_growth,

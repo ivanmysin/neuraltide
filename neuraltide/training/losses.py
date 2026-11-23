@@ -1,12 +1,12 @@
-import tensorflow as tf
 from abc import ABC, abstractmethod
-from typing import Dict, List, Tuple, Optional
+
+import tensorflow as tf
 
 import neuraltide
 import neuraltide.config
 from neuraltide.core.network import NetworkOutput, NetworkRNN
 from neuraltide.core.types import TensorType, cast_if_needed
-from neuraltide.training.readouts import IdentityReadout, BaseReadout
+from neuraltide.training.readouts import BaseReadout, IdentityReadout
 
 # Нижняя граница знаменателя маски: полностью нулевая маска даёт loss = 0,
 # а не NaN.
@@ -46,9 +46,9 @@ class BaseLoss(ABC):
 
     def per_step_loss(
         self,
-        firing_rates: Dict[str, TensorType],
-        target: Dict[str, TensorType],
-        mask: Optional[Dict[str, TensorType]] = None,
+        firing_rates: dict[str, TensorType],
+        target: dict[str, TensorType],
+        mask: dict[str, TensorType] | None = None,
     ) -> TensorType:
         """
         Аддитивный вклад одного временного шага (для adjoint-метода).
@@ -69,8 +69,8 @@ class BaseLoss(ABC):
 
     def _default_per_step_loss(
         self,
-        firing_rates: Dict[str, TensorType],
-        target: Dict[str, TensorType],
+        firing_rates: dict[str, TensorType],
+        target: dict[str, TensorType],
     ) -> TensorType:
         """Default implementation using full NetworkOutput."""
         dtype = neuraltide.config.get_dtype()
@@ -89,9 +89,9 @@ class _TrajectoryLoss(BaseLoss):
 
     def __init__(
         self,
-        target: Dict[str, TensorType],
-        readout: Optional[BaseReadout] = None,
-        mask: Optional[Dict[str, TensorType]] = None,
+        target: dict[str, TensorType],
+        readout: BaseReadout | None = None,
+        mask: dict[str, TensorType] | None = None,
     ):
         self.target = target
         self.readout = readout if readout is not None else IdentityReadout()
@@ -107,14 +107,12 @@ class _TrajectoryLoss(BaseLoss):
         """Число временных шагов из сохранённого target [batch, T, n]."""
         return tf.shape(self.target[pop_name])[1]
 
-    def _full_mask(self, pop_name: str) -> Optional[TensorType]:
+    def _full_mask(self, pop_name: str) -> TensorType | None:
         if self.mask is None or pop_name not in self.mask:
             return None
         return self.mask[pop_name]
 
-    def _per_step_mask_view(
-        self, pop_name: str, err: TensorType
-    ) -> Optional[TensorType]:
+    def _per_step_mask_view(self, pop_name: str, err: TensorType) -> TensorType | None:
         """
         Представление полной маски для вызова per_step_loss без среза.
 
@@ -147,9 +145,9 @@ class _TrajectoryLoss(BaseLoss):
 
     def per_step_loss(
         self,
-        firing_rates: Dict[str, TensorType],
-        target: Dict[str, TensorType],
-        mask: Optional[Dict[str, TensorType]] = None,
+        firing_rates: dict[str, TensorType],
+        target: dict[str, TensorType],
+        mask: dict[str, TensorType] | None = None,
     ) -> TensorType:
         """
         Аддитивный вклад шага t (rates [batch, n]) или среза шагов
@@ -165,7 +163,7 @@ class _TrajectoryLoss(BaseLoss):
 
             err = self._error(pred_t, target_t)
 
-            mask_t: Optional[TensorType] = None
+            mask_t: TensorType | None = None
             if mask is not None and pop_name in mask:
                 mask_t = mask[pop_name]
             else:
@@ -209,10 +207,10 @@ class MSELoss(_TrajectoryLoss):
 
     def __init__(
         self,
-        target: Dict[str, TensorType],
-        readout: Optional[BaseReadout] = None,
+        target: dict[str, TensorType],
+        readout: BaseReadout | None = None,
         observable_key: str = "firing_rate",
-        mask: Optional[Dict[str, TensorType]] = None,
+        mask: dict[str, TensorType] | None = None,
     ):
         super().__init__(target=target, readout=readout, mask=mask)
         self.observable_key = observable_key
@@ -228,10 +226,10 @@ class MSLELoss(_TrajectoryLoss):
 
     def __init__(
         self,
-        target: Dict[str, TensorType],
-        readout: Optional[BaseReadout] = None,
+        target: dict[str, TensorType],
+        readout: BaseReadout | None = None,
         eps: float = 1.0,
-        mask: Optional[Dict[str, TensorType]] = None,
+        mask: dict[str, TensorType] | None = None,
     ):
         super().__init__(target=target, readout=readout, mask=mask)
         self.eps = eps
@@ -255,9 +253,9 @@ class StabilityPenalty(BaseLoss):
 
     def per_step_loss(
         self,
-        firing_rates: Dict[str, TensorType],
-        target: Dict[str, TensorType],
-        mask: Optional[Dict[str, TensorType]] = None,
+        firing_rates: dict[str, TensorType],
+        target: dict[str, TensorType],
+        mask: dict[str, TensorType] | None = None,
     ) -> TensorType:
         """StabilityPenalty doesn't have per-step gradient (handled separately)."""
         return tf.constant(0.0, dtype=neuraltide.config.get_dtype())
@@ -279,7 +277,7 @@ class ParameterBoundLoss(BaseLoss):
     Штраф нарастает при выходе за [min, max].
     """
 
-    def __init__(self, bounds: Dict[str, Tuple[float, float]]):
+    def __init__(self, bounds: dict[str, tuple[float, float]]):
         self.bounds = bounds
 
     def __call__(self, predictions: NetworkOutput, model: NetworkRNN) -> TensorType:
@@ -326,7 +324,7 @@ class AntiPhaseLoss(BaseLoss):
 
     def __init__(
         self,
-        pop_pairs: List[Tuple[str, str]],
+        pop_pairs: list[tuple[str, str]],
         target_correlation: float = -1.0,
         correlation_weight: float = 1.0,
         activity_target: float = 20.0,
@@ -398,9 +396,9 @@ class AntiPhaseLoss(BaseLoss):
 
     def per_step_loss(
         self,
-        firing_rates: Dict[str, TensorType],
-        target: Dict[str, TensorType],
-        mask: Optional[Dict[str, TensorType]] = None,
+        firing_rates: dict[str, TensorType],
+        target: dict[str, TensorType],
+        mask: dict[str, TensorType] | None = None,
     ) -> TensorType:
         dtype = neuraltide.config.get_dtype()
         return tf.constant(0.0, dtype=dtype)
@@ -414,12 +412,12 @@ class CompositeLoss:
     полная loss остаётся равной сумме per-step вкладов (конвенция BaseLoss).
     """
 
-    def __init__(self, terms: List[Tuple[float, BaseLoss]]):
+    def __init__(self, terms: list[tuple[float, BaseLoss]]):
         self.terms = terms
 
     def components(
         self, predictions: NetworkOutput, model: NetworkRNN
-    ) -> Dict[str, TensorType]:
+    ) -> dict[str, TensorType]:
         """
         Взвешенные компоненты потери по отдельности.
 
@@ -427,7 +425,7 @@ class CompositeLoss:
             dict с детерминированными ключами вида "term_i:ClassName",
             значения — weight_i * L_i(predictions, model).
         """
-        out: Dict[str, TensorType] = {}
+        out: dict[str, TensorType] = {}
         for i, (weight, loss_obj) in enumerate(self.terms):
             key = f"term_{i}:{type(loss_obj).__name__}"
             out[key] = weight * loss_obj(predictions, model)
@@ -441,9 +439,9 @@ class CompositeLoss:
 
     def per_step_loss(
         self,
-        firing_rates: Dict[str, TensorType],
-        target: Dict[str, TensorType],
-        mask: Optional[Dict[str, TensorType]] = None,
+        firing_rates: dict[str, TensorType],
+        target: dict[str, TensorType],
+        mask: dict[str, TensorType] | None = None,
     ) -> TensorType:
         total = tf.constant(0.0, dtype=neuraltide.config.get_dtype())
         for weight, loss_obj in self.terms:

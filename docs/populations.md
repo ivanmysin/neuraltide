@@ -62,15 +62,19 @@ IzhikevichMeanField(
 pop = IzhikevichMeanField(
     dt=0.5,
     params={
-        'tau_pop':   {'value': [1.0, 1.0, 1.0, 1.0], 'trainable': False},
-        'alpha':     {'value': [0.5, 0.5, 0.5, 0.5], 'trainable': False},
-        'a':         {'value': [0.02, 0.02, 0.02, 0.02], 'trainable': False},
-        'b':         {'value': [0.2, 0.2, 0.2, 0.2], 'trainable': False},
-        'w_jump':    {'value': [0.1, 0.1, 0.1, 0.1], 'trainable': False},
-        'Delta_I':   {'value': [0.5, 0.6, 0.5, 0.6], 'trainable': True,
-                      'min': 0.01, 'max': 2.0},
-        'I_ext':     {'value': [1.0, 1.2, 1.0, 1.2], 'trainable': True},
-    }
+        "tau_pop": {"value": [1.0, 1.0, 1.0, 1.0], "trainable": False},
+        "alpha": {"value": [0.5, 0.5, 0.5, 0.5], "trainable": False},
+        "a": {"value": [0.02, 0.02, 0.02, 0.02], "trainable": False},
+        "b": {"value": [0.2, 0.2, 0.2, 0.2], "trainable": False},
+        "w_jump": {"value": [0.1, 0.1, 0.1, 0.1], "trainable": False},
+        "Delta_I": {
+            "value": [0.5, 0.6, 0.5, 0.6],
+            "trainable": True,
+            "min": 0.01,
+            "max": 2.0,
+        },
+        "I_ext": {"value": [1.0, 1.2, 1.0, 1.2], "trainable": True},
+    },
 )
 ```
 
@@ -101,10 +105,18 @@ pop = IzhikevichMeanField(
 pop = IzhikevichMeanField(
     dt=0.5,
     params={
-        'V_rest': -57.6, 'V_T': -35.5, 'V_peak': 21.7, 'V_reset': -48.7,
-        'Cm': 114.0, 'K': 1.194, 'A': 0.0046, 'B': 0.2157, 'W_jump': 2.0,
-        'Delta_I': 20.0, 'I_ext': 120.0
-    }
+        "V_rest": -57.6,
+        "V_T": -35.5,
+        "V_peak": 21.7,
+        "V_reset": -48.7,
+        "Cm": 114.0,
+        "K": 1.194,
+        "A": 0.0046,
+        "B": 0.2157,
+        "W_jump": 2.0,
+        "Delta_I": 20.0,
+        "I_ext": 120.0,
+    },
 )
 ```
 
@@ -126,9 +138,9 @@ state_size = [
 
 ```python
 {
-    'firing_rate': r,           # безразмерная частота (для Hz: r / (tau_pop * 1e-3))
-    'v_mean': v,                # безразмерный потенциал
-    'w_mean': w,                # безразмерный ток адаптации
+    "firing_rate": r,  # безразмерная частота (для Hz: r / (tau_pop * 1e-3))
+    "v_mean": v,  # безразмерный потенциал
+    "w_mean": w,  # безразмерный ток адаптации
 }
 ```
 
@@ -199,13 +211,13 @@ WilsonCowan(
 pop = WilsonCowan(
     dt=0.5,
     params={
-        'tau': [10.0, 10.0],
-        'a': [1.0, 1.0],
-        'theta': [0.0, 0.0],
-        'w': [1.0, 1.0],
-        'I_ext': [0.5, 0.5],
-        'max_rate': [100.0, 100.0],
-    }
+        "tau": [10.0, 10.0],
+        "a": [1.0, 1.0],
+        "theta": [0.0, 0.0],
+        "w": [1.0, 1.0],
+        "I_ext": [0.5, 0.5],
+        "max_rate": [100.0, 100.0],
+    },
 )
 # n_units=2
 ```
@@ -221,7 +233,7 @@ state_size = [
 ### Observables
 
 ```python
-{'firing_rate': relu(E) * max_rate}  # нет 'v_mean'
+{"firing_rate": relu(E) * max_rate}  # нет 'v_mean'
 ```
 
 ---
@@ -279,20 +291,20 @@ J_out = -D * dP/dV|_{V=V_threshold}
 class LeakyIF(FokkerPlanckPopulation):
     def __init__(self, n_units: int, dt: float, params: dict, **kwargs):
         super().__init__(n_units=n_units, dt=dt, **kwargs)
-        
-        self.v_reset = self._make_param(params, 'v_reset')
-        self.v_thresh = self._make_param(params, 'v_thresh')
-        self.tau_m = self._make_param(params, 'tau_m')
-        
+
+        self.v_reset = self._make_param(params, "v_reset")
+        self.v_thresh = self._make_param(params, "v_thresh")
+        self.tau_m = self._make_param(params, "tau_m")
+
     def derivatives(self, state, total_synaptic_input):
         P = state[0]
-        I_syn = total_synaptic_input['I_syn']
-        
+        I_syn = total_synaptic_input["I_syn"]
+
         # Дискретизованный оператор Фоккера-Планка
         # ... (реализация пользователя)
-        
+
         return [dPdt]
-    
+
     def get_firing_rate(self, state):
         P = state[0]
         return self.get_boundary_flux(P, self.dV)
@@ -356,15 +368,15 @@ BrunelFokkerPlanck(
 ```python
 state_size = [
     tf.TensorShape([1, grid_size]),  # P(V)
-    tf.TensorShape([1, 1]),          # p_r
-    tf.TensorShape([1, tau_rp/dt]),  # буфер задержки ν
+    tf.TensorShape([1, 1]),  # p_r
+    tf.TensorShape([1, tau_rp / dt]),  # буфер задержки ν
 ]
 ```
 
 ### Observables
 
 ```python
-{'firing_rate', 'v_mean', 'p_refractory'}
+{"firing_rate", "v_mean", "p_refractory"}
 ```
 
 ### Проверка
@@ -402,10 +414,10 @@ Brunel (2000) с точностью ~0.2% (сетка 250, режим у пор�
 ```python
 # 1. Объявление входа
 graph = NetworkGraph(dt=0.5)
-graph.declare_input('theta', n_units=gen.n_units)
+graph.declare_input("theta", n_units=gen.n_units)
 
 # 2. Предвычисление входных частот
-inputs = graph.pack_inputs({'theta': gen(t_seq)})
+inputs = graph.pack_inputs({"theta": gen(t_seq)})
 
 # 3. Передача в сеть
 output = network(t_seq, inputs=inputs)
@@ -426,18 +438,21 @@ InputPopulation(
 from neuraltide.inputs import SinusoidalGenerator
 from neuraltide.populations import InputPopulation
 
-gen = SinusoidalGenerator(dt=0.5, params={
-    'amplitude': 10.0,
-    'freq': 8.0,
-    'phase': 0.0,
-    'offset': 5.0,
-})
+gen = SinusoidalGenerator(
+    dt=0.5,
+    params={
+        "amplitude": 10.0,
+        "freq": 8.0,
+        "phase": 0.0,
+        "offset": 5.0,
+    },
+)
 
 # Не рекомендуется:
 input_pop = InputPopulation(generator=gen)
 
 # Рекомендуется:
-graph.declare_input('my_input', n_units=gen.n_units)
-inputs = graph.pack_inputs({'my_input': gen(t_seq)})
+graph.declare_input("my_input", n_units=gen.n_units)
+inputs = graph.pack_inputs({"my_input": gen(t_seq)})
 output = network(t_seq, inputs=inputs)
 ```

@@ -1,6 +1,6 @@
-import tensorflow as tf
-from typing import Dict, List, Optional
 import os
+
+import tensorflow as tf
 
 
 class DivergenceDetector(tf.keras.callbacks.Callback):
@@ -13,7 +13,7 @@ class DivergenceDetector(tf.keras.callbacks.Callback):
         self.patience = patience
         self.bad_epochs = 0
 
-    def on_epoch_end(self, epoch: int, logs: Optional[Dict] = None) -> None:
+    def on_epoch_end(self, epoch: int, logs: dict | None = None) -> None:
         logs = logs or {}
         loss = logs.get("loss")
         if loss is None:
@@ -45,7 +45,7 @@ class GradientMonitor(tf.keras.callbacks.Callback):
     def __init__(
         self,
         log_every: int = 10,
-        variables: Optional[List[tf.Variable]] = None,
+        variables: list[tf.Variable] | None = None,
     ):
         super().__init__()
         self.log_every = log_every
@@ -53,18 +53,18 @@ class GradientMonitor(tf.keras.callbacks.Callback):
         # -log_every: эпоха 0 логируется сразу (baseline), далее каждые
         # log_every эпох.
         self._last_logged_epoch = -log_every
-        self.history: List[Dict[str, object]] = []
+        self.history: list[dict[str, object]] = []
 
     def _resolve_variables(
-        self, grads: List[Optional[tf.Tensor]]
-    ) -> Optional[List[tf.Variable]]:
+        self, grads: list[tf.Tensor | None]
+    ) -> list[tf.Variable] | None:
         if self.variables is not None:
             return self.variables
         if self.model is not None:
             return list(self.model.trainable_variables)
         return None
 
-    def on_epoch_end(self, epoch: int, logs: Optional[Dict] = None) -> None:
+    def on_epoch_end(self, epoch: int, logs: dict | None = None) -> None:
         if (epoch - self._last_logged_epoch) < self.log_every:
             return
 
@@ -89,7 +89,7 @@ class GradientMonitor(tf.keras.callbacks.Callback):
         flat = [tf.reshape(g, [-1]) for g, _ in pairs]
         global_norm = float(tf.linalg.global_norm(flat)) if flat else 0.0
 
-        entry: Dict[str, object] = {
+        entry: dict[str, object] = {
             "epoch": epoch,
             "global_norm": global_norm,
             "norms": [float(tf.norm(g)) for g, _ in pairs],
@@ -116,7 +116,7 @@ class ExperimentLogger(tf.keras.callbacks.Callback):
         self.optimizer = optimizer
         self._last_saved_epoch = -1
 
-    def on_epoch_end(self, epoch: int, logs: Optional[Dict] = None) -> None:
+    def on_epoch_end(self, epoch: int, logs: dict | None = None) -> None:
         if (epoch - self._last_saved_epoch) >= self.save_every:
             self._last_saved_epoch = epoch
             # Use self.model if network/optimizer not explicitly provided
