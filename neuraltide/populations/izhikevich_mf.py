@@ -456,7 +456,7 @@ class IzhikevichMeanField(PopulationModel):
         Return observable variables.
 
         Includes:
-            - firing_rate: in Hz (converted from dimensionless r via r / (dt * 1e-3))
+            - firing_rate: in Hz (converted from dimensionless r via r / (tau_pop * 1e-3))
             - v_mean: dimensionless mean membrane potential (used by NMDASynapse)
             - w_mean: dimensionless mean adaptation current
         """

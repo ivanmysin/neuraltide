@@ -55,6 +55,10 @@ ev_components = objective.components(predictions, network)   # вклады по
 r = objective.residual(predictions)                          # плоский вектор невязок
 ```
 
+Здесь `predictions` — объект `NetworkOutput` (результат вызова
+`network(t_seq, inputs=...)` или `problem.simulate(...)`), а не dict:
+частоты читаются через `predictions.firing_rates[...]`.
+
 Полезные поля `ObservationSpec`:
 
 - `mask` — тензор, broadcastable к `target` (например `[1, T, 1]`);

@@ -5,6 +5,8 @@ NeuralTide предоставляет несколько типов генера
 - **SinusoidalGenerator** — синусоидальный генератор
 - **ConstantRateGenerator** — генератор постоянной частоты
 - **VonMisesGenerator** — генератор на основе распределения фон Мизаса
+- **PlaceFieldGenerator** — клетки места с тета-модуляцией и фазовой
+  прецессией (2D-траектории, см. соответствующий раздел ниже)
 
 Все генераторы являются подклассами `BaseInputGenerator` и поддерживают векторизацию.
 
@@ -37,6 +39,36 @@ gen = SinusoidalGenerator(dt=0.5, params={
 # t: shape [batch, T, 1], [batch, T] или [T] — время в мс
 output = generator(t)  # Returns: shape [batch, T, n_units] в Гц
 ```
+
+### Конвенции фазы
+
+Встроенные генераторы трактуют параметр `phase` по-разному. При
+совместном использовании (например, интернейроны через
+`VonMisesGenerator`, клетки места через `PlaceFieldGenerator`) фазы из
+литературы нельзя подставлять одинаково во все генераторы:
+
+| Генератор | Формула | `phase = +π/2` даёт максимум |
+|---|---|---|
+| `VonMisesGenerator` | `exp(κ·cos(ωt − phase))` | позже t=0 |
+| `PlaceFieldGenerator` | `exp(κ·cos(ωt + phase + dφ))` | раньше t=0 |
+| `SinusoidalGenerator` | `sin(ωt + phase)` | ровно в t=0 |
+
+Знаки у VonMises и PlaceField противоположны — литературные фазы
+(например, O-LM `π`, CCK basket `−π/2`) требуют конверсии. Чтобы не
+ошибиться знаком, задайте желаемый момент максимума и получите готовые
+фазы хелпером:
+
+```python
+from neuraltide.inputs import peak_time_to_phases
+
+# все три генератора достигнут максимума одновременно, в t=0:
+phases = peak_time_to_phases(t_peak_ms=0.0, freq_hz=8.0)
+# {'von_mises': 0.0, 'sinusoidal': 1.5707..., 'place_field': -0.0}
+```
+
+Хелпер возвращает фазы в единицах каждого генератора: `von_mises` и
+`sinusoidal` — радианы (параметр `phase`), `place_field` — градусы
+(`precession_init_phase`; та же конвенция у `phase_outside`).
 
 ### Интеграция с NetworkGraph
 

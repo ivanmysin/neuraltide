@@ -20,10 +20,13 @@ class PlaceFieldGenerator(BaseInputGenerator):
         rate_i(t) = peak_rate * spatial * theta_inside   (внутри поля)
                    + bg_rate * (1 - spatial) * (1 - tmf + tmf * theta_outside)  (вне поля)
     где:
-        spatial = exp(-0.5 * ((x-cx)/r)^2 + ((y-cy)/r)^2)
+        spatial = exp(-0.5 * (((x-cx)/r)^2 + ((y-cy)/r)^2))
         theta_inside = exp(kappa * cos(2π·freq·t/1000 + ph0 + dphi)) / I0(kappa)
         theta_outside = exp(kappa * cos(2π·freq·t/1000 + ph_out)) / I0(kappa)
         dphi = -slope_rad * (x - cx)  — фазовая прецессия
+               (при n_cols >= 4 вместо (x - cx) берётся проекция вектора
+               (pos - center) на направление скорости:
+               dphi = -slope_rad * ((x-cx)·vx + (y-cy)·vy) / |v|)
         tmf — theta_modulation_factor (0→нет модуляции вне поля, 1→полная)
 
     Параметры (params):
@@ -37,6 +40,9 @@ class PlaceFieldGenerator(BaseInputGenerator):
         precession_slope: наклон фазовой прецессии (град/см).
                          Положительный → классическая прецессия.
         precession_init_phase: фаза тета-ритма в центре поля (градусы). По умолчанию 0.0.
+                               Конвенция cos(ωt + ph0): положительное ph0
+                               сдвигает максимум РАНЬШЕ t=0 — знак
+                               противоположен VonMisesGenerator.
         phase_outside:   фаза тета-ритма вне поля (градусы). По умолчанию 0.0.
         R:               R-value (0–1) для концентрации Von Mises тета-модуляции.
         freq:            частота тета-ритма (Гц).

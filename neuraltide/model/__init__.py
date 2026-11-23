@@ -86,7 +86,7 @@ class BrainModelKeras(tf.keras.Model):
             # [T, units] -> [1, T, units]
             inputs = inputs[tf.newaxis]
         elif inputs.shape.rank == 3:
-            # [batch, T, units] -> [1, T, units] (берём первый样本)
+            # [batch, T, units] -> [1, T, units] (берём первый элемент батча)
             inputs = tf.reshape(
                 inputs[0], [1, tf.shape(inputs)[1], tf.shape(inputs)[2]]
             )

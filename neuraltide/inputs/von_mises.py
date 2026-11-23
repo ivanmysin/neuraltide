@@ -19,6 +19,8 @@ class VonMisesGenerator(BaseInputGenerator):
         R: R-value (0-1), характеризует концентрированность. Скаляр или вектор [n_units].
         freq: частота тета-ритма (Hz). Скаляр или вектор [n_units].
         phase: начальная фаза (рад). Скаляр или вектор [n_units].
+                Конвенция cos(ωt − phase): положительное значение
+                сдвигает максимум ПОЗЖЕ t=0.
 
     Пример:
         gen = VonMisesGenerator(

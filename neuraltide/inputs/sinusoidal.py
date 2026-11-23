@@ -15,6 +15,9 @@ class SinusoidalGenerator(BaseInputGenerator):
         amplitude: амплитуда (Hz). Скаляр или вектор [n_units].
         freq: частота (Hz). Скаляр или вектор [n_units].
         phase: начальная фаза (рад). Скаляр или вектор [n_units].
+                Конвенция sin(ωt + phase): максимум при ωt + phase = π/2;
+                phase = π/2 даёт максимум ровно в t=0, положительные
+                значения сдвигают максимум РАНЬШЕ t=0.
         offset: смещение (Hz). Скаляр или вектор [n_units].
 
     Пример:
