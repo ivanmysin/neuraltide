@@ -50,22 +50,23 @@ Residual-вектор согласован с этой нормировкой п
 """
 
 import contextlib
+from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
-from typing import Any, Dict, Iterator, List, Optional, Sequence
+from typing import Any
 
 import numpy as np
 import tensorflow as tf
 
 import neuraltide.config
 from neuraltide.core.types import TensorType, cast_if_needed
-from neuraltide.training.losses import BaseLoss, _MASK_DENOM_EPS
+from neuraltide.training.losses import _MASK_DENOM_EPS, BaseLoss
 from neuraltide.training.readouts import BaseReadout, IdentityReadout
 
 __all__ = [
     "ObservationSpec",
     "ResidualLoss",
-    "likelihood_row_scale",
     "likelihood_normalization",
+    "likelihood_row_scale",
 ]
 
 _NORMALIZATIONS = ("mean", "sum")
@@ -126,10 +127,10 @@ class ObservationSpec:
     population: str
     target: TensorType
     sigma: float = 1.0
-    mask: Optional[TensorType] = None
+    mask: TensorType | None = None
     weight: float = 1.0
     kind: str = "l2"
-    readout: Optional[BaseReadout] = None
+    readout: BaseReadout | None = None
     eps: float = 1e-8
     delta: float = 1.0
     scale: float = 1.0
@@ -231,7 +232,7 @@ class ResidualLoss(BaseLoss):
                 f"got {normalization!r}."
             )
         self.normalization = normalization
-        self.observations: List[ObservationSpec] = list(observations)
+        self.observations: list[ObservationSpec] = list(observations)
         if not self.observations:
             raise ValueError("ResidualLoss: at least one observation is required.")
         names = [spec.name for spec in self.observations]
@@ -244,12 +245,12 @@ class ResidualLoss(BaseLoss):
     # Свойства для совместимости с Trainer / CompositeLoss
     # ------------------------------------------------------------------
     @property
-    def target(self) -> Dict[str, TensorType]:
+    def target(self) -> dict[str, TensorType]:
         """dict {spec.name: target} — формат Trainer._extract_targets."""
         return {spec.name: spec.target for spec in self.observations}
 
     @property
-    def mask(self) -> Dict[str, TensorType]:
+    def mask(self) -> dict[str, TensorType]:
         """dict {spec.name: mask} для спецификаций с маской."""
         return {
             spec.name: spec.mask for spec in self.observations if spec.mask is not None
@@ -337,7 +338,7 @@ class ResidualLoss(BaseLoss):
         Длина равна длине residual(predictions) при предсказаниях формы
         target (контракт ObservationSpec).
         """
-        pieces: List[np.ndarray] = []
+        pieces: list[np.ndarray] = []
         for spec in self.observations:
             shape = self._full_shape(spec)
             numel = int(tf.reduce_prod(shape))
@@ -389,9 +390,9 @@ class ResidualLoss(BaseLoss):
             total += self._spec_loss(spec, psi, m, n)
         return total
 
-    def components(self, predictions, model) -> Dict[str, TensorType]:
+    def components(self, predictions, model) -> dict[str, TensorType]:
         """Взвешенные вклады наблюдений по отдельности: {spec.name: scalar}."""
-        out: Dict[str, TensorType] = {}
+        out: dict[str, TensorType] = {}
         for spec in self.observations:
             pred = self._rates(predictions, spec)
             _, psi, m, n = self._spec_terms(spec, pred, spec.target)
@@ -400,9 +401,9 @@ class ResidualLoss(BaseLoss):
 
     def per_step_loss(
         self,
-        firing_rates: Dict[str, TensorType],
-        target: Dict[str, TensorType],
-        mask: Optional[Dict[str, TensorType]] = None,
+        firing_rates: dict[str, TensorType],
+        target: dict[str, TensorType],
+        mask: dict[str, TensorType] | None = None,
     ) -> TensorType:
         """
         Аддитивный вклад временного шага.
@@ -424,7 +425,7 @@ class ResidualLoss(BaseLoss):
             e = self._error(spec, pred_t, tgt_t)
             psi = self._psi(spec, e)
 
-            mask_t: Optional[TensorType] = None
+            mask_t: TensorType | None = None
             if mask is not None and spec.name in mask:
                 mask_t = mask[spec.name]
             elif spec.mask is not None:
@@ -456,7 +457,7 @@ class ResidualLoss(BaseLoss):
         Поэлементная структура (см. документацию модуля):
             r_i = sqrt(weight * mask_i / (N sigma^2)) * sign(e_i) * sqrt(2 psi(e_i)).
         """
-        pieces: List[TensorType] = []
+        pieces: list[TensorType] = []
         for spec in self.observations:
             pred = self._rates(predictions, spec)
             e = self._error(spec, pred, spec.target)
@@ -497,7 +498,7 @@ class ResidualLoss(BaseLoss):
 # ---------------------------------------------------------------------------
 
 
-def _residual_objectives(problem) -> Optional[List[Any]]:
+def _residual_objectives(problem) -> list[Any] | None:
     """
     Objective'ы, чьи невязки составляют problem.residual, в порядке
     конкатенации; None, если состав невязок неизвестен (duck-задачи,
@@ -518,7 +519,7 @@ def _residual_objectives(problem) -> Optional[List[Any]]:
     return None
 
 
-def likelihood_row_scale(problem) -> Optional[np.ndarray]:
+def likelihood_row_scale(problem) -> np.ndarray | None:
     """
     Множители строк problem.residual для перевода в единицы полного NLL.
 

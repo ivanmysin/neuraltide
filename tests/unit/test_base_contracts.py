@@ -3,7 +3,7 @@ import tensorflow as tf
 
 import neuraltide
 import neuraltide.config
-from neuraltide.core.base import PopulationModel, SynapseModel, BaseInputGenerator
+from neuraltide.core.base import BaseInputGenerator, PopulationModel, SynapseModel
 
 
 class TestAbstractClasses:

@@ -1,5 +1,6 @@
+from typing import Any
+
 import tensorflow as tf
-from typing import Any, Dict, Optional
 
 from neuraltide.core.base import BaseInputGenerator, _get_constraint_name
 from neuraltide.core.types import TensorType, get_pi
@@ -15,6 +16,9 @@ class SinusoidalGenerator(BaseInputGenerator):
         amplitude: амплитуда (Hz). Скаляр или вектор [n_units].
         freq: частота (Hz). Скаляр или вектор [n_units].
         phase: начальная фаза (рад). Скаляр или вектор [n_units].
+                Конвенция sin(ωt + phase): максимум при ωt + phase = π/2;
+                phase = π/2 даёт максимум ровно в t=0, положительные
+                значения сдвигают максимум РАНЬШЕ t=0.
         offset: смещение (Hz). Скаляр или вектор [n_units].
 
     Пример:
@@ -44,7 +48,7 @@ class SinusoidalGenerator(BaseInputGenerator):
     def __init__(
         self,
         dt: float,
-        params: Dict[str, Any],
+        params: dict[str, Any],
         name: str = "sinusoidal_generator",
         **kwargs,
     ):
@@ -55,9 +59,7 @@ class SinusoidalGenerator(BaseInputGenerator):
         self.phase = self._make_param(self._params, "phase")
         self.offset = self._make_param(self._params, "offset")
 
-    def call(
-        self, t: TensorType, extra_inputs: Optional[TensorType] = None
-    ) -> TensorType:
+    def call(self, t: TensorType, extra_inputs: TensorType | None = None) -> TensorType:
         """
         Args:
             t: текущее время в мс. shape = [batch, 1].
@@ -78,7 +80,7 @@ class SinusoidalGenerator(BaseInputGenerator):
         return tf.nn.relu(rate)
 
     @property
-    def parameter_spec(self) -> Dict[str, Dict[str, Any]]:
+    def parameter_spec(self) -> dict[str, dict[str, Any]]:
         return {
             "amplitude": {
                 "shape": (self.n_units,),
@@ -106,5 +108,5 @@ class SinusoidalGenerator(BaseInputGenerator):
             },
         }
 
-    def _get_constraint_name(self, var: tf.Variable) -> Optional[str]:
+    def _get_constraint_name(self, var: tf.Variable) -> str | None:
         return _get_constraint_name(var)

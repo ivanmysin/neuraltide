@@ -26,6 +26,21 @@ include = ["neuraltide*"]
 line-length = 88
 target-version = "py312"
 
+[tool.ruff.lint]
+# BLE001  — широкие `except Exception` в fallback-путях (пропуск старта /
+#           узла профиля при любой ошибке) — сознательная политика пакета;
+#           ошибки при этом логируются/попадают в результат.
+# TRY004  — историческая конвенция пакета: неверный тип аргумента
+#           вызывает ValueError (не TypeError); смена сломала бы вызовы
+#           и тесты (pytest.raises(ValueError)).
+# RUF012  — mutable class defaults (state_size = []) — устоявшийся
+#           Keras-подобный паттерн описания формы состояния моделей.
+ignore = [
+    "BLE001",
+    "TRY004",
+    "RUF012",
+]
+
 [tool.black]
 line-length = 88
 target-version = ["py312"]

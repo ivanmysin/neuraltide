@@ -18,19 +18,20 @@ Note on dimensionless variables:
     Therefore, the dimensionless rest state is v=0 (not v=1).
 """
 
+from typing import Any
+
 import numpy as np
 import tensorflow as tf
-from typing import Any, Dict, List, Optional, Tuple, Union
 
 import neuraltide
 import neuraltide.config
 from neuraltide.core.base import (
     PopulationModel,
+    _get_constraint_name,
     _infer_n_units_from_params,
     _validate_param_dimensions,
-    _get_constraint_name,
 )
-from neuraltide.core.types import TensorType, StateList, get_pi
+from neuraltide.core.types import StateList, TensorType, get_pi
 
 
 class IzhikevichMeanField(PopulationModel):
@@ -98,7 +99,7 @@ class IzhikevichMeanField(PopulationModel):
     def __init__(
         self,
         dt: float,
-        params: Optional[Dict[str, Any]] = None,
+        params: dict[str, Any] | None = None,
         name: str = "izhikevich_mf",
         **kwargs,
     ):
@@ -148,7 +149,7 @@ class IzhikevichMeanField(PopulationModel):
             tf.TensorShape([1, self.n_units]),
         ]
 
-    def _infer_n_units_from_raw_params(self, params: Dict[str, Any]) -> None:
+    def _infer_n_units_from_raw_params(self, params: dict[str, Any]) -> None:
         """Infer n_units from raw input params before any conversion."""
         self.n_units = _infer_n_units_from_params(params)
 
@@ -172,9 +173,9 @@ class IzhikevichMeanField(PopulationModel):
 
     @staticmethod
     def _compute_dimensionless_from_dimensional(
-        params: Dict[str, Any],
+        params: dict[str, Any],
         n_units: int,
-    ) -> Dict[str, List[float]]:
+    ) -> dict[str, list[float]]:
         """
         Compute dimensionless parameters from dimensional ones (pure Python).
 
@@ -255,7 +256,7 @@ class IzhikevichMeanField(PopulationModel):
     def _build_params_from_dimensional(
         self,
         params,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Convert dimensional parameters to dimensionless.
 
         Returns dict with structure expected by _make_param:
@@ -355,7 +356,7 @@ class IzhikevichMeanField(PopulationModel):
 
         return result
 
-    def _to_array(self, value: Union[float, List[float]]) -> tf.Tensor:
+    def _to_array(self, value: float | list[float]) -> tf.Tensor:
         """Convert scalar or list to tf.Tensor, broadcasting to n_units."""
         dtype = neuraltide.config.get_dtype()
         if isinstance(value, (int, float)):
@@ -408,7 +409,7 @@ class IzhikevichMeanField(PopulationModel):
     def derivatives(
         self,
         state: StateList,
-        total_synaptic_input: Dict[str, TensorType],
+        total_synaptic_input: dict[str, TensorType],
     ) -> StateList:
         """
         Compute derivatives of the mean-field Izhikevich equations.
@@ -451,16 +452,16 @@ class IzhikevichMeanField(PopulationModel):
         r = state[0]
         return r / (self.tau_pop * 1e-3)
 
-    def observables(self, state: StateList) -> Dict[str, TensorType]:
+    def observables(self, state: StateList) -> dict[str, TensorType]:
         """
         Return observable variables.
 
         Includes:
-            - firing_rate: in Hz (converted from dimensionless r via r / (dt * 1e-3))
+            - firing_rate: in Hz (converted from dimensionless r via r / (tau_pop * 1e-3))
             - v_mean: dimensionless mean membrane potential (used by NMDASynapse)
             - w_mean: dimensionless mean adaptation current
         """
-        r, v, w = state
+        _r, v, w = state
         return {
             "firing_rate": self.get_firing_rate(state),
             "v_mean": v,
@@ -471,7 +472,7 @@ class IzhikevichMeanField(PopulationModel):
         self,
         adjoint_state: StateList,
         state: StateList,
-        total_synaptic_input: Dict[str, TensorType],
+        total_synaptic_input: dict[str, TensorType],
     ) -> StateList:
         """
         Compute adjoint derivatives for IzhikevichMeanField.
@@ -536,8 +537,8 @@ class IzhikevichMeanField(PopulationModel):
         self,
         adjoint_state: StateList,
         state: StateList,
-        total_synaptic_input: Dict[str, TensorType],
-    ) -> Tuple[TensorType, TensorType]:
+        total_synaptic_input: dict[str, TensorType],
+    ) -> tuple[TensorType, TensorType]:
         """
         Compute λ_I and λ_g from population adjoint.
 
@@ -557,7 +558,7 @@ class IzhikevichMeanField(PopulationModel):
         self,
         param_name: str,
         state: StateList,
-        total_synaptic_input: Dict[str, TensorType],
+        total_synaptic_input: dict[str, TensorType],
     ) -> TensorType:
         """
         Compute ∂derivatives/∂param for IzhikevichMeanField.
@@ -608,7 +609,7 @@ class IzhikevichMeanField(PopulationModel):
             return tf.zeros_like(r)
 
     @property
-    def parameter_spec(self) -> Dict[str, Dict[str, Any]]:
+    def parameter_spec(self) -> dict[str, dict[str, Any]]:
         """Specification of all parameters for summary and serialization."""
         return {
             "tau_pop": {
@@ -655,7 +656,7 @@ class IzhikevichMeanField(PopulationModel):
             },
         }
 
-    def _get_constraint_name(self, var: tf.Variable) -> Optional[str]:
+    def _get_constraint_name(self, var: tf.Variable) -> str | None:
         """Get the name of the constraint applied to a variable."""
         return _get_constraint_name(var)
 
@@ -670,7 +671,7 @@ class IzhikevichMeanField(PopulationModel):
         I_ext: float,
         V_rest: float,
         K: float,
-    ) -> Dict[str, float]:
+    ) -> dict[str, float]:
         """
         Convert dimensionless parameters back to dimensional.
 

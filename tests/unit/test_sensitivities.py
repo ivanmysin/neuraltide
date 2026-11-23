@@ -25,11 +25,12 @@ import pytest
 import tensorflow as tf
 
 import neuraltide.config
-import neuraltide.optimization.sensitivities as sensitivities
 from neuraltide.optimization import (
     CalibrationProblem,
     JacobianResult,
     ParameterEntry,
+    ParameterSpace,
+    sensitivities,
 )
 from neuraltide.optimization.local import least_squares
 from neuraltide.optimization.sensitivities import (
@@ -400,3 +401,56 @@ class TestTruncatedBPTT:
             )
         with pytest.raises(TypeError, match="apply_gradients"):
             truncated_bptt(problem_f64, phi0, object(), horizon=5, epochs=1)
+
+
+class TestTruncatedBPTTGradModes:
+    """Диспетчеризация градиента окна в обоих grad_mode.
+
+    Регрессия sensitivities: лента окна теперь persistent ровно при
+    _literal_gradient_path(...) — model_var/chain пути считают градиент
+    одним вызовом tape.gradient на non-persistent ленте, literal-путь
+    (assign без model_var) получает persistent-ленту на случай fallback.
+    """
+
+    def test_chain_and_assign_model_vars_agree(self, l0_factory):
+        """L0 (model_var-записи): assign и chain дают одинаковые траектории."""
+        results = {}
+        for mode in ("assign", "chain"):
+            problem = _build_f64(l0_factory)
+            problem.grad_mode = mode
+            phi0 = _perturbed_phi(problem, seed=11)
+            optimizer = tf.keras.optimizers.Adam(learning_rate=0.02)
+            res = truncated_bptt(problem, phi0, optimizer, horizon=20, epochs=2)
+            results[mode] = [h["loss"] for h in res.history] + [res.free_run_loss]
+        np.testing.assert_allclose(
+            results["assign"], results["chain"], rtol=1e-10, atol=1e-12
+        )
+
+    def test_x0_only_literal_path(self, l0_factory):
+        """Пространство только из x0-записей: literal-путь, persistent-лента."""
+        from neuraltide.optimization._state import _literal_gradient_path
+
+        neuraltide.config.set_dtype(tf.float64)
+        network, _, t_seq, inputs, loss = l0_factory()
+        space = ParameterSpace()
+        space.add_initial_state_entries(network, include=[("exc", 0)])
+        problem = CalibrationProblem(
+            network, space, t_seq, inputs=inputs, objective=loss
+        )
+        problem.grad_mode = "assign"
+
+        assert _literal_gradient_path(problem.parameter_space, "assign")
+        # pack(None) невозможен для tensor-записи x0 — явные значения
+        phi0 = (
+            np.asarray(
+                problem.parameter_space.pack({"x0/exc/0": [0.0]}), dtype=np.float64
+            )
+            + 0.05
+        )
+        optimizer = tf.keras.optimizers.Adam(learning_rate=0.02)
+        result = truncated_bptt(problem, phi0, optimizer, horizon=20, epochs=2)
+        assert len(result.history) == 2
+        assert np.isfinite(result.free_run_loss)
+        # обучение снижает оконную потерю (free_run_loss сравнивать нельзя:
+        # усечение вносит смещение — см. notes в TruncatedResult)
+        assert result.history[-1]["loss"] < result.history[0]["loss"]

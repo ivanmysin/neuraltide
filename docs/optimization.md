@@ -147,9 +147,10 @@ ParameterSpace (`phi_entries`/`trainable_names`): non-trainable записи —
 from neuraltide.optimization import Experiment, MultiExperimentProblem
 
 problem = MultiExperimentProblem(
-    network, space,
-    experiments=[exp_a, exp_b],      # у каждого — свой objective
-    grad_mode="assign",              # или "chain"
+    network,
+    space,
+    experiments=[exp_a, exp_b],  # у каждого — свой objective
+    grad_mode="assign",  # или "chain"
     held_out=[exp_holdout],
 )
 ```
@@ -226,7 +227,7 @@ held-out — иначе `ValueError` при конструировании (дв
 ```python
 from neuraltide.optimization import least_squares, minimize_lbfgsb
 
-res = least_squares(problem, phi0, method="trf")   # невязки problem.residual
+res = least_squares(problem, phi0, method="trf")  # невязки problem.residual
 res = minimize_lbfgsb(problem, phi0, maxiter=200)  # value_and_gradient
 print(res.base.loss_best, res.n_forward, res.bounds_active)
 ```
@@ -286,12 +287,20 @@ BPTT, градиентный screen-refine в `multistart`), адаптер са
 ```python
 from neuraltide.optimization import multistart, sample_phi0s, dt_continuation
 
-ms = multistart(problem, n_starts=16, method="sobol", refine_top_k=4,
-                local="least_squares", seed=7, screen_refine_steps=2)
+ms = multistart(
+    problem,
+    n_starts=16,
+    method="sobol",
+    refine_top_k=4,
+    local="least_squares",
+    seed=7,
+    screen_refine_steps=2,
+)
 print(ms.base.loss_best, ms.clustering["n_clusters"], ms.solutions)
 
-result = dt_continuation(build_problem, dts=[2.0, 1.0, 0.5],
-                         optimizer="lbfgsb", maxiter=100)
+result = dt_continuation(
+    build_problem, dts=[2.0, 1.0, 0.5], optimizer="lbfgsb", maxiter=100
+)
 ```
 
 - `sample_phi0s(space, n, method='sobol'|'lhs'|'random', seed=...)` —
@@ -329,15 +338,18 @@ result = dt_continuation(build_problem, dts=[2.0, 1.0, 0.5],
 ## Чувствительности и длинные горизонты (`sensitivities`)
 
 ```python
-from neuraltide.optimization import (residual_jacobian,
-                                     value_and_gradient_checkpointed,
-                                     truncated_bptt)
+from neuraltide.optimization import (
+    residual_jacobian,
+    value_and_gradient_checkpointed,
+    truncated_bptt,
+)
 
-jac = residual_jacobian(problem, phi_best)          # JacobianResult (J, r, loss)
+jac = residual_jacobian(problem, phi_best)  # JacobianResult (J, r, loss)
 ckpt = value_and_gradient_checkpointed(problem, phi0, segment_length=100)
-tb = truncated_bptt(problem, phi0, tf.keras.optimizers.Adam(0.05),
-                    horizon=100, epochs=3)
-print(tb.free_run_loss)   # обязательный полный прогон после обучения
+tb = truncated_bptt(
+    problem, phi0, tf.keras.optimizers.Adam(0.05), horizon=100, epochs=3
+)
+print(tb.free_run_loss)  # обязательный полный прогон после обучения
 ```
 
 - `residual_jvp(problem, phi, v)` — одна forward-mode JVP-оценка `J·v`
@@ -361,9 +373,9 @@ print(tb.free_run_loss)   # обязательный полный прогон �
 from neuraltide.optimization import MultipleShootingProblem, ShootingConfig
 
 ms = MultipleShootingProblem(problem, ShootingConfig(4), continuity_weight=1.0)
-phi = ms.initialize_from_single_shooting()   # gaps ≈ 0
+phi = ms.initialize_from_single_shooting()  # gaps ≈ 0
 ev, grad = ms.value_and_gradient(phi)
-check = ms.finalize(phi)                     # SingleShootingCheck
+check = ms.finalize(phi)  # SingleShootingCheck
 print(check.consistent, check.gaps["max"])
 ```
 
@@ -394,13 +406,16 @@ augmented Lagrangian). Residual-раскладка `r = [r_data; √w·gap_k]` �
 ## Continuation-расписания (`schedules`)
 
 ```python
-from neuraltide.optimization import (ContinuationScheduler, horizon_growth,
-                                     teacher_forcing_schedule)
+from neuraltide.optimization import (
+    ContinuationScheduler,
+    horizon_growth,
+    teacher_forcing_schedule,
+)
 
 stages = horizon_growth(problem, [40, 80, 160])
 stages = teacher_forcing_schedule(problem, target_rates, alphas=[0.5, 0.0])
 result = ContinuationScheduler(stages).run(problem)
-print(result.free_run_check.loss)   # оценка на исходных входах
+print(result.free_run_check.loss)  # оценка на исходных входах
 ```
 
 - `Stage(name, problem, optimizer='lbfgsb'|'least_squares'|callable, maxiter,
@@ -468,9 +483,15 @@ print(subset.loss_before, subset.loss_after, subset.prediction_delta)
 ```python
 from neuraltide.optimization import global_search
 
-res = global_search(problem, method="de", max_evals=1500, seed=11,
-                    refine_top_k=3, local="least_squares",
-                    options={"popsize": 12, "polish": False})
+res = global_search(
+    problem,
+    method="de",
+    max_evals=1500,
+    seed=11,
+    refine_top_k=3,
+    local="least_squares",
+    options={"popsize": 12, "polish": False},
+)
 print(res.base.loss_best, res.n_evals, res.message)
 ```
 
@@ -501,12 +522,16 @@ print(res.base.loss_best, res.n_evals, res.message)
 ## Балансировка компонент и робастные градиенты (`robust`)
 
 ```python
-from neuraltide.optimization import (GradNormWeights, balanced_train,
-                                     pcgrad_project)
+from neuraltide.optimization import GradNormWeights, balanced_train, pcgrad_project
 
-bt = balanced_train(problem, phi0, GradNormWeights(alpha=1.0),
-                    optimizer="adam", max_steps=50,
-                    projector=pcgrad_project)
+bt = balanced_train(
+    problem,
+    phi0,
+    GradNormWeights(alpha=1.0),
+    optimizer="adam",
+    max_steps=50,
+    projector=pcgrad_project,
+)
 print(bt.base.loss_best, bt.weight_history[-1], bt.baseline["best_loss"])
 ```
 
@@ -548,11 +573,16 @@ print(bt.base.loss_best, bt.weight_history[-1], bt.baseline["best_loss"])
 bounds параметров это transforms + локальные решатели):
 
 ```python
-from neuraltide.optimization import (ConstraintSpec, ConstrainedProblem,
-                                     augmented_lagrangian, epsilon_constraint)
+from neuraltide.optimization import (
+    ConstraintSpec,
+    ConstrainedProblem,
+    augmented_lagrangian,
+    epsilon_constraint,
+)
 
-con = ConstraintSpec("inh_cap", "ineq",
-                     lambda preds, net: preds.firing_rates["inh"] - 60.0)
+con = ConstraintSpec(
+    "inh_cap", "ineq", lambda preds, net: preds.firing_rates["inh"] - 60.0
+)
 result = augmented_lagrangian(problem, [con], max_outer=8, local="lbfgsb")
 print(result.base.loss_best, result.violation_history, result.state.lambdas)
 ```
@@ -575,15 +605,17 @@ print(result.base.loss_best, result.violation_history, result.state.lambdas)
 ## Неопределённость (`uq`)
 
 ```python
-from neuraltide.optimization import (laplace_approximation,
-                                     predictive_intervals,
-                                     residual_diagnostics)
+from neuraltide.optimization import (
+    laplace_approximation,
+    predictive_intervals,
+    residual_diagnostics,
+)
 
-lap = laplace_approximation(problem, phi_map, method="gn")   # JᵀJ + prior
+lap = laplace_approximation(problem, phi_map, method="gn")  # JᵀJ + prior
 print(lap.intervals["exc/tau"], lap.pd, lap.jitter_used)
 rng = np.random.default_rng(0)
-samples = rng.multivariate_normal(lap.phi_map, lap.covariance + 1e-12*eye, 48)
-pred = predictive_intervals(problem, samples, level=0.95)    # per-(pop, t, unit)
+samples = rng.multivariate_normal(lap.phi_map, lap.covariance + 1e-12 * eye, 48)
+pred = predictive_intervals(problem, samples, level=0.95)  # per-(pop, t, unit)
 ```
 
 - `residual_diagnostics(problem, phi, max_lag, n_bins, windows)` — вектор
@@ -713,6 +745,7 @@ gradient-прогонами на одном экземпляре сети — с
 
 ```python
 import tensorflow as tf
+
 print(tf.config.list_physical_devices("GPU"))
 ```
 
@@ -728,6 +761,7 @@ print(tf.config.list_physical_devices("GPU"))
 
 ```python
 import neuraltide
+
 neuraltide.config.set_dtype(tf.float32)  # до построения сети/задач
 ```
 

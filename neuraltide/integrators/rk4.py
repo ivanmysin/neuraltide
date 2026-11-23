@@ -1,10 +1,8 @@
-from typing import Dict, Tuple
-
 import tensorflow as tf
 
 import neuraltide.config
 from neuraltide.core.base import PopulationModel, SynapseModel
-from neuraltide.core.types import TensorType, StateList
+from neuraltide.core.types import StateList, TensorType
 from neuraltide.integrators.base import BaseIntegrator
 from neuraltide.integrators.stiffness import joint_dynamic_indices
 
@@ -37,8 +35,8 @@ class RK4Integrator(BaseIntegrator):
         self,
         population: PopulationModel,
         state: StateList,
-        total_synaptic_input: Dict[str, TensorType],
-    ) -> Tuple[StateList, TensorType]:
+        total_synaptic_input: dict[str, TensorType],
+    ) -> tuple[StateList, TensorType]:
         dt = population.dt
 
         k1 = population.derivatives(state, total_synaptic_input)
@@ -78,7 +76,7 @@ class RK4Integrator(BaseIntegrator):
         pre_firing_rate: TensorType,
         post_voltage: TensorType,
         dt: float,
-    ) -> Tuple[StateList, TensorType]:
+    ) -> tuple[StateList, TensorType]:
         dtype = neuraltide.config.get_dtype()
 
         k1 = synapse.derivatives(state, pre_firing_rate, post_voltage)
@@ -118,7 +116,7 @@ class RK4Integrator(BaseIntegrator):
         pop_states: StateList,
         syn_states: StateList,
         dt: float,
-    ) -> Tuple[StateList, StateList]:
+    ) -> tuple[StateList, StateList]:
         """
         Один шаг RK4 по связанной сети (integration_mode='network').
 
@@ -146,7 +144,7 @@ class RK4Integrator(BaseIntegrator):
 
         pop_idx, syn_idx = joint_dynamic_indices(rhs, len(k1p), len(k1s))
 
-        def stage(kp: StateList, ks: StateList) -> Tuple[StateList, StateList]:
+        def stage(kp: StateList, ks: StateList) -> tuple[StateList, StateList]:
             """Промежуточное состояние: y + (приращение) по динамическим слотам."""
             stage_pop = list(pop_states)
             stage_syn = list(syn_states)

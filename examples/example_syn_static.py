@@ -13,15 +13,15 @@ StaticSynapse не имеет внутренней динамики (состо�
 import matplotlib
 
 matplotlib.use("Agg")
+import matplotlib.pyplot as plt
 import numpy as np
 import tensorflow as tf
-import matplotlib.pyplot as plt
 
 from neuraltide.core.network import NetworkGraph, NetworkRNN
-from neuraltide.populations.izhikevich_mf import IzhikevichMeanField
-from neuraltide.synapses.static import StaticSynapse
 from neuraltide.inputs.von_mises import VonMisesGenerator
 from neuraltide.integrators import RK4Integrator
+from neuraltide.populations.izhikevich_mf import IzhikevichMeanField
+from neuraltide.synapses.static import StaticSynapse
 from neuraltide.utils import seed_everything
 
 seed_everything(42)
@@ -93,7 +93,7 @@ for name in graph.population_names:
     pop_states_dict[name] = pop_states[idx : idx + n]
     idx += n
 
-from neuraltide.core.network import _step_fn  # noqa: E402
+from neuraltide.core.network import _step_fn
 
 for step in range(len(t_values)):
     t = t_seq[:, step : step + 1, 0]

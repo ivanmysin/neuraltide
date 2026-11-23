@@ -8,17 +8,15 @@
 - A (аккумулятор): растёт при высвобождении, затухает экспоненциально
 """
 
+import matplotlib.pyplot as plt
 import numpy as np
 import tensorflow as tf
-import matplotlib.pyplot as plt
 
-from neuraltide.core.network import NetworkGraph, NetworkRNN
-from neuraltide.populations.izhikevich_mf import IzhikevichMeanField
-from neuraltide.synapses.tsodyks_markram import TsodyksMarkramSynapse
+from neuraltide.core.network import NetworkGraph, NetworkRNN, _step_fn
 from neuraltide.inputs.von_mises import VonMisesGenerator
 from neuraltide.integrators import RK4Integrator
-from neuraltide.core.network import _step_fn
-
+from neuraltide.populations.izhikevich_mf import IzhikevichMeanField
+from neuraltide.synapses.tsodyks_markram import TsodyksMarkramSynapse
 
 dt = 0.1
 T = 150

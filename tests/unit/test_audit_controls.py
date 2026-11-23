@@ -24,9 +24,7 @@ from neuraltide.optimization import (
     ResidualLoss,
 )
 from neuraltide.optimization.shooting import MultipleShootingProblem, ShootingConfig
-
 from tests.unit.test_audit_regressions import _ee_tm_network, _t_seq
-
 
 # ---------------------------------------------------------------------------
 # К2: контроль. С include_syn_states=True склейка должна совпасть со
@@ -84,7 +82,7 @@ def test_network_order_diagnostic(integ, mode, coupled):
 
     def final_E(dt):
         net = _ee_tm_network(dt, make(), gsyn=0.5 if coupled else 0.0, mode=mode)
-        out = net(_t_seq(int(round(t_end / dt)), dt))
+        out = net(_t_seq(round(t_end / dt), dt))
         return float(np.asarray(out.final_state[0][0]).ravel()[0])
 
     ref = final_E(0.5 / 64)
@@ -93,7 +91,7 @@ def test_network_order_diagnostic(integ, mode, coupled):
     orders = [np.log2(errs[i] / errs[i + 1]) for i in range(len(errs) - 1)]
     print(
         f"\n{integ} mode={mode} coupled={coupled}: "
-        f"errs={['%.2e' % e for e in errs]} orders={['%.2f' % o for o in orders]}"
+        f"errs={[f'{e:.2e}' for e in errs]} orders={[f'{o:.2f}' for o in orders]}"
     )
     order = orders[-1]
     if integ == "euler":

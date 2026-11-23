@@ -1,19 +1,19 @@
+from neuraltide.core.base import PopulationModel, SynapseModel
 from neuraltide.core.network import (
     NetworkGraph,
-    NetworkRNN,
     NetworkOutput,
+    NetworkRNN,
 )
-from neuraltide.core.base import PopulationModel, SynapseModel
-from neuraltide.core.types import TensorType, StateList, ParamDict, get_pi
+from neuraltide.core.types import ParamDict, StateList, TensorType, get_pi
 
 __all__ = [
     "NetworkGraph",
-    "NetworkRNN",
     "NetworkOutput",
+    "NetworkRNN",
+    "ParamDict",
     "PopulationModel",
+    "StateList",
     "SynapseModel",
     "TensorType",
-    "StateList",
-    "ParamDict",
     "get_pi",
 ]

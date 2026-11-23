@@ -112,7 +112,7 @@ def multi(l0_factory):
 
 class TestDuckApi:
     def test_size_pack_unpack_bounds(self, multi):
-        problem, singles, _ = multi
+        problem, _singles, _ = multi
         assert problem.size == problem.parameter_space.size
         phi0 = problem.pack()
         assert phi0.shape == (problem.size,)
@@ -216,7 +216,7 @@ class TestGradient:
     def test_gradient_matches_fd_sum(self, multi):
         problem, _, _ = multi
         phi0 = np.asarray(problem.pack(), dtype=np.float64) + 0.1
-        ev, grad = problem.value_and_gradient(phi0)
+        _ev, grad = problem.value_and_gradient(phi0)
         h = 1e-5
         fd = np.zeros_like(phi0)
         for i in range(phi0.shape[0]):
@@ -259,7 +259,7 @@ class TestResidual:
 
 class TestSimulateAndCounters:
     def test_simulate_selects_experiment(self, multi):
-        problem, _, experiments = multi
+        problem, _, _experiments = multi
         phi0 = np.asarray(problem.pack(), dtype=np.float64)
         out_default = problem.simulate(phi0)
         out_exp2 = problem.simulate(phi0, experiment="exp2")
@@ -317,7 +317,7 @@ class TestNonTrainableEntry:
         assert phi0.shape == (problem.size,)
         theta = problem.unpack(phi0)
         assert "manual/const" not in theta
-        ev, grad = problem.value_and_gradient(phi0)
+        _ev, grad = problem.value_and_gradient(phi0)
         assert np.asarray(grad).shape == (problem.size,)
         lower, upper = problem.bounds_phi()
         assert lower.shape == upper.shape == (problem.size,)
@@ -659,7 +659,7 @@ class TestExperimentSpecificX0:
     # -- non-trainable exp-запись вне φ не ломает duck-API -----------------
     def test_nontrainable_experiment_entry_outside_phi(self, l0_factory):
         neuraltide.config.set_dtype(tf.float64)
-        network, space, t_seq, inputs, loss = l0_factory()
+        network, space, t_seq, inputs, _ = l0_factory()
         space.add_experiment_initial_state_entries(network, "exp2")
         space.entries["x0/exp2/exc/0"].trainable = False
         target = network(t_seq, inputs=inputs).firing_rates["exc"]
@@ -674,7 +674,7 @@ class TestExperimentSpecificX0:
         assert "x0/exp2/exc/0" not in theta
         with warnings.catch_warnings(record=True) as record:
             warnings.simplefilter("always")
-            ev, grad = problem.value_and_gradient(phi0)
+            _ev, grad = problem.value_and_gradient(phi0)
         # non-trainable exp-запись не предупреждает и не материализуется
         assert not any("экспериментного контекста" in str(w.message) for w in record)
         assert np.asarray(grad).shape == (3,)

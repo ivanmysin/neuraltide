@@ -1,10 +1,9 @@
 import tensorflow as tf
-from typing import Dict, Tuple, List
 
 import neuraltide
 import neuraltide.config
 from neuraltide.core.base import SynapseModel
-from neuraltide.core.types import TensorType, StateList
+from neuraltide.core.types import StateList, TensorType
 
 
 class CompositeSynapse(SynapseModel):
@@ -24,12 +23,12 @@ class CompositeSynapse(SynapseModel):
         n_pre: int,
         n_post: int,
         dt: float,
-        components: List[Tuple[str, SynapseModel]],
+        components: list[tuple[str, SynapseModel]],
         **kwargs,
     ):
         super().__init__(n_pre=n_pre, n_post=n_post, dt=dt, **kwargs)
 
-        self.components: List[Tuple[str, SynapseModel]] = components
+        self.components: list[tuple[str, SynapseModel]] = components
 
         self.state_size = []
         for name, syn in components:
@@ -47,7 +46,7 @@ class CompositeSynapse(SynapseModel):
         post_voltage: TensorType,
         state: StateList,
         dt: float,
-    ) -> Tuple[Dict[str, TensorType], StateList]:
+    ) -> tuple[dict[str, TensorType], StateList]:
         dtype = neuraltide.config.get_dtype()
         batch = tf.shape(pre_firing_rate)[0]
         total_I_syn = tf.zeros([batch, self.n_post], dtype=dtype)
@@ -98,7 +97,7 @@ class CompositeSynapse(SynapseModel):
         state: StateList,
         pre_firing_rate: TensorType,
         post_voltage: TensorType,
-    ) -> Dict[str, TensorType]:
+    ) -> dict[str, TensorType]:
         """
         Compute total synaptic current as sum of all components.
         """
@@ -121,7 +120,7 @@ class CompositeSynapse(SynapseModel):
         return {"I_syn": total_I_syn, "g_syn": total_g_syn}
 
     @property
-    def parameter_spec(self) -> Dict[str, Dict[str, any]]:
+    def parameter_spec(self) -> dict[str, dict[str, any]]:
         spec = {}
         for name, syn in self.components:
             syn_spec = syn.parameter_spec
@@ -205,7 +204,7 @@ class CompositeSynapse(SynapseModel):
         state: StateList,
         pre_firing_rate: TensorType,
         post_voltage: TensorType,
-    ) -> Dict[str, TensorType]:
+    ) -> dict[str, TensorType]:
         result = {}
         state_idx = 0
         for name, syn in self.components:

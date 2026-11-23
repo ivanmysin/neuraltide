@@ -1,5 +1,6 @@
+from typing import Any
+
 import tensorflow as tf
-from typing import Any, Dict, Optional
 
 from neuraltide.core.base import BaseInputGenerator, _get_constraint_name
 from neuraltide.core.types import TensorType, get_pi
@@ -19,6 +20,8 @@ class VonMisesGenerator(BaseInputGenerator):
         R: R-value (0-1), характеризует концентрированность. Скаляр или вектор [n_units].
         freq: частота тета-ритма (Hz). Скаляр или вектор [n_units].
         phase: начальная фаза (рад). Скаляр или вектор [n_units].
+                Конвенция cos(ωt − phase): положительное значение
+                сдвигает максимум ПОЗЖЕ t=0.
 
     Пример:
         gen = VonMisesGenerator(
@@ -47,7 +50,7 @@ class VonMisesGenerator(BaseInputGenerator):
     def __init__(
         self,
         dt: float,
-        params: Dict[str, Any],
+        params: dict[str, Any],
         name: str = "von_mises_generator",
         **kwargs,
     ):
@@ -68,9 +71,7 @@ class VonMisesGenerator(BaseInputGenerator):
         kappa = tf.where(R >= 0.85, 1.0 / (3 * R - 4 * R**2 + R**3), kappa)
         return kappa
 
-    def call(
-        self, t: TensorType, extra_inputs: Optional[TensorType] = None
-    ) -> TensorType:
+    def call(self, t: TensorType, extra_inputs: TensorType | None = None) -> TensorType:
         """
         Args:
             t: текущее время в мс. shape = [batch, 1].
@@ -96,7 +97,7 @@ class VonMisesGenerator(BaseInputGenerator):
         return tf.nn.relu(rate)
 
     @property
-    def parameter_spec(self) -> Dict[str, Dict[str, Any]]:
+    def parameter_spec(self) -> dict[str, dict[str, Any]]:
         return {
             "mean_rate": {
                 "shape": (self.n_units,),
@@ -124,5 +125,5 @@ class VonMisesGenerator(BaseInputGenerator):
             },
         }
 
-    def _get_constraint_name(self, var: tf.Variable) -> Optional[str]:
+    def _get_constraint_name(self, var: tf.Variable) -> str | None:
         return _get_constraint_name(var)

@@ -13,8 +13,6 @@ problem.initial_state/exp.initial_state отражается немедленн�
 их лениво при первом вызове.
 """
 
-from typing import Optional
-
 import tensorflow as tf
 
 import neuraltide.config
@@ -71,10 +69,10 @@ class _CompiledCore:
         t_sequence,
         inputs,
         objective,
-        experiment_name: Optional[str] = None,
+        experiment_name: str | None = None,
         grad_mode: str = "chain",
         x0_substitute=None,
-        chunk_length: Optional[int] = None,
+        chunk_length: int | None = None,
         chunk_grad: str = "checkpointed",
     ):
         self.network = network

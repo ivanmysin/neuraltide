@@ -1,5 +1,6 @@
+from typing import Any
+
 import tensorflow as tf
-from typing import Any, Dict, Optional
 
 from neuraltide.core.base import BaseInputGenerator, _get_constraint_name
 from neuraltide.core.types import TensorType
@@ -35,7 +36,7 @@ class ConstantRateGenerator(BaseInputGenerator):
     def __init__(
         self,
         dt: float,
-        params: Dict[str, Any],
+        params: dict[str, Any],
         name: str = "constant_rate_generator",
         **kwargs,
     ):
@@ -43,9 +44,7 @@ class ConstantRateGenerator(BaseInputGenerator):
 
         self.rate = self._make_param(self._params, "rate")
 
-    def call(
-        self, t: TensorType, extra_inputs: Optional[TensorType] = None
-    ) -> TensorType:
+    def call(self, t: TensorType, extra_inputs: TensorType | None = None) -> TensorType:
         """
         Args:
             t: время в мс. shape [batch, T, 1], [batch, T] или [batch, 1].
@@ -65,7 +64,7 @@ class ConstantRateGenerator(BaseInputGenerator):
         return tf.broadcast_to(rate, [batch_n, T_n, self.n_units])
 
     @property
-    def parameter_spec(self) -> Dict[str, Dict[str, Any]]:
+    def parameter_spec(self) -> dict[str, dict[str, Any]]:
         return {
             "rate": {
                 "shape": (self.n_units,),
@@ -75,5 +74,5 @@ class ConstantRateGenerator(BaseInputGenerator):
             },
         }
 
-    def _get_constraint_name(self, var: tf.Variable) -> Optional[str]:
+    def _get_constraint_name(self, var: tf.Variable) -> str | None:
         return _get_constraint_name(var)

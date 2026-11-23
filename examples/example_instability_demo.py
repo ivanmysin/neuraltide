@@ -13,17 +13,17 @@
 - Целевая траектория: постоянный firing rate 0.3 (безразмерный)
 """
 
+import matplotlib.pyplot as plt
 import numpy as np
 import tensorflow as tf
-import matplotlib.pyplot as plt
 
 from neuraltide.core.network import NetworkGraph, NetworkRNN
-from neuraltide.populations import IzhikevichMeanField
-from neuraltide.synapses import TsodyksMarkramSynapse
 from neuraltide.inputs import ConstantRateGenerator
 from neuraltide.integrators import RK4Integrator
-from neuraltide.training import Trainer, CompositeLoss, MSELoss, StabilityPenalty
-from neuraltide.utils import seed_everything, print_summary
+from neuraltide.populations import IzhikevichMeanField
+from neuraltide.synapses import TsodyksMarkramSynapse
+from neuraltide.training import CompositeLoss, MSELoss, StabilityPenalty, Trainer
+from neuraltide.utils import print_summary, seed_everything
 
 seed_everything(42)
 

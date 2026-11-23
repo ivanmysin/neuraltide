@@ -9,7 +9,8 @@ _materialize_initial_state`` и т.п. продолжают работать.
 """
 
 import warnings
-from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
+from collections.abc import Mapping, Sequence
+from typing import Any
 
 import tensorflow as tf
 
@@ -19,7 +20,7 @@ from neuraltide.optimization.parameters import ParameterSpace
 
 _TENSOR_KINDS = ("initial_state", "shooting_state")
 
-InitialState = Optional[Tuple[Sequence[TensorType], Sequence[TensorType]]]
+InitialState = tuple[Sequence[TensorType], Sequence[TensorType]] | None
 
 # «One-time» защита от спама предупреждением о пропуске эксперимент-
 # специфичных x0-записей вне экспериментного контекста: наборы имён,
@@ -150,8 +151,8 @@ def _substitute_x0_batched(
 
     # Раскладка по слотам: common владеет слотом целиком, exp-specific
     # подставляются поверх по одному слоту.
-    common_by_flat: Dict[int, Tuple[str, tf.Tensor]] = {}
-    exp_by_flat: Dict[int, List[Tuple[int, str, tf.Tensor]]] = {}
+    common_by_flat: dict[int, tuple[str, tf.Tensor]] = {}
+    exp_by_flat: dict[int, list[tuple[int, str, tf.Tensor]]] = {}
     for name, entry in _tensor_entries(space):
         flat = _slot_of(entry, name)
         exp_name = _x0_experiment(entry)
@@ -165,7 +166,7 @@ def _substitute_x0_batched(
                 continue
             exp_by_flat.setdefault(flat, []).append((idx, name, _x0_of(name, entry)))
 
-    x0_map: Dict[str, tf.Tensor] = {}
+    x0_map: dict[str, tf.Tensor] = {}
     for flat, (name, x0) in common_by_flat.items():
         excluded = {idx for idx, _, _ in exp_by_flat.get(flat, [])}
         tensor = tf.broadcast_to(x0, [batch] + x0.shape[1:].as_list())
@@ -236,7 +237,7 @@ def _tensor_entries(space: ParameterSpace):
     return [(n, e) for n, e in space.phi_entries.items() if e.kind in _TENSOR_KINDS]
 
 
-def _x0_experiment(entry) -> Optional[str]:
+def _x0_experiment(entry) -> str | None:
     """experiment записи x0 (None — common); locator=None трактуем как common."""
     return entry.locator.experiment if entry.locator is not None else None
 
@@ -246,8 +247,8 @@ def _materialize_initial_state(
     space: ParameterSpace,
     theta: Mapping[str, tf.Tensor],
     base_initial_state: InitialState,
-    experiment: Optional[str] = None,
-) -> Tuple[InitialState, Dict[str, tf.Tensor]]:
+    experiment: str | None = None,
+) -> tuple[InitialState, dict[str, tf.Tensor]]:
     """
     Строит начальное состояние для network.call с подставленными x0.
 
@@ -315,8 +316,8 @@ def _materialize_initial_state(
         init_pop = list(pop)
         init_syn = list(syn)
     offsets = network.pop_state_offsets
-    x0_map: Dict[str, tf.Tensor] = {}
-    slot_owner: Dict[int, str] = {}
+    x0_map: dict[str, tf.Tensor] = {}
+    slot_owner: dict[int, str] = {}
     for name, entry in applicable:
         locator = entry.locator
         if locator is None or locator.population not in offsets:
@@ -369,8 +370,8 @@ def _chain_gradient(
     # Смещения по trainable-записям — в согласии с ParameterSpace.unpack
     # и длиной phi_t (non-trainable записи вне φ).
     entries = space.phi_entries
-    sources: List[tf.Tensor] = []
-    source_names: List[str] = []
+    sources: list[tf.Tensor] = []
+    source_names: list[str] = []
     for name, entry in entries.items():
         if entry.kind == "model_var":
             if entry.variable is not None:
@@ -384,7 +385,7 @@ def _chain_gradient(
                 sources.append(tensor)
                 source_names.append(name)
     grads = tape.gradient(loss_t, sources) if sources else []
-    grad_by_name: Dict[str, tf.Tensor] = {}
+    grad_by_name: dict[str, tf.Tensor] = {}
     for name, g in zip(source_names, grads):
         if g is None:
             continue
@@ -408,6 +409,25 @@ def _chain_gradient(
     return tf.concat(pieces, axis=0)
 
 
+def _literal_gradient_path(space: ParameterSpace, grad_mode: str) -> bool:
+    """True, если градиент пойдёт literal-путём по φ (и возможен fallback).
+
+    Это assign-режим без model_var-записей с переменными: literal-путь
+    пробует ``tape.gradient(loss, phi)`` и при неудаче (None) переходит
+    на ``_chain_gradient`` — то есть может вызвать ``tape.gradient``
+    дважды, и лента обязана быть persistent. Во всех остальных случаях
+    диспетчеризация сразу уходит в ``_chain_gradient`` (ровно один
+    вызов tape.gradient), и non-persistent ленты достаточно — это ещё и
+    сильно дешевле на графах tf.while_loop.
+    """
+    if grad_mode != "assign":
+        return False
+    return not any(
+        entry.kind == "model_var" and entry.variable is not None
+        for entry in space.phi_entries.values()
+    )
+
+
 def _phi_gradient(
     space: ParameterSpace,
     grad_mode: str,
@@ -423,12 +443,12 @@ def _phi_gradient(
         переменными — при них градиент через variable.assign недоступен,
         а literal вернул бы неполный градиент (только x0-часть).
     'chain': всегда цепное вычисление.
+
+    Лента должна быть persistent ровно тогда, когда
+    ``_literal_gradient_path(space, grad_mode)`` истинно (возможен
+    второй вызов tape.gradient при неудаче literal-пути).
     """
-    has_model_vars = any(
-        entry.kind == "model_var" and entry.variable is not None
-        for entry in space.phi_entries.values()
-    )
-    if grad_mode == "assign" and not has_model_vars:
+    if _literal_gradient_path(space, grad_mode):
         g = tape.gradient(loss_t, phi_t)
         if g is not None:
             return g

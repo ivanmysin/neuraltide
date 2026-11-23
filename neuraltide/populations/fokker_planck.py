@@ -3,7 +3,7 @@ import tensorflow as tf
 import neuraltide
 import neuraltide.config
 from neuraltide.core.base import PopulationModel
-from neuraltide.core.types import TensorType, StateList, Dict
+from neuraltide.core.types import StateList, TensorType
 
 
 class FokkerPlanckPopulation(PopulationModel):
@@ -99,7 +99,7 @@ class FokkerPlanckPopulation(PopulationModel):
         return self.get_boundary_flux(P, self.dV)
 
     @property
-    def parameter_spec(self) -> Dict[str, Dict[str, any]]:
+    def parameter_spec(self) -> dict[str, dict[str, any]]:
         return {
             "grid_size": {
                 "shape": (),

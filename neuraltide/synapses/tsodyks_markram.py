@@ -1,10 +1,9 @@
 import tensorflow as tf
-from typing import Dict, Tuple
 
 import neuraltide
 import neuraltide.config
 from neuraltide.core.base import SynapseModel
-from neuraltide.core.types import TensorType, StateList, cast_if_needed
+from neuraltide.core.types import StateList, TensorType, cast_if_needed
 
 
 class TsodyksMarkramSynapse(SynapseModel):
@@ -54,7 +53,7 @@ class TsodyksMarkramSynapse(SynapseModel):
         post_voltage: TensorType,
         state: StateList,
         dt: float,
-    ) -> Tuple[Dict[str, TensorType], StateList]:
+    ) -> tuple[dict[str, TensorType], StateList]:
         R, U, A = state
 
         dtype = neuraltide.config.get_dtype()
@@ -148,7 +147,7 @@ class TsodyksMarkramSynapse(SynapseModel):
         state: StateList,
         pre_firing_rate: TensorType,
         post_voltage: TensorType,
-    ) -> Dict[str, TensorType]:
+    ) -> dict[str, TensorType]:
         """
         Compute synaptic current and conductance from state.
 
@@ -161,7 +160,7 @@ class TsodyksMarkramSynapse(SynapseModel):
         e_r = _c(self.e_r, dtype)
 
         if len(state) > 0:
-            R_new, U_new, A_new = state
+            _R_new, _U_new, A_new = state
             g_eff = gsyn_max * A_new
         else:
             firing_probs = pre_firing_rate / 1000.0
@@ -191,7 +190,7 @@ class TsodyksMarkramSynapse(SynapseModel):
 
         where s = pconn @ (pre_firing_rate_T / 1000.0)
         """
-        R, U, A = state
+        R, U, _A = state
         lam_R, lam_U, lam_A = adjoint_state
 
         dtype = neuraltide.config.get_dtype()
@@ -291,7 +290,7 @@ class TsodyksMarkramSynapse(SynapseModel):
         state: StateList,
         pre_firing_rate: TensorType,
         post_voltage: TensorType,
-    ) -> Dict[str, TensorType]:
+    ) -> dict[str, TensorType]:
         """
         Gradients for current-level parameters (per-batch-slot; суммирование
         по батчу — за вызывающим кодом).
@@ -301,7 +300,7 @@ class TsodyksMarkramSynapse(SynapseModel):
         dtype = neuraltide.config.get_dtype()
 
         e_r = tf.cast(self.e_r, dtype)
-        R, U, A = state
+        _R, _U, A = state
 
         post_v = post_voltage[:, tf.newaxis, :]  # [B, 1, n_post]
         lam_I_b = lam_I[:, tf.newaxis, :]
@@ -315,7 +314,7 @@ class TsodyksMarkramSynapse(SynapseModel):
         return {"gsyn_max": dgsyn_max}
 
     @property
-    def parameter_spec(self) -> Dict[str, Dict[str, any]]:
+    def parameter_spec(self) -> dict[str, dict[str, any]]:
         return {
             "gsyn_max": {
                 "shape": (self.n_pre, self.n_post),

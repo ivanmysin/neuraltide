@@ -1,10 +1,9 @@
 import tensorflow as tf
-from typing import Dict, Tuple
 
 import neuraltide
 import neuraltide.config
 from neuraltide.core.base import SynapseModel
-from neuraltide.core.types import TensorType, StateList, cast_if_needed
+from neuraltide.core.types import StateList, TensorType, cast_if_needed
 
 
 class NMDASynapse(SynapseModel):
@@ -51,7 +50,7 @@ class NMDASynapse(SynapseModel):
         post_voltage: TensorType,
         state: StateList,
         dt: float,
-    ) -> Tuple[Dict[str, TensorType], StateList]:
+    ) -> tuple[dict[str, TensorType], StateList]:
         gnmda, dgnmda = state
 
         dtype = neuraltide.config.get_dtype()
@@ -127,7 +126,7 @@ class NMDASynapse(SynapseModel):
         state: StateList,
         pre_firing_rate: TensorType,
         post_voltage: TensorType,
-    ) -> Dict[str, TensorType]:
+    ) -> dict[str, TensorType]:
         """
         Compute synaptic current and conductance from state.
 
@@ -200,7 +199,7 @@ class NMDASynapse(SynapseModel):
         Only gsyn_max_nmda is trainable and does not appear in derivatives → zero.
         Non-trainable params (tau1, tau2) also not implemented.
         """
-        gnmda, dgnmda = state
+        gnmda, _dgnmda = state
         return tf.zeros_like(gnmda)
 
     def compute_current_state_vjp(
@@ -221,7 +220,7 @@ class NMDASynapse(SynapseModel):
             dgnmda[b,i,j] = lam_I[b,j] * gsyn_max[i,j] * mg_block[b,j] * (e_r - post_v[b,j])
                           + lam_g[b,j] * gsyn_max[i,j] * mg_block[b,j]
         """
-        gnmda, dgnmda = state
+        _gnmda, dgnmda = state
 
         dtype = neuraltide.config.get_dtype()
         _c = cast_if_needed
@@ -248,12 +247,12 @@ class NMDASynapse(SynapseModel):
         state: StateList,
         pre_firing_rate: TensorType,
         post_voltage: TensorType,
-    ) -> Dict[str, TensorType]:
+    ) -> dict[str, TensorType]:
         """
         Gradients for current-level parameters (only gsyn_max_nmda;
         per-batch-slot).
         """
-        gnmda, dgnmda = state
+        gnmda, _dgnmda = state
 
         dtype = neuraltide.config.get_dtype()
         _c = cast_if_needed
@@ -275,7 +274,7 @@ class NMDASynapse(SynapseModel):
         return {"gsyn_max_nmda": dgsyn_max}
 
     @property
-    def parameter_spec(self) -> Dict[str, Dict[str, any]]:
+    def parameter_spec(self) -> dict[str, dict[str, any]]:
         return {
             "gsyn_max_nmda": {
                 "shape": (self.n_pre, self.n_post),

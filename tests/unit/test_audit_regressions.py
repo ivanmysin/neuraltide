@@ -47,7 +47,6 @@ from neuraltide.synapses import TsodyksMarkramSynapse
 from neuraltide.training.losses import MSELoss
 from neuraltide.training.readouts import HemodynamicReadout
 
-
 # ---------------------------------------------------------------------------
 # Вспомогательное
 # ---------------------------------------------------------------------------
@@ -427,7 +426,7 @@ def test_checkpointed_mse_matches_plain_bptt(l0_factory, segment_length):
     segment_length = 1 — контроль: при L = 1 ошибка не проявляется, этот
     вариант проходит и на dev.
     """
-    problem, (network, space, t_seq, inputs, loss) = _f64_l0(l0_factory)
+    _problem, (network, space, t_seq, inputs, loss) = _f64_l0(l0_factory)
     target = tf.constant(np.asarray(loss.observations[0].target, dtype=np.float64))
     mse_problem = CalibrationProblem(
         network, space, t_seq, inputs=inputs, objective=MSELoss({"exc": target})
@@ -488,7 +487,7 @@ def test_rk4_network_order_with_tm_coupling():
 
     def final_E(dt):
         net = _ee_tm_network(dt, RK4Integrator(), mode="network")
-        out = net(_t_seq(int(round(t_end / dt)), dt))
+        out = net(_t_seq(round(t_end / dt), dt))
         return float(np.asarray(out.final_state[0][0]).ravel()[0])  # E в момент t_end
 
     ref = final_E(0.5 / 64)

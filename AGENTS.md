@@ -12,6 +12,12 @@ ruff check .                     # lint
 ruff format --check .            # format check (black-equivalent, line-length=88)
 ```
 
+Ruff (>=0.17) также форматирует python-блоки в .md — правки примеров в
+доках при `ruff format .` ожидаемы. В `pyproject.toml`
+`[tool.ruff.lint]` отключены BLE001/TRY004/RUF012 — это осознанные
+паттерны пакета (fallback-except'ы, конвенция ValueError, Keras-подобные
+state_size); НЕ «чините» их без отдельного решения.
+
 Python **>=3.12** (pyproject.toml; README says 3.9 but that is outdated).
 
 ## Architecture

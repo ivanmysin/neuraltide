@@ -9,10 +9,10 @@ Verifies that dimensional → dimensionless conversion:
 5. Produces identical interface to dimensionless params
 """
 
-import tensorflow as tf
 import pytest
-from neuraltide.populations.izhikevich_mf import IzhikevichMeanField
+import tensorflow as tf
 
+from neuraltide.populations.izhikevich_mf import IzhikevichMeanField
 
 POP_PARAMS_SCALAR = {
     "Cm": 114.0,

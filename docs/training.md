@@ -16,10 +16,12 @@ NeuralTide поддерживает два метода вычисления г�
 ```python
 from neuraltide.training import Trainer, CompositeLoss, MSELoss, StabilityPenalty
 
-loss_fn = CompositeLoss([
-    (1.0, MSELoss(target)),
-    (1e-3, StabilityPenalty()),
-])
+loss_fn = CompositeLoss(
+    [
+        (1.0, MSELoss(target)),
+        (1e-3, StabilityPenalty()),
+    ]
+)
 trainer = Trainer(network, loss_fn, optimizer=tf.keras.optimizers.Adam(1e-3))
 history = trainer.fit(t_seq, inputs=inputs, epochs=epochs, verbose=1)
 ```
@@ -48,13 +50,13 @@ history = trainer.fit(t_seq, inputs=inputs, epochs=epochs, verbose=1)
 history = trainer.fit(t_seq, inputs=inputs, epochs=100)
 
 # Экспорт в JSON (по умолчанию)
-trainer.export_results('results.json')
+trainer.export_results("results.json")
 
 # Экспорт в CSV
-trainer.export_results('results.csv', format='csv')
+trainer.export_results("results.csv", format="csv")
 
 # Без конфигурации сети
-trainer.export_results('results.json', include_config=False)
+trainer.export_results("results.json", include_config=False)
 ```
 
 **JSON** — содержит:
@@ -95,10 +97,12 @@ loss = StabilityPenalty()
 ```python
 from neuraltide.training import CompositeLoss, MSELoss, StabilityPenalty
 
-loss_fn = CompositeLoss([
-    (1.0, MSELoss(target)),      # основная ошибка
-    (1e-3, StabilityPenalty()),  # штраф за нестабильность
-])
+loss_fn = CompositeLoss(
+    [
+        (1.0, MSELoss(target)),  # основная ошибка
+        (1e-3, StabilityPenalty()),  # штраф за нестабильность
+    ]
+)
 ```
 
 ---
@@ -150,7 +154,7 @@ callbacks = [monitor]
 ```python
 from neuraltide.training import ExperimentLogger
 
-callbacks = [ExperimentLogger(log_dir='./logs')]
+callbacks = [ExperimentLogger(log_dir="./logs")]
 ```
 
 ---
@@ -187,10 +191,7 @@ Adjoint вычисляет градиенты через backward pass, анал
 from neuraltide.training import Trainer
 
 trainer = Trainer(
-    network,
-    loss_fn,
-    optimizer=tf.keras.optimizers.Adam(1e-3),
-    grad_method='adjoint'
+    network, loss_fn, optimizer=tf.keras.optimizers.Adam(1e-3), grad_method="adjoint"
 )
 
 history = trainer.fit(t_seq, inputs=inputs, epochs=100)
@@ -205,9 +206,9 @@ from neuraltide.optimization import compare_bptt_adjoint
 
 report = compare_bptt_adjoint(network, loss_fn, t_seq, inputs=inputs)
 
-print(report['loss_abs_diff'])      # разница потерь BPTT vs adjoint (~1e-7)
-print(report['max_grad_abs_diff'])  # максимальная разница градиентов
-print(report['cosine_similarity'])  # косинусная близость векторов градиентов
+print(report["loss_abs_diff"])  # разница потерь BPTT vs adjoint (~1e-7)
+print(report["max_grad_abs_diff"])  # максимальная разница градиентов
+print(report["cosine_similarity"])  # косинусная близость векторов градиентов
 ```
 
 ### Adjoint и режим интегрирования (integration_mode)
@@ -249,54 +250,70 @@ T = 50
 epochs = 200
 
 # Создание сети
-gen = VonMisesGenerator(dt=dt, params={
-    'mean_rate': 20.0, 'R': 0.5, 'freq': 8.0, 'phase': 0.0,
-})
+gen = VonMisesGenerator(
+    dt=dt,
+    params={
+        "mean_rate": 20.0,
+        "R": 0.5,
+        "freq": 8.0,
+        "phase": 0.0,
+    },
+)
 
-pop = IzhikevichMeanField(dt=dt, params={
-    'tau_pop': [1.0, 1.0],
-    'alpha': [0.5, 0.5],
-    'a': [0.02, 0.02],
-    'b': [0.2, 0.2],
-    'w_jump': [0.1, 0.1],
-    'Delta_I': {'value': [0.5, 0.6], 'trainable': True, 'min': 0.01, 'max': 2.0},
-    'I_ext': {'value': [0.1, 0.2], 'trainable': True, 'min': -2.0, 'max': 2.0},
-})
+pop = IzhikevichMeanField(
+    dt=dt,
+    params={
+        "tau_pop": [1.0, 1.0],
+        "alpha": [0.5, 0.5],
+        "a": [0.02, 0.02],
+        "b": [0.2, 0.2],
+        "w_jump": [0.1, 0.1],
+        "Delta_I": {"value": [0.5, 0.6], "trainable": True, "min": 0.01, "max": 2.0},
+        "I_ext": {"value": [0.1, 0.2], "trainable": True, "min": -2.0, "max": 2.0},
+    },
+)
 
-syn = TsodyksMarkramSynapse(n_pre=1, n_post=2, dt=dt, params={
-    'gsyn_max': {'value': [[0.1, 0.1]], 'trainable': True},
-    'tau_f': {'value': 20.0, 'trainable': True, 'min': 6.0, 'max': 240.0},
-    'tau_d': {'value': 5.0, 'trainable': True, 'min': 2.0, 'max': 15.0},
-    'tau_r': {'value': 200.0, 'trainable': True, 'min': 91.0, 'max': 1300.0},
-    'Uinc': {'value': 0.2, 'trainable': True, 'min': 0.04, 'max': 0.7},
-    'pconn': {'value': [[1.0, 1.0]], 'trainable': False},
-    'e_r': {'value': 0.0, 'trainable': False},
-})
+syn = TsodyksMarkramSynapse(
+    n_pre=1,
+    n_post=2,
+    dt=dt,
+    params={
+        "gsyn_max": {"value": [[0.1, 0.1]], "trainable": True},
+        "tau_f": {"value": 20.0, "trainable": True, "min": 6.0, "max": 240.0},
+        "tau_d": {"value": 5.0, "trainable": True, "min": 2.0, "max": 15.0},
+        "tau_r": {"value": 200.0, "trainable": True, "min": 91.0, "max": 1300.0},
+        "Uinc": {"value": 0.2, "trainable": True, "min": 0.04, "max": 0.7},
+        "pconn": {"value": [[1.0, 1.0]], "trainable": False},
+        "e_r": {"value": 0.0, "trainable": False},
+    },
+)
 
 graph = NetworkGraph(dt=dt)
-graph.declare_input('theta', n_units=gen.n_units)
-graph.add_population('exc', pop)
-graph.add_synapse('theta->exc', syn, src='theta', tgt='exc')
+graph.declare_input("theta", n_units=gen.n_units)
+graph.add_population("exc", pop)
+graph.add_synapse("theta->exc", syn, src="theta", tgt="exc")
 
 network = NetworkRNN(graph, integrator=RK4Integrator(), stability_penalty_weight=1e-3)
 
 # Целевые данные
 t_values = np.arange(T, dtype=np.float32) * dt
-target_0 = 10.0 + 5.0 * np.sin(2*np.pi*8.0*t_values/1000.0)
-target_1 = 8.0 + 4.0 * np.sin(2*np.pi*8.0*t_values/1000.0 + 0.5)
-target = {
-    'exc': tf.constant(np.stack([target_0, target_1], axis=-1)[None, :, :])
-}
+target_0 = 10.0 + 5.0 * np.sin(2 * np.pi * 8.0 * t_values / 1000.0)
+target_1 = 8.0 + 4.0 * np.sin(2 * np.pi * 8.0 * t_values / 1000.0 + 0.5)
+target = {"exc": tf.constant(np.stack([target_0, target_1], axis=-1)[None, :, :])}
 
 t_seq = tf.constant(t_values[None, :, None])
-inputs = graph.pack_inputs({'theta': gen(t_seq)})
+inputs = graph.pack_inputs({"theta": gen(t_seq)})
 
 # Обучение с adjoint
-loss_fn = CompositeLoss([
-    (1.0, MSELoss(target)),
-    (1e-3, StabilityPenalty()),
-])
-trainer = Trainer(network, loss_fn, optimizer=tf.keras.optimizers.Adam(1e-3), grad_method='adjoint')
+loss_fn = CompositeLoss(
+    [
+        (1.0, MSELoss(target)),
+        (1e-3, StabilityPenalty()),
+    ]
+)
+trainer = Trainer(
+    network, loss_fn, optimizer=tf.keras.optimizers.Adam(1e-3), grad_method="adjoint"
+)
 history = trainer.fit(t_seq, inputs=inputs, epochs=epochs, verbose=50)
 
 print(f"Initial loss: {history.loss_history[0]:.4f}")

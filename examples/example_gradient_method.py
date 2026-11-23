@@ -7,13 +7,14 @@
 
 import numpy as np
 import tensorflow as tf
+
 from neuraltide.core.network import NetworkGraph, NetworkRNN
-from neuraltide.populations import IzhikevichMeanField
-from neuraltide.synapses import TsodyksMarkramSynapse
 from neuraltide.inputs import VonMisesGenerator
 from neuraltide.integrators import RK4Integrator
+from neuraltide.populations import IzhikevichMeanField
+from neuraltide.synapses import TsodyksMarkramSynapse
 from neuraltide.training.losses import CompositeLoss, MSELoss
-from neuraltide.utils import seed_everything, print_summary
+from neuraltide.utils import print_summary, seed_everything
 
 seed_everything(42)
 
@@ -87,7 +88,7 @@ print("\n" + "=" * 60)
 print("Обучение с gradient_method='autograd'")
 print("=" * 60)
 
-from neuraltide.training.trainer import Trainer as TrainerBase  # noqa: E402
+from neuraltide.training.trainer import Trainer as TrainerBase
 
 
 class Trainer(TrainerBase):

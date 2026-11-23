@@ -9,11 +9,11 @@ import pytest
 import tensorflow as tf
 
 from neuraltide.core.network import NetworkGraph, NetworkRNN
-from neuraltide.populations import IzhikevichMeanField
-from neuraltide.synapses import TsodyksMarkramSynapse
 from neuraltide.inputs import VonMisesGenerator
 from neuraltide.integrators import RK4Integrator
-from neuraltide.training import MSELoss, CompositeLoss, Trainer, GradientMonitor
+from neuraltide.populations import IzhikevichMeanField
+from neuraltide.synapses import TsodyksMarkramSynapse
+from neuraltide.training import CompositeLoss, GradientMonitor, MSELoss, Trainer
 
 
 def _make_network(dt=0.1):

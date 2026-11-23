@@ -1,6 +1,7 @@
 import tensorflow as tf
+
 import neuraltide
-import neuraltide.config as config
+from neuraltide import config
 from neuraltide.core.base import PopulationModel
 
 

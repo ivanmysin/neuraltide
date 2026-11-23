@@ -1,9 +1,7 @@
 from abc import ABC, abstractmethod
-from typing import Dict, Tuple
-
 
 from neuraltide.core.base import PopulationModel, SynapseModel
-from neuraltide.core.types import TensorType, StateList
+from neuraltide.core.types import StateList, TensorType
 
 
 class BaseIntegrator(ABC):
@@ -27,8 +25,8 @@ class BaseIntegrator(ABC):
         self,
         population: PopulationModel,
         state: StateList,
-        total_synaptic_input: Dict[str, TensorType],
-    ) -> Tuple[StateList, TensorType]:
+        total_synaptic_input: dict[str, TensorType],
+    ) -> tuple[StateList, TensorType]:
         """
         Выполняет один шаг интегрирования.
 
@@ -52,7 +50,7 @@ class BaseIntegrator(ABC):
         pre_firing_rate: TensorType,
         post_voltage: TensorType,
         dt: float,
-    ) -> Tuple[StateList, TensorType]:
+    ) -> tuple[StateList, TensorType]:
         """
         Выполняет один шаг интегрирования синапса.
 
@@ -76,7 +74,7 @@ class BaseIntegrator(ABC):
         pop_states: StateList,
         syn_states: StateList,
         dt: float,
-    ) -> Tuple[StateList, StateList]:
+    ) -> tuple[StateList, StateList]:
         """
         Один согласованный шаг по связанной сети (integration_mode='network').
 

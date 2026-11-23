@@ -17,8 +17,8 @@ import tensorflow as tf
 from scipy.integrate import quad
 from scipy.special import erfcx
 
-from neuraltide.populations.brunel_fp import BrunelFokkerPlanck
 from neuraltide.integrators import EulerIntegrator
+from neuraltide.populations.brunel_fp import BrunelFokkerPlanck
 from neuraltide.utils import seed_everything
 
 seed_everything(42)

@@ -5,6 +5,8 @@ NeuralTide предоставляет несколько типов генера
 - **SinusoidalGenerator** — синусоидальный генератор
 - **ConstantRateGenerator** — генератор постоянной частоты
 - **VonMisesGenerator** — генератор на основе распределения фон Мизаса
+- **PlaceFieldGenerator** — клетки места с тета-модуляцией и фазовой
+  прецессией (2D-траектории, см. соответствующий раздел ниже)
 
 Все генераторы являются подклассами `BaseInputGenerator` и поддерживают векторизацию.
 
@@ -20,15 +22,26 @@ NeuralTide предоставляет несколько типов генера
 
 ```python
 # n_units = 1 (скалярные параметры)
-gen = SinusoidalGenerator(dt=0.5, params={
-    'amplitude': 10.0, 'freq': 8.0, 'phase': 0.0, 'offset': 5.0,
-})
+gen = SinusoidalGenerator(
+    dt=0.5,
+    params={
+        "amplitude": 10.0,
+        "freq": 8.0,
+        "phase": 0.0,
+        "offset": 5.0,
+    },
+)
 
 # n_units = 2 (векторные параметры)
-gen = SinusoidalGenerator(dt=0.5, params={
-    'amplitude': [10.0, 15.0], 'freq': [8.0, 10.0],
-    'phase': [0.0, 1.5], 'offset': [5.0, 7.0],
-})
+gen = SinusoidalGenerator(
+    dt=0.5,
+    params={
+        "amplitude": [10.0, 15.0],
+        "freq": [8.0, 10.0],
+        "phase": [0.0, 1.5],
+        "offset": [5.0, 7.0],
+    },
+)
 ```
 
 ### Вызов генератора
@@ -38,16 +51,46 @@ gen = SinusoidalGenerator(dt=0.5, params={
 output = generator(t)  # Returns: shape [batch, T, n_units] в Гц
 ```
 
+### Конвенции фазы
+
+Встроенные генераторы трактуют параметр `phase` по-разному. При
+совместном использовании (например, интернейроны через
+`VonMisesGenerator`, клетки места через `PlaceFieldGenerator`) фазы из
+литературы нельзя подставлять одинаково во все генераторы:
+
+| Генератор | Формула | `phase = +π/2` даёт максимум |
+|---|---|---|
+| `VonMisesGenerator` | `exp(κ·cos(ωt − phase))` | позже t=0 |
+| `PlaceFieldGenerator` | `exp(κ·cos(ωt + phase + dφ))` | раньше t=0 |
+| `SinusoidalGenerator` | `sin(ωt + phase)` | ровно в t=0 |
+
+Знаки у VonMises и PlaceField противоположны — литературные фазы
+(например, O-LM `π`, CCK basket `−π/2`) требуют конверсии. Чтобы не
+ошибиться знаком, задайте желаемый момент максимума и получите готовые
+фазы хелпером:
+
+```python
+from neuraltide.inputs import peak_time_to_phases
+
+# все три генератора достигнут максимума одновременно, в t=0:
+phases = peak_time_to_phases(t_peak_ms=0.0, freq_hz=8.0)
+# {'von_mises': 0.0, 'sinusoidal': 1.5707..., 'place_field': -0.0}
+```
+
+Хелпер возвращает фазы в единицах каждого генератора: `von_mises` и
+`sinusoidal` — радианы (параметр `phase`), `place_field` — градусы
+(`precession_init_phase`; та же конвенция у `phase_outside`).
+
 ### Интеграция с NetworkGraph
 
 Генераторы подключаются к сети через объявление входа и предвычисление частот:
 
 ```python
 graph = NetworkGraph(dt=0.5)
-graph.declare_input('my_input', n_units=gen.n_units)
+graph.declare_input("my_input", n_units=gen.n_units)
 
 # Предвычисление частот разрядов
-inputs = graph.pack_inputs({'my_input': gen(t_seq)})
+inputs = graph.pack_inputs({"my_input": gen(t_seq)})
 
 # Запуск сети
 output = network(t_seq, inputs=inputs)
@@ -94,11 +137,11 @@ SinusoidalGenerator(
 gen = SinusoidalGenerator(
     dt=0.5,
     params={
-        'amplitude': 10.0,
-        'freq': 8.0,
-        'phase': 0.0,
-        'offset': 5.0,
-    }
+        "amplitude": 10.0,
+        "freq": 8.0,
+        "phase": 0.0,
+        "offset": 5.0,
+    },
 )
 ```
 
@@ -107,11 +150,11 @@ gen = SinusoidalGenerator(
 gen = SinusoidalGenerator(
     dt=0.5,
     params={
-        'amplitude': [10.0, 15.0, 8.0],
-        'freq': [8.0, 10.0, 6.0],
-        'phase': [0.0, 1.5, 3.0],
-        'offset': [5.0, 7.0, 4.0],
-    }
+        "amplitude": [10.0, 15.0, 8.0],
+        "freq": [8.0, 10.0, 6.0],
+        "phase": [0.0, 1.5, 3.0],
+        "offset": [5.0, 7.0, 4.0],
+    },
 )
 ```
 
@@ -120,11 +163,11 @@ gen = SinusoidalGenerator(
 gen = SinusoidalGenerator(
     dt=0.5,
     params={
-        'amplitude': {'value': 10.0, 'trainable': True, 'min': 0.0, 'max': 50.0},
-        'freq': {'value': 8.0, 'trainable': True, 'min': 1.0, 'max': 100.0},
-        'phase': {'value': 0.0, 'trainable': False},
-        'offset': 5.0,
-    }
+        "amplitude": {"value": 10.0, "trainable": True, "min": 0.0, "max": 50.0},
+        "freq": {"value": 8.0, "trainable": True, "min": 1.0, "max": 100.0},
+        "phase": {"value": 0.0, "trainable": False},
+        "offset": 5.0,
+    },
 )
 ```
 
@@ -132,10 +175,15 @@ gen = SinusoidalGenerator(
 
 ```python
 {
-    'amplitude': {'shape': (n_units,), 'trainable': ..., 'constraint': ..., 'units': 'Hz'},
-    'freq':      {'shape': (n_units,), 'trainable': ..., 'constraint': ..., 'units': 'Hz'},
-    'phase':     {'shape': (n_units,), 'trainable': ..., 'constraint': ..., 'units': 'rad'},
-    'offset':    {'shape': (n_units,), 'trainable': ..., 'constraint': ..., 'units': 'Hz'},
+    "amplitude": {
+        "shape": (n_units,),
+        "trainable": ...,
+        "constraint": ...,
+        "units": "Hz",
+    },
+    "freq": {"shape": (n_units,), "trainable": ..., "constraint": ..., "units": "Hz"},
+    "phase": {"shape": (n_units,), "trainable": ..., "constraint": ..., "units": "rad"},
+    "offset": {"shape": (n_units,), "trainable": ..., "constraint": ..., "units": "Hz"},
 }
 ```
 
@@ -177,8 +225,8 @@ ConstantRateGenerator(
 gen = ConstantRateGenerator(
     dt=0.5,
     params={
-        'rate': 10.0,
-    }
+        "rate": 10.0,
+    },
 )
 ```
 
@@ -187,8 +235,8 @@ gen = ConstantRateGenerator(
 gen = ConstantRateGenerator(
     dt=0.5,
     params={
-        'rate': [10.0, 15.0, 20.0],
-    }
+        "rate": [10.0, 15.0, 20.0],
+    },
 )
 ```
 
@@ -197,8 +245,8 @@ gen = ConstantRateGenerator(
 gen = ConstantRateGenerator(
     dt=0.5,
     params={
-        'rate': {'value': 10.0, 'trainable': True, 'min': 0.0, 'max': 100.0},
-    }
+        "rate": {"value": 10.0, "trainable": True, "min": 0.0, "max": 100.0},
+    },
 )
 ```
 
@@ -206,7 +254,7 @@ gen = ConstantRateGenerator(
 
 ```python
 {
-    'rate': {'shape': (n_units,), 'trainable': ..., 'constraint': ..., 'units': 'Hz'},
+    "rate": {"shape": (n_units,), "trainable": ..., "constraint": ..., "units": "Hz"},
 }
 ```
 
@@ -280,11 +328,11 @@ def call(self, t: TensorType, extra_inputs: Optional[TensorType] = None) -> Tens
 gen = VonMisesGenerator(
     dt=0.5,
     params={
-        'mean_rate': 20.0,
-        'R': 0.5,
-        'freq': 8.0,
-        'phase': 0.0,
-    }
+        "mean_rate": 20.0,
+        "R": 0.5,
+        "freq": 8.0,
+        "phase": 0.0,
+    },
 )
 ```
 
@@ -293,11 +341,11 @@ gen = VonMisesGenerator(
 gen = VonMisesGenerator(
     dt=0.5,
     params={
-        'mean_rate': [20.0, 15.0],
-        'R': [0.5, 0.8],
-        'freq': [8.0, 10.0],
-        'phase': [0.0, 1.5],
-    }
+        "mean_rate": [20.0, 15.0],
+        "R": [0.5, 0.8],
+        "freq": [8.0, 10.0],
+        "phase": [0.0, 1.5],
+    },
 )
 ```
 
@@ -306,11 +354,11 @@ gen = VonMisesGenerator(
 gen = VonMisesGenerator(
     dt=0.5,
     params={
-        'mean_rate': {'value': 20.0, 'trainable': False},
-        'R': 0.5,
-        'freq': {'value': 8.0, 'trainable': True, 'min': 1.0, 'max': 20.0},
-        'phase': {'value': 0.0, 'trainable': False},
-    }
+        "mean_rate": {"value": 20.0, "trainable": False},
+        "R": 0.5,
+        "freq": {"value": 8.0, "trainable": True, "min": 1.0, "max": 20.0},
+        "phase": {"value": 0.0, "trainable": False},
+    },
 )
 ```
 
@@ -318,10 +366,20 @@ gen = VonMisesGenerator(
 
 ```python
 {
-    'mean_rate': {'shape': (n_units,), 'trainable': ..., 'constraint': ..., 'units': 'Hz'},
-    'kappa':     {'shape': (n_units,), 'trainable': False, 'constraint': ..., 'units': 'dimensionless'},
-    'freq':      {'shape': (n_units,), 'trainable': ..., 'constraint': ..., 'units': 'Hz'},
-    'phase':     {'shape': (n_units,), 'trainable': ..., 'constraint': ..., 'units': 'rad'},
+    "mean_rate": {
+        "shape": (n_units,),
+        "trainable": ...,
+        "constraint": ...,
+        "units": "Hz",
+    },
+    "kappa": {
+        "shape": (n_units,),
+        "trainable": False,
+        "constraint": ...,
+        "units": "dimensionless",
+    },
+    "freq": {"shape": (n_units,), "trainable": ..., "constraint": ..., "units": "Hz"},
+    "phase": {"shape": (n_units,), "trainable": ..., "constraint": ..., "units": "rad"},
 }
 ```
 
@@ -411,19 +469,27 @@ import numpy as np
 import tensorflow as tf
 from neuraltide.inputs import PlaceFieldGenerator
 
-gen = PlaceFieldGenerator(dt=0.5, params={
-    'center_x': [40.0, -50.0], 'center_y': [30.0, 40.0],
-    'radius': [35.0, 40.0], 'peak_rate': [25.0, 30.0],
-    'background_rate': [2.0, 3.0], 'theta_modulation_factor': 0.0,
-    'precession_slope': [30.0, 35.0], 'precession_init_phase': [0.0, 90.0],
-    'phase_outside': 0.0,
-    'R': 0.6, 'freq': 8.0,
-})
+gen = PlaceFieldGenerator(
+    dt=0.5,
+    params={
+        "center_x": [40.0, -50.0],
+        "center_y": [30.0, 40.0],
+        "radius": [35.0, 40.0],
+        "peak_rate": [25.0, 30.0],
+        "background_rate": [2.0, 3.0],
+        "theta_modulation_factor": 0.0,
+        "precession_slope": [30.0, 35.0],
+        "precession_init_phase": [0.0, 90.0],
+        "phase_outside": 0.0,
+        "R": 0.6,
+        "freq": 8.0,
+    },
+)
 
 # Время (мс) + координаты (см)
 t = tf.constant(np.arange(0, 1000, 0.5, dtype=np.float32)[None, :, None])
-x = 70.0 * tf.cos(2*np.pi * tf.range(2000, dtype=tf.float32) / 2000 * 2)
-y = 70.0 * tf.sin(2*np.pi * tf.range(2000, dtype=tf.float32) / 2000 * 2)
+x = 70.0 * tf.cos(2 * np.pi * tf.range(2000, dtype=tf.float32) / 2000 * 2)
+y = 70.0 * tf.sin(2 * np.pi * tf.range(2000, dtype=tf.float32) / 2000 * 2)
 extra = tf.stack([x, y], axis=-1)[None, :, :]  # [1, T, 2]
 
 rates = gen(t, extra_inputs=extra)  # [1, T, 2]
@@ -442,7 +508,7 @@ rates = gen(t, extra_inputs=extra)  # [1, T, 2]
 ```python
 # Вычисление входных частот с учётом координат
 rates = gen(t_seq, extra_inputs=extra)
-inputs = graph.pack_inputs({'place': rates})
+inputs = graph.pack_inputs({"place": rates})
 
 # Запуск сети
 output = network(t_seq, inputs=inputs)
@@ -459,15 +525,17 @@ import tensorflow as tf
 from neuraltide.core.base import BaseInputGenerator
 from neuraltide.core.types import TensorType, Dict, Any
 
+
 class MyGenerator(BaseInputGenerator):
-    def __init__(self, dt: float, params: Dict[str, Any], 
-                 name: str = "my_generator", **kwargs):
+    def __init__(
+        self, dt: float, params: Dict[str, Any], name: str = "my_generator", **kwargs
+    ):
         super().__init__(params=params, dt=dt, name=name, **kwargs)
-        
+
         # Регистрация параметров через _make_param
-        self.param1 = self._make_param(self._params, 'param1')
-        self.param2 = self._make_param(self._params, 'param2')
-    
+        self.param1 = self._make_param(self._params, "param1")
+        self.param2 = self._make_param(self._params, "param2")
+
     def call(self, t: TensorType) -> TensorType:
         """
         Args:
@@ -479,29 +547,29 @@ class MyGenerator(BaseInputGenerator):
         # Реализация генератора
         # Используйте tf.reshape для broadcasting параметров
         param1 = tf.reshape(self.param1, [1, self.n_units])
-        
+
         # Вычисление выхода
         output = param1 * t  # пример
-        
+
         return tf.nn.relu(output)  # частота должна быть >= 0
-    
+
     @property
     def parameter_spec(self) -> Dict[str, Dict[str, Any]]:
         return {
-            'param1': {
-                'shape': (self.n_units,),
-                'trainable': self.param1.trainable,
-                'constraint': self._get_constraint_name(self.param1),
-                'units': 'Hz',  # ваши единицы
+            "param1": {
+                "shape": (self.n_units,),
+                "trainable": self.param1.trainable,
+                "constraint": self._get_constraint_name(self.param1),
+                "units": "Hz",  # ваши единицы
             },
-            'param2': {
-                'shape': (self.n_units,),
-                'trainable': self.param2.trainable,
-                'constraint': self._get_constraint_name(self.param2),
-                'units': 'dimensionless',
+            "param2": {
+                "shape": (self.n_units,),
+                "trainable": self.param2.trainable,
+                "constraint": self._get_constraint_name(self.param2),
+                "units": "dimensionless",
             },
         }
-    
+
     def _get_constraint_name(self, var: tf.Variable) -> str:
         if var.constraint is not None:
             return var.constraint.__class__.__name__
@@ -515,7 +583,7 @@ class MyGenerator(BaseInputGenerator):
 ```python
 import neuraltide.config
 
-neuraltide.config.register_input('MyGenerator', MyGenerator)
+neuraltide.config.register_input("MyGenerator", MyGenerator)
 ```
 
 ---
@@ -534,72 +602,128 @@ from neuraltide.inputs import SinusoidalGenerator
 from neuraltide.integrators import RK4Integrator
 
 # Создание компонентов
-gen = SinusoidalGenerator(dt=0.5, params={
-    'amplitude': 10.0, 'freq': 8.0, 'phase': 0.0, 'offset': 5.0,
-})
+gen = SinusoidalGenerator(
+    dt=0.5,
+    params={
+        "amplitude": 10.0,
+        "freq": 8.0,
+        "phase": 0.0,
+        "offset": 5.0,
+    },
+)
 
-pop = IzhikevichMeanField(dt=0.5, params={
-    'tau_pop': [1.0], 'alpha': [0.5], 'a': [0.02],
-    'b': [0.2], 'w_jump': [0.1], 'Delta_I': [0.5], 'I_ext': [1.0],
-})
+pop = IzhikevichMeanField(
+    dt=0.5,
+    params={
+        "tau_pop": [1.0],
+        "alpha": [0.5],
+        "a": [0.02],
+        "b": [0.2],
+        "w_jump": [0.1],
+        "Delta_I": [0.5],
+        "I_ext": [1.0],
+    },
+)
 
-syn = StaticSynapse(n_pre=1, n_post=1, dt=0.5, params={
-    'gsyn_max': 0.1, 'pconn': [[1.0]], 'e_r': 0.0,
-})
+syn = StaticSynapse(
+    n_pre=1,
+    n_post=1,
+    dt=0.5,
+    params={
+        "gsyn_max": 0.1,
+        "pconn": [[1.0]],
+        "e_r": 0.0,
+    },
+)
 
 # Построение сети
 graph = NetworkGraph(dt=0.5)
-graph.declare_input('input', n_units=gen.n_units)
-graph.add_population('exc', pop)
-graph.add_synapse('input->exc', syn, src='input', tgt='exc')
+graph.declare_input("input", n_units=gen.n_units)
+graph.add_population("exc", pop)
+graph.add_synapse("input->exc", syn, src="input", tgt="exc")
 
 network = NetworkRNN(graph, integrator=RK4Integrator())
 
 # Запуск
 t_seq = tf.constant(np.arange(0, 1000, 0.5)[None, :, None])
-inputs = graph.pack_inputs({'input': gen(t_seq)})
+inputs = graph.pack_inputs({"input": gen(t_seq)})
 output = network(t_seq, inputs=inputs)
-print(output.firing_rates['exc'].shape)  # [1, 2000, 1]
+print(output.firing_rates["exc"].shape)  # [1, 2000, 1]
 ```
 
 ### Пример: несколько входов
 
 ```python
-gen1 = SinusoidalGenerator(dt=0.5, params={
-    'amplitude': 10.0, 'freq': 8.0, 'phase': 0.0, 'offset': 5.0,
-})
+gen1 = SinusoidalGenerator(
+    dt=0.5,
+    params={
+        "amplitude": 10.0,
+        "freq": 8.0,
+        "phase": 0.0,
+        "offset": 5.0,
+    },
+)
 
-gen2 = VonMisesGenerator(dt=0.5, params={
-    'mean_rate': 15.0, 'R': 0.7, 'freq': 5.0, 'phase': 1.0,
-})
+gen2 = VonMisesGenerator(
+    dt=0.5,
+    params={
+        "mean_rate": 15.0,
+        "R": 0.7,
+        "freq": 5.0,
+        "phase": 1.0,
+    },
+)
 
-pop = IzhikevichMeanField(dt=0.5, params={
-    'tau_pop': [1.0, 1.0], 'alpha': [0.5, 0.5], 'a': [0.02, 0.02],
-    'b': [0.2, 0.2], 'w_jump': [0.1, 0.1], 
-    'Delta_I': [0.5, 0.5], 'I_ext': [1.0, 1.0],
-})
+pop = IzhikevichMeanField(
+    dt=0.5,
+    params={
+        "tau_pop": [1.0, 1.0],
+        "alpha": [0.5, 0.5],
+        "a": [0.02, 0.02],
+        "b": [0.2, 0.2],
+        "w_jump": [0.1, 0.1],
+        "Delta_I": [0.5, 0.5],
+        "I_ext": [1.0, 1.0],
+    },
+)
 
 # Один синапс от gen1, другой от gen2
-syn1 = StaticSynapse(n_pre=1, n_post=2, dt=0.5, params={
-    'gsyn_max': [[0.1, 0.1]], 'pconn': [[1.0, 1.0]], 'e_r': 0.0,
-})
+syn1 = StaticSynapse(
+    n_pre=1,
+    n_post=2,
+    dt=0.5,
+    params={
+        "gsyn_max": [[0.1, 0.1]],
+        "pconn": [[1.0, 1.0]],
+        "e_r": 0.0,
+    },
+)
 
-syn2 = StaticSynapse(n_pre=1, n_post=2, dt=0.5, params={
-    'gsyn_max': [[0.05, 0.08]], 'pconn': [[1.0, 1.0]], 'e_r': 0.0,
-})
+syn2 = StaticSynapse(
+    n_pre=1,
+    n_post=2,
+    dt=0.5,
+    params={
+        "gsyn_max": [[0.05, 0.08]],
+        "pconn": [[1.0, 1.0]],
+        "e_r": 0.0,
+    },
+)
 
 graph = NetworkGraph(dt=0.5)
-graph.declare_input('sin_input', n_units=gen1.n_units)
-graph.declare_input('vm_input', n_units=gen2.n_units)
-graph.add_population('exc', pop)
-graph.add_synapse('sin->exc', syn1, src='sin_input', tgt='exc')
-graph.add_synapse('vm->exc', syn2, src='vm_input', tgt='exc')
+graph.declare_input("sin_input", n_units=gen1.n_units)
+graph.declare_input("vm_input", n_units=gen2.n_units)
+graph.add_population("exc", pop)
+graph.add_synapse("sin->exc", syn1, src="sin_input", tgt="exc")
+graph.add_synapse("vm->exc", syn2, src="vm_input", tgt="exc")
 
 # Упаковка входов
-inputs = graph.pack_inputs({
-    'sin_input': gen1(t_seq),
-    'vm_input': gen2(t_seq),
-})
+inputs = graph.pack_inputs(
+    {
+        "sin_input": gen1(t_seq),
+        "vm_input": gen2(t_seq),
+    }
+)
 output = network(t_seq, inputs=inputs)
 ```
 
@@ -616,28 +740,50 @@ from neuraltide.synapses import StaticSynapse
 from neuraltide.inputs import PlaceFieldGenerator
 from neuraltide.integrators import RK4Integrator
 
-gen = PlaceFieldGenerator(dt=0.5, params={
-    'center_x': [40.0, -50.0], 'center_y': [30.0, 40.0],
-    'radius': [35.0, 40.0], 'peak_rate': [25.0, 30.0],
-    'background_rate': [2.0, 3.0], 'theta_modulation_factor': 0.0,
-    'precession_slope': [30.0, 35.0], 'precession_init_phase': [0.0, 90.0],
-    'phase_outside': 0.0,
-    'R': 0.6, 'freq': 8.0,
-})
+gen = PlaceFieldGenerator(
+    dt=0.5,
+    params={
+        "center_x": [40.0, -50.0],
+        "center_y": [30.0, 40.0],
+        "radius": [35.0, 40.0],
+        "peak_rate": [25.0, 30.0],
+        "background_rate": [2.0, 3.0],
+        "theta_modulation_factor": 0.0,
+        "precession_slope": [30.0, 35.0],
+        "precession_init_phase": [0.0, 90.0],
+        "phase_outside": 0.0,
+        "R": 0.6,
+        "freq": 8.0,
+    },
+)
 
-pop = IzhikevichMeanField(dt=0.5, params={
-    'tau_pop': [1.0, 1.0], 'alpha': [0.5, 0.5], 'a': [0.02, 0.02],
-    'b': [0.2, 0.2], 'w_jump': [0.1, 0.1], 'Delta_I': [0.05, 0.05],
-    'I_ext': [0.0, 0.0],
-})
-syn = StaticSynapse(n_pre=2, n_post=2, dt=0.5, params={
-    'gsyn_max': [[1.0, 0.0], [0.0, 1.0]], 'pconn': 1.0, 'e_r': 5.0,
-})
+pop = IzhikevichMeanField(
+    dt=0.5,
+    params={
+        "tau_pop": [1.0, 1.0],
+        "alpha": [0.5, 0.5],
+        "a": [0.02, 0.02],
+        "b": [0.2, 0.2],
+        "w_jump": [0.1, 0.1],
+        "Delta_I": [0.05, 0.05],
+        "I_ext": [0.0, 0.0],
+    },
+)
+syn = StaticSynapse(
+    n_pre=2,
+    n_post=2,
+    dt=0.5,
+    params={
+        "gsyn_max": [[1.0, 0.0], [0.0, 1.0]],
+        "pconn": 1.0,
+        "e_r": 5.0,
+    },
+)
 
 graph = NetworkGraph(dt=0.5)
-graph.declare_input('place', n_units=gen.n_units)
-graph.add_population('readout', pop)
-graph.add_synapse('place->readout', syn, src='place', tgt='readout')
+graph.declare_input("place", n_units=gen.n_units)
+graph.add_population("readout", pop)
+graph.add_synapse("place->readout", syn, src="place", tgt="readout")
 
 network = NetworkRNN(graph, integrator=RK4Integrator())
 
@@ -648,14 +794,12 @@ t_seq = tf.constant(np.arange(0, 5000, 0.5, dtype=np.float32)[None, :, None])
 n_steps = t_seq.shape[1]
 pos_x = 70.0 * np.cos(2 * np.pi * np.arange(n_steps) / n_steps * 2)
 pos_y = 70.0 * np.sin(2 * np.pi * np.arange(n_steps) / n_steps * 2)
-extra = tf.constant(
-    np.stack([pos_x, pos_y], axis=-1).astype(np.float32)[None, :, :]
-)
+extra = tf.constant(np.stack([pos_x, pos_y], axis=-1).astype(np.float32)[None, :, :])
 
 # Вычисление частот с учётом координат, затем упаковка
 rates = gen(t_seq, extra_inputs=extra)
-inputs = graph.pack_inputs({'place': rates})
+inputs = graph.pack_inputs({"place": rates})
 
 output = network(t_seq, inputs=inputs)
-print(output.firing_rates['readout'].shape)  # [1, n_steps, 2]
+print(output.firing_rates["readout"].shape)  # [1, n_steps, 2]
 ```

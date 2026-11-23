@@ -2,11 +2,12 @@
 Пример: VonMisesGenerator - зависимость выхода от времени.
 """
 
-import numpy as np
 import matplotlib.pyplot as plt
+import numpy as np
 
 try:
     import tensorflow as tf
+
     from neuraltide.inputs import VonMisesGenerator
 
     HAS_TF = True

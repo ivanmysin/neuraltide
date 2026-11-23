@@ -31,7 +31,6 @@ if not HAS_MPL:
 
 from neuraltide.inputs import PlaceFieldGenerator
 
-
 # ════════════════ Parameters (cm, cm/s, ms, Hz) ════════════════
 dt = 0.5  # ms
 T_total = 30000  # ms
@@ -418,7 +417,7 @@ print("All figures saved!")
 print()
 print("Key points:")
 print(
-    "  1. Arena: {:.0f} cm radius, trajectory: quasi-circular ".format(arena_radius)
+    f"  1. Arena: {arena_radius:.0f} cm radius, trajectory: quasi-circular "
     + f"(r_base={r_base:.0f} cm, {n_cycles:.1f} cycles)"
 )
 print("  2. Position (x,y) + velocity (vx,vy) passed to PlaceFieldGenerator.call()")

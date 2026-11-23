@@ -198,7 +198,7 @@ observables популяций, производные синапсов (`model.
 network = NetworkRNN(
     graph,
     integrator=RK4Integrator(),
-    integration_mode='network',  # 'split' (по умолчанию) | 'network'
+    integration_mode="network",  # 'split' (по умолчанию) | 'network'
 )
 ```
 
@@ -380,8 +380,9 @@ integrator = RosenbrockIntegrator(n_substeps=4)  # h = dt / n_substeps
 ```python
 from neuraltide.integrators import stiffness_report, classify_failure
 
-report = stiffness_report(problem_or_network, phi=None, t_points=8,
-                          method='jvp', scope='populations')
+report = stiffness_report(
+    problem_or_network, phi=None, t_points=8, method="jvp", scope="populations"
+)
 # scope='populations' (по умолчанию):
 #   report['populations'][name]['eigenvalues'] — спектр [P, n, d] в точках
 #                                                траектории
@@ -484,30 +485,47 @@ from neuraltide.inputs import ConstantRateGenerator
 from neuraltide.integrators import EulerIntegrator, HeunIntegrator, RK4Integrator
 
 # Создание сети
-gen = ConstantRateGenerator(dt=0.5, params={'rate': 20.0})
-pop = IzhikevichMeanField(dt=0.5, params={
-    'tau_pop': [1.0], 'alpha': [0.5], 'a': [0.02],
-    'b': [0.2], 'w_jump': [0.1], 'Delta_I': [0.5], 'I_ext': [1.0],
-})
-syn = StaticSynapse(n_pre=1, n_post=1, dt=0.5, params={
-    'gsyn_max': 0.1, 'pconn': [[1.0]], 'e_r': 0.0,
-})
+gen = ConstantRateGenerator(dt=0.5, params={"rate": 20.0})
+pop = IzhikevichMeanField(
+    dt=0.5,
+    params={
+        "tau_pop": [1.0],
+        "alpha": [0.5],
+        "a": [0.02],
+        "b": [0.2],
+        "w_jump": [0.1],
+        "Delta_I": [0.5],
+        "I_ext": [1.0],
+    },
+)
+syn = StaticSynapse(
+    n_pre=1,
+    n_post=1,
+    dt=0.5,
+    params={
+        "gsyn_max": 0.1,
+        "pconn": [[1.0]],
+        "e_r": 0.0,
+    },
+)
 
 graph = NetworkGraph(dt=0.5)
-graph.declare_input('input', n_units=gen.n_units)
-graph.add_population('exc', pop)
-graph.add_synapse('input->exc', syn, src='input', tgt='exc')
+graph.declare_input("input", n_units=gen.n_units)
+graph.add_population("exc", pop)
+graph.add_synapse("input->exc", syn, src="input", tgt="exc")
 
 # Симуляция с разными интеграторами
 t_seq = tf.constant(np.arange(0, 1000, 0.5)[None, :, None])
-inputs = graph.pack_inputs({'input': gen(t_seq)})
+inputs = graph.pack_inputs({"input": gen(t_seq)})
 
-for name, Integrator in [('Euler', EulerIntegrator), 
-                          ('Heun', HeunIntegrator), 
-                          ('RK4', RK4Integrator)]:
+for name, Integrator in [
+    ("Euler", EulerIntegrator),
+    ("Heun", HeunIntegrator),
+    ("RK4", RK4Integrator),
+]:
     network = NetworkRNN(graph, integrator=Integrator())
     output = network(t_seq, inputs=inputs)
-    rates = output.firing_rates['exc'].numpy()
+    rates = output.firing_rates["exc"].numpy()
     print(f"{name}: final rate = {rates[0, -1, 0]:.2f} Hz")
 ```
 
@@ -521,7 +539,7 @@ NetworkRNN поддерживает `stability_penalty_weight` для оценк
 network = NetworkRNN(
     graph,
     integrator=RK4Integrator(),
-    stability_penalty_weight=1e-3  # штраф за нестабильность
+    stability_penalty_weight=1e-3,  # штраф за нестабильность
 )
 ```
 

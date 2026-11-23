@@ -1,16 +1,17 @@
-import tensorflow as tf
 from abc import abstractmethod
-from typing import Dict, Tuple, Any, Optional
+from typing import Any
+
+import tensorflow as tf
 
 import neuraltide.config
 from neuraltide.constraints import MinMaxConstraint
-from neuraltide.core.types import TensorType, StateList
+from neuraltide.core.types import StateList, TensorType
 
 
 def _make_minmax_constraint(
-    min_val: Optional[float],
-    max_val: Optional[float],
-) -> Optional[MinMaxConstraint]:
+    min_val: float | None,
+    max_val: float | None,
+) -> MinMaxConstraint | None:
     """Возвращает MinMaxConstraint, если задана хотя бы одна граница, иначе None."""
     if min_val is not None or max_val is not None:
         return MinMaxConstraint(min_val=min_val, max_val=max_val)
@@ -21,7 +22,7 @@ def _parse_param_spec(
     params: dict,
     name: str,
     owner_label: str,
-) -> Tuple[Any, bool, Optional[float], Optional[float]]:
+) -> tuple[Any, bool, float | None, float | None]:
     """
     Парсит спецификацию одного параметра из user-params.
 
@@ -49,7 +50,7 @@ def _parse_param_spec(
     return raw, train, lo, hi
 
 
-def _infer_n_units_from_params(params: Dict[str, Any]) -> int:
+def _infer_n_units_from_params(params: dict[str, Any]) -> int:
     """
     Определяет n_units как максимальную длину среди параметров.
 
@@ -66,16 +67,17 @@ def _infer_n_units_from_params(params: Dict[str, Any]) -> int:
             value = spec
         if value is None:
             continue
-        if isinstance(value, (list, tuple)):
+        if (
+            isinstance(value, (list, tuple))
+            or isinstance(value, np.ndarray)
+            and value.ndim == 1
+        ):
             max_len = max(max_len, len(value))
-        elif isinstance(value, np.ndarray):
-            if value.ndim == 1:
-                max_len = max(max_len, len(value))
     return max_len
 
 
 def _validate_param_dimensions(
-    params: Dict[str, Any],
+    params: dict[str, Any],
     n_units: int,
     owner_label: str,
 ) -> None:
@@ -109,7 +111,7 @@ def _validate_param_dimensions(
             )
 
 
-def _get_constraint_name(var: tf.Variable) -> Optional[str]:
+def _get_constraint_name(var: tf.Variable) -> str | None:
     """Возвращает имя класса ограничения, применённого к переменной, или None."""
     if var.constraint is not None:
         return var.constraint.__class__.__name__
@@ -150,7 +152,7 @@ class PopulationModel(tf.keras.layers.Layer):
         super().__init__(name=name, **kwargs)
         self.n_units = n_units
         self.dt = dt
-        self._cached_state: Optional[StateList] = None
+        self._cached_state: StateList | None = None
 
     def _make_param(self, params: dict, name: str) -> tf.Variable:
         """
@@ -246,7 +248,7 @@ class PopulationModel(tf.keras.layers.Layer):
     def derivatives(
         self,
         state: StateList,
-        total_synaptic_input: Dict[str, TensorType],
+        total_synaptic_input: dict[str, TensorType],
     ) -> StateList:
         """
         Вычисляет производные состояния популяции.
@@ -271,8 +273,8 @@ class PopulationModel(tf.keras.layers.Layer):
     def derivatives_split(
         self,
         state: StateList,
-        total_synaptic_input: Dict[str, TensorType],
-    ) -> Tuple[StateList, StateList]:
+        total_synaptic_input: dict[str, TensorType],
+    ) -> tuple[StateList, StateList]:
         """
         Разделяет правую часть на нежёсткую и жёсткую компоненты.
 
@@ -298,8 +300,8 @@ class PopulationModel(tf.keras.layers.Layer):
     def linear_operator(
         self,
         state: StateList,
-        total_synaptic_input: Dict[str, TensorType],
-    ) -> Optional[Tuple[TensorType, TensorType]]:
+        total_synaptic_input: dict[str, TensorType],
+    ) -> tuple[TensorType, TensorType] | None:
         """
         Линейная часть жёсткой компоненты: f_stiff(y) ≈ A·y_flat + b.
 
@@ -324,7 +326,7 @@ class PopulationModel(tf.keras.layers.Layer):
         """
         raise NotImplementedError
 
-    def observables(self, state: StateList) -> Dict[str, TensorType]:
+    def observables(self, state: StateList) -> dict[str, TensorType]:
         """
         Возвращает словарь наблюдаемых переменных состояния.
 
@@ -340,7 +342,7 @@ class PopulationModel(tf.keras.layers.Layer):
 
     @property
     @abstractmethod
-    def parameter_spec(self) -> Dict[str, Dict[str, Any]]:
+    def parameter_spec(self) -> dict[str, dict[str, Any]]:
         """
         Спецификация параметров генератора для summary и сериализации.
         """
@@ -350,7 +352,7 @@ class PopulationModel(tf.keras.layers.Layer):
     def call(
         self,
         t: TensorType,
-        extra_inputs: Optional[TensorType] = None,
+        extra_inputs: TensorType | None = None,
     ) -> TensorType:
         """
         Вычисляет выходной сигнал генератора для данной временной последовательности.
@@ -370,7 +372,7 @@ class PopulationModel(tf.keras.layers.Layer):
         self,
         adjoint_state: StateList,
         state: StateList,
-        total_synaptic_input: Dict[str, TensorType],
+        total_synaptic_input: dict[str, TensorType],
     ) -> StateList:
         """
         Вычисляет производные сопряжённого состояния назад во времени.
@@ -395,8 +397,8 @@ class PopulationModel(tf.keras.layers.Layer):
         self,
         adjoint_state: StateList,
         state: StateList,
-        total_synaptic_input: Dict[str, TensorType],
-    ) -> Tuple[TensorType, TensorType]:
+        total_synaptic_input: dict[str, TensorType],
+    ) -> tuple[TensorType, TensorType]:
         """
         Вычисляет λ_I и λ_g — сопряжённые I_syn и g_syn.
 
@@ -418,7 +420,7 @@ class PopulationModel(tf.keras.layers.Layer):
         self,
         param_name: str,
         state: StateList,
-        total_synaptic_input: Dict[str, TensorType],
+        total_synaptic_input: dict[str, TensorType],
     ) -> TensorType:
         """
         Вычисляет ∂derivatives/∂param — якобиан производных по параметру.
@@ -467,7 +469,7 @@ class SynapseModel(tf.keras.layers.Layer):
         self.n_pre = n_pre
         self.n_post = n_post
         self.dt = dt
-        self._cached_state: Optional[StateList] = None
+        self._cached_state: StateList | None = None
 
     def _make_param(self, params: dict, name: str) -> tf.Variable:
         """
@@ -584,7 +586,7 @@ class SynapseModel(tf.keras.layers.Layer):
         post_voltage: TensorType,
         state: StateList,
         dt: float,
-    ) -> Tuple[Dict[str, TensorType], StateList]:
+    ) -> tuple[dict[str, TensorType], StateList]:
         """
         Вычисляет новое состояние синапса и возвращает синаптический ток.
 
@@ -629,7 +631,7 @@ class SynapseModel(tf.keras.layers.Layer):
         state: StateList,
         pre_firing_rate: TensorType,
         post_voltage: TensorType,
-    ) -> Dict[str, TensorType]:
+    ) -> dict[str, TensorType]:
         """
         Вычисляет синаптический ток и проводимость по текущему состоянию.
 
@@ -648,7 +650,7 @@ class SynapseModel(tf.keras.layers.Layer):
 
     @property
     @abstractmethod
-    def parameter_spec(self) -> Dict[str, Dict[str, Any]]:
+    def parameter_spec(self) -> dict[str, dict[str, Any]]:
         """Аналогично PopulationModel.parameter_spec."""
         raise NotImplementedError
 
@@ -730,7 +732,7 @@ class SynapseModel(tf.keras.layers.Layer):
         state: StateList,
         pre_firing_rate: TensorType,
         post_voltage: TensorType,
-    ) -> Dict[str, TensorType]:
+    ) -> dict[str, TensorType]:
         """
         Gradients for parameters that affect compute_current (not derivatives).
 
@@ -776,7 +778,7 @@ class BaseInputGenerator(tf.keras.layers.Layer):
     """
 
     def __init__(
-        self, params: Dict[str, Any], dt: float, name: str = "input_generator", **kwargs
+        self, params: dict[str, Any], dt: float, name: str = "input_generator", **kwargs
     ):
         super().__init__(name=name, **kwargs)
         # Не даём Keras автокасту приводить входы к float32:
@@ -879,7 +881,7 @@ class BaseInputGenerator(tf.keras.layers.Layer):
         )
 
     @property
-    def parameter_spec(self) -> Dict[str, Dict[str, Any]]:
+    def parameter_spec(self) -> dict[str, dict[str, Any]]:
         """
         Спецификация параметров генератора для summary и сериализации.
         """

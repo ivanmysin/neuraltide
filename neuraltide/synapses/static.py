@@ -1,10 +1,9 @@
 import tensorflow as tf
-from typing import Dict, Tuple
 
 import neuraltide
 import neuraltide.config
 from neuraltide.core.base import SynapseModel
-from neuraltide.core.types import TensorType, StateList, cast_if_needed
+from neuraltide.core.types import StateList, TensorType, cast_if_needed
 
 
 class StaticSynapse(SynapseModel):
@@ -35,7 +34,7 @@ class StaticSynapse(SynapseModel):
         post_voltage: TensorType,
         state: StateList,
         dt: float,
-    ) -> Tuple[Dict[str, TensorType], StateList]:
+    ) -> tuple[dict[str, TensorType], StateList]:
         dtype = neuraltide.config.get_dtype()
         _c = cast_if_needed
         gsyn_max = _c(self.gsyn_max, dtype)
@@ -70,7 +69,7 @@ class StaticSynapse(SynapseModel):
         state: StateList,
         pre_firing_rate: TensorType,
         post_voltage: TensorType,
-    ) -> Dict[str, TensorType]:
+    ) -> dict[str, TensorType]:
         """
         Compute synaptic current and conductance.
 
@@ -128,7 +127,7 @@ class StaticSynapse(SynapseModel):
         state: StateList,
         pre_firing_rate: TensorType,
         post_voltage: TensorType,
-    ) -> Dict[str, TensorType]:
+    ) -> dict[str, TensorType]:
         """
         Static synapse: gsyn_max only.
 
@@ -155,7 +154,7 @@ class StaticSynapse(SynapseModel):
         return {"gsyn_max": dgsyn_max}
 
     @property
-    def parameter_spec(self) -> Dict[str, Dict[str, any]]:
+    def parameter_spec(self) -> dict[str, dict[str, any]]:
         return {
             "gsyn_max": {
                 "shape": (self.n_pre, self.n_post),

@@ -23,6 +23,7 @@ from neuraltide.optimization import (
     ParameterEntry,
     ResidualLoss,
     StateLocator,
+    minimize_lbfgsb,
     taylor_test,
 )
 
@@ -274,7 +275,7 @@ class TestFrozenProblem:
         assert frozen.size == 2
         assert frozen.free_names == ["exc/tau", "exc/I_ext"]
         phi0 = np.asarray(frozen.pack(), dtype=np.float64) + 0.05
-        ev, grad = frozen.value_and_gradient(phi0)
+        _ev, grad = frozen.value_and_gradient(phi0)
         assert np.asarray(grad).shape == (frozen.size,)
         h = 1e-6
         fd = np.zeros_like(phi0)
@@ -302,6 +303,20 @@ class TestFrozenProblem:
         assert np.asarray(grad).shape == (1,)
         # unpack возвращает только свободные записи
         assert set(frozen.unpack(phi0)) == {"exc/I_ext"}
+
+    def test_minimize_lbfgsb_small_problem(self, l0_factory):
+        """L-BFGS-B на FrozenProblem малой размерности сходится.
+
+        Регрессия по полевому отчёту: SIGSEGV на 142 параметрах —
+        масштабо-зависимый эффект больших графов; на малых пространствах
+        путь корректен (см. docs/troubleshooting.md).
+        """
+        problem = self._build(l0_factory)
+        frozen = FrozenProblem(problem, free_names=["exc/I_ext"])
+        phi0 = np.asarray(frozen.pack(), dtype=np.float64) + 0.05
+        result = minimize_lbfgsb(frozen, phi0, maxiter=3)
+        assert result.nit <= 3
+        assert result.base.loss_best < frozen.evaluate(phi0).loss
 
     def test_fixed_value_applied_to_evaluation(self, l0_factory):
         problem = self._build(l0_factory)
@@ -367,7 +382,7 @@ class TestNonTrainableEntries:
         assert frozen.free_names == ["exc/tau", "exc/I_ext", "in->exc/gsyn_max"]
         assert frozen.size == 3
         phi0 = np.asarray(frozen.pack(), dtype=np.float64)
-        ev, grad = frozen.value_and_gradient(phi0)
+        _ev, grad = frozen.value_and_gradient(phi0)
         assert np.asarray(grad).shape == (frozen.size,)
         lo, hi = frozen.bounds_phi()
         assert lo.shape == hi.shape == (frozen.size,)

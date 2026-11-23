@@ -1,10 +1,12 @@
+from typing import Any
+
 import tensorflow as tf
-from typing import Dict, List, Any
+
 import neuraltide.config as _config
 
 TensorType = tf.Tensor
-StateList = List[TensorType]
-ParamDict = Dict[str, Any]
+StateList = list[TensorType]
+ParamDict = dict[str, Any]
 
 
 def get_pi() -> tf.Tensor:

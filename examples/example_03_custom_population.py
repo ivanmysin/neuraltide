@@ -6,13 +6,13 @@
 import tensorflow as tf
 
 import neuraltide
-from neuraltide.core.base import PopulationModel
 from neuraltide.config import register_population
+from neuraltide.core.base import PopulationModel
 from neuraltide.core.network import NetworkGraph, NetworkRNN
-from neuraltide.synapses import TsodyksMarkramSynapse
 from neuraltide.inputs import ConstantRateGenerator
 from neuraltide.integrators import EulerIntegrator
-from neuraltide.training import Trainer, CompositeLoss, MSELoss
+from neuraltide.synapses import TsodyksMarkramSynapse
+from neuraltide.training import CompositeLoss, MSELoss, Trainer
 from neuraltide.utils import seed_everything
 
 seed_everything(42)

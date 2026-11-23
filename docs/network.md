@@ -38,7 +38,7 @@ NetworkGraph(dt: float)
 Регистрирует динамическую популяцию.
 
 ```python
-graph.add_population('exc', pop)
+graph.add_population("exc", pop)
 ```
 
 **Raises**: `ValueError` если имя уже занято.
@@ -48,7 +48,7 @@ graph.add_population('exc', pop)
 Объявляет внешний входной источник. В отличие от старого `add_input_population`, это не создаёт объект PopulationModel — входные частоты передаются извне через `pack_inputs()` и `inputs=` в `call()`.
 
 ```python
-graph.declare_input('input', n_units=gen.n_units)
+graph.declare_input("input", n_units=gen.n_units)
 ```
 
 | Параметр | Тип | Описание |
@@ -65,7 +65,7 @@ graph.declare_input('input', n_units=gen.n_units)
 Складывает именованные входные тензоры в один тензор для передачи в `NetworkRNN.call()`.
 
 ```python
-inputs = graph.pack_inputs({'input': gen(t_seq)})
+inputs = graph.pack_inputs({"input": gen(t_seq)})
 ```
 
 | Параметр | Тип | Описание |
@@ -81,7 +81,7 @@ inputs = graph.pack_inputs({'input': gen(t_seq)})
 Регистрирует синаптическую проекцию.
 
 ```python
-graph.add_synapse('input->exc', syn, src='input', tgt='exc')
+graph.add_synapse("input->exc", syn, src="input", tgt="exc")
 ```
 
 | Параметр | Тип | Описание |
@@ -176,55 +176,66 @@ dt = 0.05
 gen = VonMisesGenerator(
     dt=dt,
     params={
-        'mean_rate': 20.0,
-        'R': 0.5,
-        'freq': 8.0,
-        'phase': 0.0,
+        "mean_rate": 20.0,
+        "R": 0.5,
+        "freq": 8.0,
+        "phase": 0.0,
     },
-    name='theta_gen'
+    name="theta_gen",
 )
 
 # Возбуждающая популяция
-pop_exc = IzhikevichMeanField(dt=dt, params={
-    'tau_pop':   {'value': [1.0, 1.0],   'trainable': False},
-    'alpha':     {'value': [0.5, 0.5],   'trainable': False},
-    'a':         {'value': [0.02, 0.02], 'trainable': False},
-    'b':         {'value': [0.2, 0.2],   'trainable': False},
-    'w_jump':    {'value': [0.1, 0.1],   'trainable': False},
-    'Delta_I':   {'value': [0.5, 0.6],   'trainable': True,
-                  'min': 0.01, 'max': 2.0},
-    'I_ext':     {'value': [0.1, 0.2],   'trainable': True,
-                  'min': -2.0, 'max': 2.0},
-})
+pop_exc = IzhikevichMeanField(
+    dt=dt,
+    params={
+        "tau_pop": {"value": [1.0, 1.0], "trainable": False},
+        "alpha": {"value": [0.5, 0.5], "trainable": False},
+        "a": {"value": [0.02, 0.02], "trainable": False},
+        "b": {"value": [0.2, 0.2], "trainable": False},
+        "w_jump": {"value": [0.1, 0.1], "trainable": False},
+        "Delta_I": {"value": [0.5, 0.6], "trainable": True, "min": 0.01, "max": 2.0},
+        "I_ext": {"value": [0.1, 0.2], "trainable": True, "min": -2.0, "max": 2.0},
+    },
+)
 
 # Входной синапс (Tsodyks-Markram)
-syn_in = TsodyksMarkramSynapse(n_pre=1, n_post=2, dt=dt, params={
-    'gsyn_max': {'value': [[0.1, 0.1]], 'trainable': True},
-    'tau_f':    {'value': 20.0,  'trainable': True, 'min': 6.0,  'max': 240.0},
-    'tau_d':    {'value': 5.0,   'trainable': True, 'min': 2.0,  'max': 15.0},
-    'tau_r':    {'value': 200.0, 'trainable': True, 'min': 91.0, 'max': 1300.0},
-    'Uinc':     {'value': 0.2,   'trainable': True, 'min': 0.04, 'max': 0.7},
-    'pconn':    {'value': [[1.0, 1.0]], 'trainable': False},
-    'e_r':      {'value': 0.0,   'trainable': False},
-})
+syn_in = TsodyksMarkramSynapse(
+    n_pre=1,
+    n_post=2,
+    dt=dt,
+    params={
+        "gsyn_max": {"value": [[0.1, 0.1]], "trainable": True},
+        "tau_f": {"value": 20.0, "trainable": True, "min": 6.0, "max": 240.0},
+        "tau_d": {"value": 5.0, "trainable": True, "min": 2.0, "max": 15.0},
+        "tau_r": {"value": 200.0, "trainable": True, "min": 91.0, "max": 1300.0},
+        "Uinc": {"value": 0.2, "trainable": True, "min": 0.04, "max": 0.7},
+        "pconn": {"value": [[1.0, 1.0]], "trainable": False},
+        "e_r": {"value": 0.0, "trainable": False},
+    },
+)
 
 # Рекуррентный синапс
-syn_rec = TsodyksMarkramSynapse(n_pre=2, n_post=2, dt=dt, params={
-    'gsyn_max': {'value': 0.05,  'trainable': True},
-    'tau_f':    {'value': 20.0,  'trainable': True, 'min': 6.0,  'max': 240.0},
-    'tau_d':    {'value': 5.0,   'trainable': True, 'min': 2.0,  'max': 15.0},
-    'tau_r':    {'value': 200.0, 'trainable': True, 'min': 91.0, 'max': 1300.0},
-    'Uinc':     {'value': 0.2,   'trainable': True, 'min': 0.04, 'max': 0.7},
-    'pconn':    {'value': [[1, 1], [1, 1]], 'trainable': False},
-    'e_r':      {'value': 0.0,   'trainable': False},
-})
+syn_rec = TsodyksMarkramSynapse(
+    n_pre=2,
+    n_post=2,
+    dt=dt,
+    params={
+        "gsyn_max": {"value": 0.05, "trainable": True},
+        "tau_f": {"value": 20.0, "trainable": True, "min": 6.0, "max": 240.0},
+        "tau_d": {"value": 5.0, "trainable": True, "min": 2.0, "max": 15.0},
+        "tau_r": {"value": 200.0, "trainable": True, "min": 91.0, "max": 1300.0},
+        "Uinc": {"value": 0.2, "trainable": True, "min": 0.04, "max": 0.7},
+        "pconn": {"value": [[1, 1], [1, 1]], "trainable": False},
+        "e_r": {"value": 0.0, "trainable": False},
+    },
+)
 
 # Построение графа
 graph = NetworkGraph(dt=dt)
-graph.declare_input('theta', n_units=gen.n_units)
-graph.add_population('exc', pop_exc)
-graph.add_synapse('theta->exc', syn_in,  src='theta', tgt='exc')
-graph.add_synapse('exc->exc',   syn_rec, src='exc',   tgt='exc')
+graph.declare_input("theta", n_units=gen.n_units)
+graph.add_population("exc", pop_exc)
+graph.add_synapse("theta->exc", syn_in, src="theta", tgt="exc")
+graph.add_synapse("exc->exc", syn_rec, src="exc", tgt="exc")
 
 # Валидация
 graph.validate()
@@ -232,7 +243,7 @@ graph.validate()
 # Подготовка входных данных
 t_values = np.arange(0, 1000, dt, dtype=np.float32)
 t_seq = tf.constant(t_values[None, :, None])
-inputs = graph.pack_inputs({'theta': gen(t_seq)})
+inputs = graph.pack_inputs({"theta": gen(t_seq)})
 ```
 
 ---
@@ -307,9 +318,11 @@ output = network(t_sequence, inputs=None, initial_state=None)
 ```python
 @dataclass
 class NetworkOutput:
-    firing_rates: Dict[str, TensorType]       # {pop_name: [batch, T, n_units]}
+    firing_rates: Dict[str, TensorType]  # {pop_name: [batch, T, n_units]}
     stability_loss: TensorType  # скаляр
-    final_state: Tuple[StateList, StateList]  # конечное состояние для продолжения симуляции
+    final_state: Tuple[
+        StateList, StateList
+    ]  # конечное состояние для продолжения симуляции
 ```
 
 ### Свойства
@@ -356,14 +369,14 @@ t_values = np.arange(0, T, dt, dtype=np.float32)
 t_seq = tf.constant(t_values[None, :, None])  # [1, T/dt, 1]
 
 # Входные данные (если есть объявленные входы)
-inputs = graph.pack_inputs({'input': gen(t_seq)})
+inputs = graph.pack_inputs({"input": gen(t_seq)})
 
 # Запуск
 output = network(t_seq, inputs=inputs)
 
 # Результат
-print(output.firing_rates['exc'].shape)  # [1, 2000, 2]
-rates = output.firing_rates['exc'].numpy()
+print(output.firing_rates["exc"].shape)  # [1, 2000, 2]
+rates = output.firing_rates["exc"].numpy()
 ```
 
 ### Симуляция с пользовательским начальным состоянием
@@ -392,28 +405,50 @@ from neuraltide.populations import IzhikevichMeanField
 from neuraltide.synapses import StaticSynapse
 
 # Создание генератора, работающего с пространственными координатами (см)
-gen = PlaceFieldGenerator(dt=0.5, params={
-    'center_x': [40.0, -50.0], 'center_y': [30.0, 40.0],
-    'radius': [35.0, 40.0], 'peak_rate': [25.0, 30.0],
-    'background_rate': [2.0, 3.0], 'theta_modulation_factor': 0.0,
-    'precession_slope': [30.0, 35.0], 'precession_init_phase': [0.0, 90.0],
-    'phase_outside': 0.0,
-    'R': 0.6, 'freq': 8.0,
-})
+gen = PlaceFieldGenerator(
+    dt=0.5,
+    params={
+        "center_x": [40.0, -50.0],
+        "center_y": [30.0, 40.0],
+        "radius": [35.0, 40.0],
+        "peak_rate": [25.0, 30.0],
+        "background_rate": [2.0, 3.0],
+        "theta_modulation_factor": 0.0,
+        "precession_slope": [30.0, 35.0],
+        "precession_init_phase": [0.0, 90.0],
+        "phase_outside": 0.0,
+        "R": 0.6,
+        "freq": 8.0,
+    },
+)
 
-pop = IzhikevichMeanField(dt=0.5, params={
-    'tau_pop': [1.0, 1.0], 'alpha': [0.5, 0.5], 'a': [0.02, 0.02],
-    'b': [0.2, 0.2], 'w_jump': [0.1, 0.1], 'Delta_I': [0.05, 0.05],
-    'I_ext': [0.0, 0.0],
-})
-syn = StaticSynapse(n_pre=2, n_post=2, dt=0.5, params={
-    'gsyn_max': [[1.0, 0.0], [0.0, 1.0]], 'pconn': 1.0, 'e_r': 5.0,
-})
+pop = IzhikevichMeanField(
+    dt=0.5,
+    params={
+        "tau_pop": [1.0, 1.0],
+        "alpha": [0.5, 0.5],
+        "a": [0.02, 0.02],
+        "b": [0.2, 0.2],
+        "w_jump": [0.1, 0.1],
+        "Delta_I": [0.05, 0.05],
+        "I_ext": [0.0, 0.0],
+    },
+)
+syn = StaticSynapse(
+    n_pre=2,
+    n_post=2,
+    dt=0.5,
+    params={
+        "gsyn_max": [[1.0, 0.0], [0.0, 1.0]],
+        "pconn": 1.0,
+        "e_r": 5.0,
+    },
+)
 
 graph = NetworkGraph(dt=0.5)
-graph.declare_input('place', n_units=gen.n_units)
-graph.add_population('readout', pop)
-graph.add_synapse('place->readout', syn, src='place', tgt='readout')
+graph.declare_input("place", n_units=gen.n_units)
+graph.add_population("readout", pop)
+graph.add_synapse("place->readout", syn, src="place", tgt="readout")
 
 network = NetworkRNN(graph, integrator=RK4Integrator())
 
@@ -437,21 +472,17 @@ extra = tf.constant(
 
 # Упаковка входов: PlaceFieldGenerator генерирует частоты с учётом координат
 rates = gen(t_seq, extra_inputs=extra)
-inputs = graph.pack_inputs({'place': rates})
+inputs = graph.pack_inputs({"place": rates})
 
 # Запуск
 output = network(t_seq, inputs=inputs)
-print(output.firing_rates['readout'].shape)  # [1, T/0.5, 2]
+print(output.firing_rates["readout"].shape)  # [1, T/0.5, 2]
 ```
 
 ### Мониторинг стабильности
 
 ```python
-network = NetworkRNN(
-    graph,
-    integrator=RK4Integrator(),
-    stability_penalty_weight=1e-3
-)
+network = NetworkRNN(graph, integrator=RK4Integrator(), stability_penalty_weight=1e-3)
 
 output = network(t_seq, inputs=inputs)
 
@@ -492,16 +523,16 @@ def _step_fn(states, t, input_step, graph, integrator, *, integration_mode="spli
     # 2. Вычисление синаптических токов с использованием кэша _syn_info_cache
     for syn_name, entry, _ in graph._syn_info_cache:
         pre_rate = src_pop.get_firing_rate(src_state)
-        post_v = tgt_pop.observables(tgt_state)['v_mean']
+        post_v = tgt_pop.observables(tgt_state)["v_mean"]
         new_syn_state, local_err = integrator.step_synapse(...)
         current_dict = compute_synapse_current(...)
 
-        syn_I[tgt] += current_dict['I_syn']
-        syn_g[tgt] += current_dict['g_syn']
+        syn_I[tgt] += current_dict["I_syn"]
+        syn_g[tgt] += current_dict["g_syn"]
 
     # 3. Интегрирование популяций с использованием кэша _pop_info_cache
     for name, pop, _ in graph._pop_info_cache:
-        total_syn = {'I_syn': syn_I[name], 'g_syn': syn_g[name]}
+        total_syn = {"I_syn": syn_I[name], "g_syn": syn_g[name]}
         new_pop_state, local_err = integrator.step(pop, pop_state, total_syn)
 
     return (new_pop_states, new_syn_states, stability_error)

@@ -57,8 +57,9 @@
 import json
 import os
 import time
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple, Union
+from typing import Any
 
 import numpy as np
 import tensorflow as tf
@@ -72,22 +73,22 @@ from neuraltide.optimization.results import OptimizationResult
 from neuraltide.training.losses import _MASK_DENOM_EPS
 
 __all__ = [
-    "WeightStrategy",
+    "AdaptiveWindowFocus",
+    "BalancedResult",
     "FixedWeights",
-    "UncertaintyWeighting",
     "GradNormWeights",
     "SelfAdaptiveWeights",
-    "pcgrad_project",
-    "cagrad_project",
-    "balanced_gradient",
+    "UncertaintyWeighting",
+    "WeightStrategy",
     "adaptive_window_sampler",
-    "AdaptiveWindowFocus",
+    "balanced_gradient",
     "balanced_train",
-    "BalancedResult",
+    "cagrad_project",
+    "pcgrad_project",
 ]
 
-PathLike = Union[str, os.PathLike]
-GradMap = Union[Mapping[str, np.ndarray], Sequence[np.ndarray]]
+PathLike = str | os.PathLike
+GradMap = Mapping[str, np.ndarray] | Sequence[np.ndarray]
 
 
 # ---------------------------------------------------------------------------
@@ -95,7 +96,7 @@ GradMap = Union[Mapping[str, np.ndarray], Sequence[np.ndarray]]
 # ---------------------------------------------------------------------------
 
 
-def _grad_list(grads: GradMap) -> List[np.ndarray]:
+def _grad_list(grads: GradMap) -> list[np.ndarray]:
     """Mapping/Sequence градиентов -> список плоских float64 numpy массивов."""
     values = list(grads.values()) if isinstance(grads, Mapping) else list(grads)
     if not values:
@@ -114,7 +115,7 @@ def _grad_list(grads: GradMap) -> List[np.ndarray]:
 
 
 def _weights_vector(
-    weights: Union[Mapping[str, float], Sequence[float], np.ndarray],
+    weights: Mapping[str, float] | Sequence[float] | np.ndarray,
     names: Sequence[str],
 ) -> np.ndarray:
     """Веса компонент (Mapping по именам или вектор) -> float64 вектор."""
@@ -212,7 +213,7 @@ class WeightStrategy:
     """
 
     def __init__(self) -> None:
-        self._names: Optional[List[str]] = None
+        self._names: list[str] | None = None
         self._step = 0
 
     # ------------------------------------------------------------------
@@ -227,7 +228,7 @@ class WeightStrategy:
     def update(
         self,
         losses: Mapping[str, float],
-        grads: Optional[Mapping[str, np.ndarray]],
+        grads: Mapping[str, np.ndarray] | None,
         step: int,
     ) -> np.ndarray:
         if self._names is None:
@@ -248,7 +249,7 @@ class WeightStrategy:
     def _update(
         self,
         losses: Mapping[str, float],
-        grads: Optional[Mapping[str, np.ndarray]],
+        grads: Mapping[str, np.ndarray] | None,
         step: int,
     ) -> np.ndarray:
         raise NotImplementedError
@@ -265,7 +266,7 @@ class WeightStrategy:
         return w
 
     # ------------------------------------------------------------------
-    def state_dict(self) -> Dict[str, Any]:
+    def state_dict(self) -> dict[str, Any]:
         """JSON-сериализуемое состояние (тип, шаг, веса, гиперпараметры)."""
         return {
             "type": type(self).__name__,
@@ -295,7 +296,7 @@ class WeightStrategy:
             self._set_current(np.asarray(weights, dtype=np.float64))
 
     # Хуки подклассов.
-    def _params(self) -> Dict[str, Any]:
+    def _params(self) -> dict[str, Any]:
         return {}
 
     def _load_params(self, params: Mapping[str, Any]) -> None:
@@ -318,11 +319,11 @@ class FixedWeights(WeightStrategy):
             вектор, выровненный по names initial_weights().
     """
 
-    def __init__(self, weights: Union[float, Mapping[str, float], Sequence[float]]):
+    def __init__(self, weights: float | Mapping[str, float] | Sequence[float]):
         super().__init__()
         if isinstance(weights, Mapping):
             self._fixed_map = {str(k): float(v) for k, v in weights.items()}
-            self._fixed_vec: Optional[np.ndarray] = None
+            self._fixed_vec: np.ndarray | None = None
         else:
             arr = np.asarray(weights, dtype=np.float64).reshape(-1)
             if arr.shape[0] == 1:
@@ -351,7 +352,7 @@ class FixedWeights(WeightStrategy):
         del losses, grads, step
         return self._current()
 
-    def _params(self) -> Dict[str, Any]:
+    def _params(self) -> dict[str, Any]:
         return {
             "fixed_map": self._fixed_map,
             "fixed_vec": (
@@ -401,7 +402,7 @@ class _LossPoweredWeights(WeightStrategy):
         self.eps = float(eps)
         self.min_weight = float(min_weight)
         self.max_weight = float(max_weight)
-        self._w: Optional[np.ndarray] = None
+        self._w: np.ndarray | None = None
 
     def _initial(self, names: Sequence[str]) -> np.ndarray:
         self._w = np.ones(len(names), dtype=np.float64)
@@ -420,7 +421,7 @@ class _LossPoweredWeights(WeightStrategy):
         self._w = w
         return w
 
-    def _params(self) -> Dict[str, Any]:
+    def _params(self) -> dict[str, Any]:
         return {
             "exponent": self.exponent,
             "eps": self.eps,
@@ -528,7 +529,7 @@ class GradNormWeights(WeightStrategy):
         self.eps = float(eps)
         self.min_weight = float(min_weight)
         self.max_weight = float(max_weight)
-        self._w: Optional[np.ndarray] = None
+        self._w: np.ndarray | None = None
 
     def _initial(self, names: Sequence[str]) -> np.ndarray:
         self._w = np.ones(len(names), dtype=np.float64)
@@ -558,7 +559,7 @@ class GradNormWeights(WeightStrategy):
         self._w = w
         return w
 
-    def _params(self) -> Dict[str, Any]:
+    def _params(self) -> dict[str, Any]:
         return {
             "alpha": self.alpha,
             "step_size": self.step_size,
@@ -586,7 +587,7 @@ class GradNormWeights(WeightStrategy):
 # ---------------------------------------------------------------------------
 
 
-def pcgrad_project(grads: GradMap, *, seed: Optional[int] = None) -> np.ndarray:
+def pcgrad_project(grads: GradMap, *, seed: int | None = None) -> np.ndarray:
     """
     PCGrad (Yu et al., 2020): проекция каждого градиента на нормальное
     пространство каждого конфликтующего (g_i·g_j < 0) градиента, усреднение.
@@ -756,10 +757,10 @@ def cagrad_project(grads: GradMap, c: float = 0.5) -> np.ndarray:
 class _GradientBreakdown:
     """Внутренний результат _balanced_gradient_full."""
 
-    losses: Dict[str, float]
-    grads: Dict[str, np.ndarray]
+    losses: dict[str, float]
+    grads: dict[str, np.ndarray]
     weighted_grad: np.ndarray
-    names: List[str]
+    names: list[str]
     weights: np.ndarray
     weighted_total: float
 
@@ -767,9 +768,9 @@ class _GradientBreakdown:
 def _balanced_gradient_full(
     problem: Any,
     phi: Any,
-    weights: Union[Mapping[str, float], Sequence[float], np.ndarray],
+    weights: Mapping[str, float] | Sequence[float] | np.ndarray,
     projector: Any = None,
-    projector_kwargs: Optional[Mapping] = None,
+    projector_kwargs: Mapping | None = None,
 ) -> _GradientBreakdown:
     """
     Один прямой прогон: per-component losses и градиенты, взвешенный суммарный
@@ -828,11 +829,11 @@ def _balanced_gradient_full(
             "balanced_gradient: objective.components() вернул пустой "
             "словарь — нечего балансировать."
         )
-    names = [str(k) for k in comps.keys()]
+    names = [str(k) for k in comps]
     w = _weights_vector(weights, names)
 
-    losses: Dict[str, float] = {}
-    grads: Dict[str, np.ndarray] = {}
+    losses: dict[str, float] = {}
+    grads: dict[str, np.ndarray] = {}
     combined = np.zeros(problem.size, dtype=np.float64)
     for name in names:
         loss_i = cast_if_needed(tf.convert_to_tensor(comps[name]), dtype)
@@ -866,11 +867,11 @@ def _balanced_gradient_full(
 def balanced_gradient(
     problem: Any,
     phi: Any,
-    weights: Union[Mapping[str, float], Sequence[float], np.ndarray],
+    weights: Mapping[str, float] | Sequence[float] | np.ndarray,
     projector: Any = None,
     *,
-    projector_kwargs: Optional[Mapping] = None,
-) -> Tuple[Dict[str, float], np.ndarray]:
+    projector_kwargs: Mapping | None = None,
+) -> tuple[dict[str, float], np.ndarray]:
     """
     Один прямой прогон сети с per-component GradientTape.
 
@@ -952,8 +953,8 @@ class AdaptiveWindowFocus:
         self.window_size = window_size
         self.focus = focus
         self.boost = float(boost)
-        self.last_window: Optional[Tuple[int, int]] = None
-        self.last_energies: Optional[np.ndarray] = None
+        self.last_window: tuple[int, int] | None = None
+        self.last_energies: np.ndarray | None = None
 
     # ------------------------------------------------------------------
     @property
@@ -965,7 +966,7 @@ class AdaptiveWindowFocus:
         T = int(self._problem.t_sequence.shape[1])
         return len(range(0, T, self.window_size))
 
-    def window_bounds(self) -> List[Tuple[int, int]]:
+    def window_bounds(self) -> list[tuple[int, int]]:
         T = int(self._problem.t_sequence.shape[1])
         return [
             (s, min(s + self.window_size, T)) for s in range(0, T, self.window_size)
@@ -1012,7 +1013,7 @@ class AdaptiveWindowFocus:
         self.last_energies = energies
         return energies
 
-    def select(self, phi: Any = None) -> Tuple[int, int]:
+    def select(self, phi: Any = None) -> tuple[int, int]:
         """Выбрать окно с максимальной энергией; вернуть (start, stop)."""
         energies = self.compute_energies(phi)
         w_idx = int(np.argmax(energies))
@@ -1030,7 +1031,7 @@ class AdaptiveWindowFocus:
         start, stop = self.select(phi)
         objective = self._problem.objective
         mult = self.window_multiplier(start, stop)
-        new_specs: List[ObservationSpec] = []
+        new_specs: list[ObservationSpec] = []
         for spec in objective.observations:
             base = spec.mask
             new_mask = mult if base is None else base * mult
@@ -1088,11 +1089,11 @@ class BalancedResult:
     """
 
     base: OptimizationResult
-    weight_history: List[Dict[str, Any]] = field(default_factory=list)
+    weight_history: list[dict[str, Any]] = field(default_factory=list)
     notes: str = ""
-    baseline: Dict[str, Any] = field(default_factory=dict)
+    baseline: dict[str, Any] = field(default_factory=dict)
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Словарь с JSON-сериализуемыми значениями."""
         return {
             "base": self.base.to_dict(),
@@ -1166,10 +1167,10 @@ def _loop(
     optimizer: Any,
     max_steps: int,
     projector: Any,
-    projector_kwargs: Optional[Mapping],
-    strategy: Optional[WeightStrategy],
-    history_path: Optional[PathLike],
-) -> Tuple[List[Dict[str, Any]], np.ndarray, float, np.ndarray]:
+    projector_kwargs: Mapping | None,
+    strategy: WeightStrategy | None,
+    history_path: PathLike | None,
+) -> tuple[list[dict[str, Any]], np.ndarray, float, np.ndarray]:
     """
     Основной цикл: по шагу на итерацию — один balanced-gradient прогон,
     применение объединённого градиента, (опционально) update стратегии,
@@ -1177,7 +1178,7 @@ def _loop(
     """
     dtype = neuraltide.config.get_dtype()
     phi_var = tf.Variable(problem.pack(phi0), dtype=dtype, trainable=True)
-    history: List[Dict[str, Any]] = []
+    history: list[dict[str, Any]] = []
     w = np.asarray(weights, dtype=np.float64)
     best_loss = float("inf")
     best_phi = np.asarray(phi_var, dtype=np.float64).reshape(-1)
@@ -1194,7 +1195,7 @@ def _loop(
         optimizer.apply_gradients([(grad_t, phi_var)])
         if strategy is not None:
             w = np.asarray(strategy.update(full.losses, full.grads, step))
-        entry: Dict[str, Any] = {
+        entry: dict[str, Any] = {
             "step": int(step),
             "loss": float(full.weighted_total),
             "grad_norm": grad_norm,
@@ -1217,9 +1218,9 @@ def balanced_train(
     optimizer: Any = None,
     max_steps: int,
     projector: Any = None,
-    projector_kwargs: Optional[Mapping] = None,
-    seed: Optional[int] = None,
-    history_path: Optional[PathLike] = None,
+    projector_kwargs: Mapping | None = None,
+    seed: int | None = None,
+    history_path: PathLike | None = None,
 ) -> BalancedResult:
     """
     Обучение с адаптивным балансом компонент и обязательным baseline.
@@ -1275,7 +1276,7 @@ def balanced_train(
             "компоненты (components) — нечего балансировать; используйте "
             "ResidualLoss или другой компонентный objective."
         )
-    names = [str(k) for k in probe.components.keys()]
+    names = [str(k) for k in probe.components]
     w0 = strategy.initial_weights(names)
 
     history, phi_best, best_loss, w_final = _loop(

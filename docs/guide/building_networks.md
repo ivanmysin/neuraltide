@@ -19,11 +19,11 @@
 ```python
 from neuraltide.core.network import NetworkGraph
 
-graph = NetworkGraph(dt=0.5)                        # общий шаг, мс
-graph.declare_input("theta", n_units=gen.n_units)   # внешний вход
-graph.add_population("exc", pop)                    # популяция
+graph = NetworkGraph(dt=0.5)  # общий шаг, мс
+graph.declare_input("theta", n_units=gen.n_units)  # внешний вход
+graph.add_population("exc", pop)  # популяция
 graph.add_synapse("theta->exc", syn, src="theta", tgt="exc")
-graph.validate()                                    # проверка топологии
+graph.validate()  # проверка топологии
 ```
 
 Имена, заданные здесь, — не ярлыки: они определяют адреса параметров в
@@ -47,11 +47,18 @@ from neuraltide.populations import IzhikevichMeanField, WilsonCowan
 
 # Izhikevich mean-field, безразмерные параметры; n_units выводится
 # из длины параметров (здесь — 2 юнита)
-pop = IzhikevichMeanField(dt=0.5, params={
-    "tau_pop": [1.0, 1.0], "alpha": [0.5, 0.5], "a": [0.02, 0.02],
-    "b": [0.2, 0.2], "w_jump": [0.1, 0.1],
-    "Delta_I": [0.5, 0.6], "I_ext": [0.1, 0.2],
-})
+pop = IzhikevichMeanField(
+    dt=0.5,
+    params={
+        "tau_pop": [1.0, 1.0],
+        "alpha": [0.5, 0.5],
+        "a": [0.02, 0.02],
+        "b": [0.2, 0.2],
+        "w_jump": [0.1, 0.1],
+        "Delta_I": [0.5, 0.6],
+        "I_ext": [0.1, 0.2],
+    },
+)
 
 # То же в размерных единицах (мВ, нФ, ...):
 # params = {"V_rest": ..., "V_T": ..., "Cm": ..., "K": ..., "A": ...,
@@ -59,10 +66,17 @@ pop = IzhikevichMeanField(dt=0.5, params={
 # Пересчёт: IzhikevichMeanField.dimensionless_to_dimensional(...)
 
 # Wilson–Cowan: обязательные параметры tau, a, theta, w, I_ext, max_rate
-rate_pop = WilsonCowan(dt=0.5, params={
-    "tau": 8.0, "a": 1.0, "theta": 0.0,
-    "w": 0.2, "I_ext": 0.8, "max_rate": 100.0,
-})
+rate_pop = WilsonCowan(
+    dt=0.5,
+    params={
+        "tau": 8.0,
+        "a": 1.0,
+        "theta": 0.0,
+        "w": 0.2,
+        "I_ext": 0.8,
+        "max_rate": 100.0,
+    },
+)
 ```
 
 Для `BrunelFokkerPlanck` параметры — `tau_m`, `v_theta`, `v_reset`,
@@ -101,27 +115,57 @@ rate_pop = WilsonCowan(dt=0.5, params={
 
 ```python
 from neuraltide.synapses import (
-    StaticSynapse, TsodyksMarkramSynapse, NMDASynapse,
-    SecondOrderSynapse, CompositeSynapse,
+    StaticSynapse,
+    TsodyksMarkramSynapse,
+    NMDASynapse,
+    SecondOrderSynapse,
+    CompositeSynapse,
 )
 
 # Статический синапс 1 -> 2
-syn = StaticSynapse(n_pre=1, n_post=2, dt=0.5, params={
-    "gsyn_max": [[0.1, 0.1]], "pconn": [[1.0, 1.0]], "e_r": 0.0,
-})
+syn = StaticSynapse(
+    n_pre=1,
+    n_post=2,
+    dt=0.5,
+    params={
+        "gsyn_max": [[0.1, 0.1]],
+        "pconn": [[1.0, 1.0]],
+        "e_r": 0.0,
+    },
+)
 
 # Tsodyks–Markram (STP)
-stp = TsodyksMarkramSynapse(n_pre=2, n_post=2, dt=0.5, params={
-    "gsyn_max": 0.05, "tau_f": 20.0, "tau_d": 5.0, "tau_r": 200.0,
-    "Uinc": 0.2, "pconn": [[1, 1], [1, 1]], "e_r": 0.0,
-})
+stp = TsodyksMarkramSynapse(
+    n_pre=2,
+    n_post=2,
+    dt=0.5,
+    params={
+        "gsyn_max": 0.05,
+        "tau_f": 20.0,
+        "tau_d": 5.0,
+        "tau_r": 200.0,
+        "Uinc": 0.2,
+        "pconn": [[1, 1], [1, 1]],
+        "e_r": 0.0,
+    },
+)
 
 # NMDA с Mg2+-блоком
-nmda = NMDASynapse(n_pre=2, n_post=2, dt=0.5, params={
-    "gsyn_max_nmda": 0.05, "tau1_nmda": 2.0, "tau2_nmda": 100.0,
-    "Mgb": 1.0, "av_nmda": 0.062,
-    "pconn_nmda": [[1, 1], [1, 1]], "e_r_nmda": 0.0, "v_ref": 1.0,
-})
+nmda = NMDASynapse(
+    n_pre=2,
+    n_post=2,
+    dt=0.5,
+    params={
+        "gsyn_max_nmda": 0.05,
+        "tau1_nmda": 2.0,
+        "tau2_nmda": 100.0,
+        "Mgb": 1.0,
+        "av_nmda": 0.062,
+        "pconn_nmda": [[1, 1], [1, 1]],
+        "e_r_nmda": 0.0,
+        "v_ref": 1.0,
+    },
+)
 ```
 
 Знак тока задаётся `e_r`: для возбуждающих связей `e_r` выше рабочего
@@ -155,26 +199,49 @@ nmda = NMDASynapse(n_pre=2, n_post=2, dt=0.5, params={
 
 ```python
 from neuraltide.inputs import (
-    ConstantRateGenerator, SinusoidalGenerator,
-    VonMisesGenerator, PlaceFieldGenerator,
+    ConstantRateGenerator,
+    SinusoidalGenerator,
+    VonMisesGenerator,
+    PlaceFieldGenerator,
 )
 
-gen = SinusoidalGenerator(dt=0.5, params={
-    "amplitude": 10.0, "freq": 8.0, "phase": 0.0, "offset": 5.0,
-})
-theta = VonMisesGenerator(dt=0.5, params={
-    "mean_rate": 20.0, "R": 0.5, "freq": 8.0, "phase": 0.0,
-})
+gen = SinusoidalGenerator(
+    dt=0.5,
+    params={
+        "amplitude": 10.0,
+        "freq": 8.0,
+        "phase": 0.0,
+        "offset": 5.0,
+    },
+)
+theta = VonMisesGenerator(
+    dt=0.5,
+    params={
+        "mean_rate": 20.0,
+        "R": 0.5,
+        "freq": 8.0,
+        "phase": 0.0,
+    },
+)
 
 # Клетки места: координаты (x, y) в см передаются при вызове
-pf = PlaceFieldGenerator(dt=0.5, params={
-    "center_x": [40.0, -50.0], "center_y": [30.0, 40.0],
-    "radius": [35.0, 40.0], "peak_rate": [25.0, 30.0],
-    "background_rate": [2.0, 3.0], "theta_modulation_factor": 0.0,
-    "precession_slope": [30.0, 35.0], "precession_init_phase": [0.0, 90.0],
-    "phase_outside": 0.0, "R": 0.6, "freq": 8.0,
-})
-rates = pf(t_seq, extra_inputs=extra)   # extra: [batch, T, n_cols], n_cols >= 2
+pf = PlaceFieldGenerator(
+    dt=0.5,
+    params={
+        "center_x": [40.0, -50.0],
+        "center_y": [30.0, 40.0],
+        "radius": [35.0, 40.0],
+        "peak_rate": [25.0, 30.0],
+        "background_rate": [2.0, 3.0],
+        "theta_modulation_factor": 0.0,
+        "precession_slope": [30.0, 35.0],
+        "precession_init_phase": [0.0, 90.0],
+        "phase_outside": 0.0,
+        "R": 0.6,
+        "freq": 8.0,
+    },
+)
+rates = pf(t_seq, extra_inputs=extra)  # extra: [batch, T, n_cols], n_cols >= 2
 ```
 
 Все генераторы принимают `t` формы `[batch, T, 1]`, `[batch, T]` или
@@ -206,14 +273,17 @@ rates = pf(t_seq, extra_inputs=extra)   # extra: [batch, T, n_cols], n_cols >= 2
 **Минимальный пример:**
 
 ```python
-pop = WilsonCowan(dt=0.5, params={
-    "tau": {"value": [8.0], "trainable": True, "min": 1.0, "max": 50.0},
-    "a": 1.0,                     # фиксированный скаляр
-    "theta": 0.0,
-    "w": 0.2,
-    "I_ext": {"value": [0.8], "trainable": True},   # без явных границ
-    "max_rate": 100.0,
-})
+pop = WilsonCowan(
+    dt=0.5,
+    params={
+        "tau": {"value": [8.0], "trainable": True, "min": 1.0, "max": 50.0},
+        "a": 1.0,  # фиксированный скаляр
+        "theta": 0.0,
+        "w": 0.2,
+        "I_ext": {"value": [0.8], "trainable": True},  # без явных границ
+        "max_rate": 100.0,
+    },
+)
 ```
 
 Длина векторных параметров определяет `n_units` популяции; для
@@ -251,12 +321,20 @@ pop = WilsonCowan(dt=0.5, params={
 
 ```python
 # 4 пресинаптических юнита -> 2 постсинаптических, полная связь
-syn = TsodyksMarkramSynapse(n_pre=4, n_post=2, dt=0.5, params={
-    "gsyn_max": 0.08,
-    "tau_f": 20.0, "tau_d": 5.0, "tau_r": 200.0, "Uinc": 0.2,
-    "pconn": [[1.0, 1.0], [1.0, 1.0], [1.0, 1.0], [1.0, 1.0]],
-    "e_r": 0.0,
-})
+syn = TsodyksMarkramSynapse(
+    n_pre=4,
+    n_post=2,
+    dt=0.5,
+    params={
+        "gsyn_max": 0.08,
+        "tau_f": 20.0,
+        "tau_d": 5.0,
+        "tau_r": 200.0,
+        "Uinc": 0.2,
+        "pconn": [[1.0, 1.0], [1.0, 1.0], [1.0, 1.0], [1.0, 1.0]],
+        "e_r": 0.0,
+    },
+)
 ```
 
 **Типичные ошибки и ограничения:**
@@ -280,14 +358,14 @@ syn = TsodyksMarkramSynapse(n_pre=4, n_post=2, dt=0.5, params={
 
 ```python
 graph = NetworkGraph(dt=0.5)
-graph.declare_input("theta", n_units=gen.n_units)   # объявление входа
+graph.declare_input("theta", n_units=gen.n_units)  # объявление входа
 graph.add_population("exc", pop)
 graph.add_synapse("theta->exc", syn, src="theta", tgt="exc")
 
 network = NetworkRNN(graph, integrator=RK4Integrator())
 
 t_seq = tf.constant((np.arange(200, dtype=np.float32) * 0.5)[None, :, None])
-inputs = graph.pack_inputs({"theta": gen(t_seq)})   # упаковка частот
+inputs = graph.pack_inputs({"theta": gen(t_seq)})  # упаковка частот
 
 output = network(t_seq, inputs=inputs)
 ```
@@ -318,9 +396,9 @@ graph = NetworkGraph(dt=0.5)
 graph.declare_input("in", n_units=1)
 graph.add_population("exc", exc)
 graph.add_population("inh", inh)
-graph.add_synapse("in->exc",  s_in,  src="in",  tgt="exc")
-graph.add_synapse("exc->inh", s_ei,  src="exc", tgt="inh")
-graph.add_synapse("inh->exc", s_ie,  src="inh", tgt="exc")   # рекуррентное торможение
+graph.add_synapse("in->exc", s_in, src="in", tgt="exc")
+graph.add_synapse("exc->inh", s_ei, src="exc", tgt="inh")
+graph.add_synapse("inh->exc", s_ie, src="inh", tgt="exc")  # рекуррентное торможение
 graph.validate()
 ```
 
@@ -350,35 +428,60 @@ graph.validate()
 
 ```python
 from neuraltide.config.schema import (
-    InputConfig, NetworkConfig, PopulationConfig, SynapseConfig,
+    InputConfig,
+    NetworkConfig,
+    PopulationConfig,
+    SynapseConfig,
     build_network_from_config,
 )
 
 config = NetworkConfig(
     dt=0.5,
-    integrator="rk4",          # 'euler' | 'heun' | 'rk4'
+    integrator="rk4",  # 'euler' | 'heun' | 'rk4'
     inputs=[
         InputConfig(
             name="in",
             generator_class="SinusoidalGenerator",
-            params={"dt": 0.5, "params": {
-                "amplitude": 8.0, "freq": 8.0, "phase": 0.0, "offset": 10.0,
-            }},
+            params={
+                "dt": 0.5,
+                "params": {
+                    "amplitude": 8.0,
+                    "freq": 8.0,
+                    "phase": 0.0,
+                    "offset": 10.0,
+                },
+            },
         ),
     ],
     populations=[
         PopulationConfig(
-            name="exc", model_class="WilsonCowan", dt=0.5,
-            params={"tau": 8.0, "a": 1.0, "theta": 0.0,
-                    "w": 0.2, "I_ext": 0.8, "max_rate": 100.0},
+            name="exc",
+            model_class="WilsonCowan",
+            dt=0.5,
+            params={
+                "tau": 8.0,
+                "a": 1.0,
+                "theta": 0.0,
+                "w": 0.2,
+                "I_ext": 0.8,
+                "max_rate": 100.0,
+            },
         ),
     ],
     synapses=[
         SynapseConfig(
-            name="in->exc", synapse_class="StaticSynapse",
-            src="in", tgt="exc", dt=0.5,
-            params={"n_pre": 1, "n_post": 1,
-                    "gsyn_max": 30.0, "pconn": [[1.0]], "e_r": 1.0},
+            name="in->exc",
+            synapse_class="StaticSynapse",
+            src="in",
+            tgt="exc",
+            dt=0.5,
+            params={
+                "n_pre": 1,
+                "n_post": 1,
+                "gsyn_max": 30.0,
+                "pconn": [[1.0]],
+                "e_r": 1.0,
+            },
         ),
     ],
 )
@@ -420,22 +523,55 @@ network, generators = build_network_from_config(config)
 в `examples/example_01_single_population.py`.
 
 ```python
-pop = IzhikevichMeanField(dt=0.5, params={
-    "tau_pop": [1.0, 1.0], "alpha": [0.5, 0.5], "a": [0.02, 0.02],
-    "b": [0.2, 0.2], "w_jump": [0.1, 0.1],
-    "Delta_I": [0.5, 0.6], "I_ext": [0.1, 0.2],
-})
-gen = VonMisesGenerator(dt=0.5, params={
-    "mean_rate": 20.0, "R": 0.5, "freq": 8.0, "phase": 0.0,
-})
-syn_in = TsodyksMarkramSynapse(n_pre=1, n_post=2, dt=0.5, params={
-    "gsyn_max": [[0.1, 0.1]], "tau_f": 20.0, "tau_d": 5.0,
-    "tau_r": 200.0, "Uinc": 0.2, "pconn": [[1.0, 1.0]], "e_r": 1.0,
-})
-syn_rec = TsodyksMarkramSynapse(n_pre=2, n_post=2, dt=0.5, params={
-    "gsyn_max": 0.05, "tau_f": 20.0, "tau_d": 5.0,
-    "tau_r": 200.0, "Uinc": 0.2, "pconn": [[1, 1], [1, 1]], "e_r": 1.0,
-})
+pop = IzhikevichMeanField(
+    dt=0.5,
+    params={
+        "tau_pop": [1.0, 1.0],
+        "alpha": [0.5, 0.5],
+        "a": [0.02, 0.02],
+        "b": [0.2, 0.2],
+        "w_jump": [0.1, 0.1],
+        "Delta_I": [0.5, 0.6],
+        "I_ext": [0.1, 0.2],
+    },
+)
+gen = VonMisesGenerator(
+    dt=0.5,
+    params={
+        "mean_rate": 20.0,
+        "R": 0.5,
+        "freq": 8.0,
+        "phase": 0.0,
+    },
+)
+syn_in = TsodyksMarkramSynapse(
+    n_pre=1,
+    n_post=2,
+    dt=0.5,
+    params={
+        "gsyn_max": [[0.1, 0.1]],
+        "tau_f": 20.0,
+        "tau_d": 5.0,
+        "tau_r": 200.0,
+        "Uinc": 0.2,
+        "pconn": [[1.0, 1.0]],
+        "e_r": 1.0,
+    },
+)
+syn_rec = TsodyksMarkramSynapse(
+    n_pre=2,
+    n_post=2,
+    dt=0.5,
+    params={
+        "gsyn_max": 0.05,
+        "tau_f": 20.0,
+        "tau_d": 5.0,
+        "tau_r": 200.0,
+        "Uinc": 0.2,
+        "pconn": [[1, 1], [1, 1]],
+        "e_r": 1.0,
+    },
+)
 
 graph = NetworkGraph(dt=0.5)
 graph.declare_input("theta", n_units=gen.n_units)
@@ -450,31 +586,66 @@ graph.add_synapse("exc->exc", syn_rec, src="exc", tgt="exc")
 тормозит возбуждающую. Торможение — синапс с отрицательным `e_r`.
 
 ```python
-exc = WilsonCowan(dt=0.5, params={
-    "tau": 8.0, "a": 1.0, "theta": 0.0, "w": 0.2,
-    "I_ext": 0.8, "max_rate": 100.0,
-})
-inh = WilsonCowan(dt=0.5, params={
-    "tau": 12.0, "a": 1.0, "theta": 0.0, "w": 0.1,
-    "I_ext": 0.3, "max_rate": 100.0,
-})
-s_in = StaticSynapse(n_pre=1, n_post=1, dt=0.5, params={
-    "gsyn_max": [[30.0]], "pconn": [[1.0]], "e_r": 1.0,
-})
-s_ei = StaticSynapse(n_pre=1, n_post=1, dt=0.5, params={
-    "gsyn_max": [[10.0]], "pconn": [[1.0]], "e_r": 1.0,
-})
-s_ie = StaticSynapse(n_pre=1, n_post=1, dt=0.5, params={
-    "gsyn_max": [[10.0]], "pconn": [[1.0]], "e_r": -0.5,
-})
+exc = WilsonCowan(
+    dt=0.5,
+    params={
+        "tau": 8.0,
+        "a": 1.0,
+        "theta": 0.0,
+        "w": 0.2,
+        "I_ext": 0.8,
+        "max_rate": 100.0,
+    },
+)
+inh = WilsonCowan(
+    dt=0.5,
+    params={
+        "tau": 12.0,
+        "a": 1.0,
+        "theta": 0.0,
+        "w": 0.1,
+        "I_ext": 0.3,
+        "max_rate": 100.0,
+    },
+)
+s_in = StaticSynapse(
+    n_pre=1,
+    n_post=1,
+    dt=0.5,
+    params={
+        "gsyn_max": [[30.0]],
+        "pconn": [[1.0]],
+        "e_r": 1.0,
+    },
+)
+s_ei = StaticSynapse(
+    n_pre=1,
+    n_post=1,
+    dt=0.5,
+    params={
+        "gsyn_max": [[10.0]],
+        "pconn": [[1.0]],
+        "e_r": 1.0,
+    },
+)
+s_ie = StaticSynapse(
+    n_pre=1,
+    n_post=1,
+    dt=0.5,
+    params={
+        "gsyn_max": [[10.0]],
+        "pconn": [[1.0]],
+        "e_r": -0.5,
+    },
+)
 
 graph = NetworkGraph(dt=0.5)
 graph.declare_input("in", n_units=1)
 graph.add_population("exc", exc)
 graph.add_population("inh", inh)
-graph.add_synapse("in->exc",  s_in,  src="in",  tgt="exc")
-graph.add_synapse("exc->inh", s_ei,  src="exc", tgt="inh")
-graph.add_synapse("inh->exc", s_ie,  src="inh", tgt="exc")
+graph.add_synapse("in->exc", s_in, src="in", tgt="exc")
+graph.add_synapse("exc->inh", s_ei, src="exc", tgt="inh")
+graph.add_synapse("inh->exc", s_ie, src="inh", tgt="exc")
 ```
 
 ### Рецепт 3. Связь с краткосрочной пластичностью и NMDA (Composite)
@@ -485,23 +656,45 @@ AMPA-подобный `TsodyksMarkramSynapse` и `NMDASynapse`, объединё
 разобрана в `examples/example_02_exc_inh_nmda.py`.
 
 ```python
-ampa = TsodyksMarkramSynapse(n_pre=4, n_post=4, dt=0.5, params={
-    "gsyn_max": 0.05, "tau_f": 20.0, "tau_d": 5.0, "tau_r": 200.0,
-    "Uinc": 0.2, "pconn": [[1] * 4] * 4, "e_r": 0.0,
-})
-nmda = NMDASynapse(n_pre=4, n_post=4, dt=0.5, params={
-    "gsyn_max_nmda": 0.05, "tau1_nmda": 2.0, "tau2_nmda": 100.0,
-    "Mgb": 1.0, "av_nmda": 0.062,
-    "pconn_nmda": [[1] * 4] * 4, "e_r_nmda": 0.0, "v_ref": 1.0,
-})
+ampa = TsodyksMarkramSynapse(
+    n_pre=4,
+    n_post=4,
+    dt=0.5,
+    params={
+        "gsyn_max": 0.05,
+        "tau_f": 20.0,
+        "tau_d": 5.0,
+        "tau_r": 200.0,
+        "Uinc": 0.2,
+        "pconn": [[1] * 4] * 4,
+        "e_r": 0.0,
+    },
+)
+nmda = NMDASynapse(
+    n_pre=4,
+    n_post=4,
+    dt=0.5,
+    params={
+        "gsyn_max_nmda": 0.05,
+        "tau1_nmda": 2.0,
+        "tau2_nmda": 100.0,
+        "Mgb": 1.0,
+        "av_nmda": 0.062,
+        "pconn_nmda": [[1] * 4] * 4,
+        "e_r_nmda": 0.0,
+        "v_ref": 1.0,
+    },
+)
 rec = CompositeSynapse(
-    n_pre=4, n_post=4, dt=0.5,
+    n_pre=4,
+    n_post=4,
+    dt=0.5,
     components=[("ampa", ampa), ("nmda", nmda)],
 )
 
 graph = NetworkGraph(dt=0.5)
 graph.declare_input("in", n_units=1)
-graph.add_population("exc", exc)   # IzhikevichMeanField с 4 юнитами
+graph.add_population("exc", exc)  # IzhikevichMeanField с 4 юнитами
 graph.add_synapse("in->exc", syn_in, src="in", tgt="exc")
 graph.add_synapse("exc->exc", rec, src="exc", tgt="exc")
 ```
@@ -514,17 +707,26 @@ graph.add_synapse("exc->exc", rec, src="exc", tgt="exc")
 `examples/example_place_field_phase_precession.py`.
 
 ```python
-gen = PlaceFieldGenerator(dt=0.5, params={
-    "center_x": [40.0, -50.0], "center_y": [30.0, 40.0],
-    "radius": [35.0, 40.0], "peak_rate": [25.0, 30.0],
-    "background_rate": [2.0, 3.0], "theta_modulation_factor": 0.0,
-    "precession_slope": [30.0, 35.0], "precession_init_phase": [0.0, 90.0],
-    "phase_outside": 0.0, "R": 0.6, "freq": 8.0,
-})
+gen = PlaceFieldGenerator(
+    dt=0.5,
+    params={
+        "center_x": [40.0, -50.0],
+        "center_y": [30.0, 40.0],
+        "radius": [35.0, 40.0],
+        "peak_rate": [25.0, 30.0],
+        "background_rate": [2.0, 3.0],
+        "theta_modulation_factor": 0.0,
+        "precession_slope": [30.0, 35.0],
+        "precession_init_phase": [0.0, 90.0],
+        "phase_outside": 0.0,
+        "R": 0.6,
+        "freq": 8.0,
+    },
+)
 
 graph = NetworkGraph(dt=0.5)
 graph.declare_input("place", n_units=gen.n_units)
-graph.add_population("readout", pop)   # например, IzhikevichMeanField, 2 юнита
+graph.add_population("readout", pop)  # например, IzhikevichMeanField, 2 юнита
 graph.add_synapse("place->readout", syn, src="place", tgt="readout")
 
 network = NetworkRNN(graph, integrator=RK4Integrator())

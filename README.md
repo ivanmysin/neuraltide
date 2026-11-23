@@ -159,25 +159,25 @@ from neuraltide.utils import print_summary
 gen = SinusoidalGenerator(
     dt=0.5,
     params={
-        'amplitude': 10.0,
-        'freq': 8.0,
-        'phase': 0.0,
-        'offset': 5.0,
-    }
+        "amplitude": 10.0,
+        "freq": 8.0,
+        "phase": 0.0,
+        "offset": 5.0,
+    },
 )
 
 # Создание популяции (безразмерные параметры, n_units выводится из params)
 pop = IzhikevichMeanField(
     dt=0.5,
     params={
-        'tau_pop': [1.0],
-        'alpha': [0.5],
-        'a': [0.02],
-        'b': [0.2],
-        'w_jump': [0.1],
-        'Delta_I': [0.5],
-        'I_ext': [1.0],
-    }
+        "tau_pop": [1.0],
+        "alpha": [0.5],
+        "a": [0.02],
+        "b": [0.2],
+        "w_jump": [0.1],
+        "Delta_I": [0.5],
+        "I_ext": [1.0],
+    },
 )
 
 # Создание синапса
@@ -186,25 +186,25 @@ syn = StaticSynapse(
     n_post=1,
     dt=0.5,
     params={
-        'gsyn_max': 0.1,
-        'pconn': [[1.0]],
-        'e_r': 0.0,
-    }
+        "gsyn_max": 0.1,
+        "pconn": [[1.0]],
+        "e_r": 0.0,
+    },
 )
 
 # Построение сети
 graph = NetworkGraph(dt=0.5)
-graph.declare_input('input', n_units=gen.n_units)   # внешний вход
-graph.add_population('exc', pop)
-graph.add_synapse('input->exc', syn, src='input', tgt='exc')
+graph.declare_input("input", n_units=gen.n_units)  # внешний вход
+graph.add_population("exc", pop)
+graph.add_synapse("input->exc", syn, src="input", tgt="exc")
 
 network = NetworkRNN(graph, integrator=RK4Integrator())
 print_summary(network)
 
 # Симуляция: входные частоты предвычисляются и упаковываются
 t_seq = tf.constant(np.arange(0, 1000, 0.5)[None, :, None], dtype=tf.float32)
-input_rates = gen(t_seq)                            # [1, T, n_units]
-inputs = graph.pack_inputs({'input': input_rates})
+input_rates = gen(t_seq)  # [1, T, n_units]
+inputs = graph.pack_inputs({"input": input_rates})
 
 output = network(t_seq, inputs=inputs)
 print(f"Output shape: {output.firing_rates['exc'].shape}")

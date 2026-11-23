@@ -56,8 +56,9 @@ ParameterSpace (``phi_entries``/``trainable_names``): ручные non-trainable
 
 import time
 import warnings
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
-from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple
+from typing import Any
 
 import numpy as np
 import tensorflow as tf
@@ -70,22 +71,22 @@ from neuraltide.optimization.objectives import likelihood_normalization
 from neuraltide.optimization.results import JacobianResult, _JsonDTO
 
 __all__ = [
+    "BootstrapResult",
+    "EnsembleResult",
+    "LaplaceResult",
+    "NoiseFactorResult",
+    "PredictiveResult",
+    "ResidualDiagnostics",
+    "SensitivityResult",
     "SpecResidualDiagnostics",
     "WindowDiagnostics",
-    "ResidualDiagnostics",
-    "residual_diagnostics",
-    "LaplaceResult",
-    "laplace_approximation",
-    "BootstrapResult",
     "bootstrap_experiments",
-    "residual_bootstrap",
-    "EnsembleResult",
-    "parameter_ensemble",
-    "PredictiveResult",
-    "predictive_intervals",
-    "NoiseFactorResult",
-    "SensitivityResult",
+    "laplace_approximation",
     "noise_sensitivity",
+    "parameter_ensemble",
+    "predictive_intervals",
+    "residual_bootstrap",
+    "residual_diagnostics",
 ]
 
 # z-квантиль для двустороннего интервала уровня 0.95.
@@ -106,9 +107,9 @@ _PRIOR_SYM_RTOL = 1e-8
 # ---------------------------------------------------------------------------
 
 
-def _entry_offsets(space) -> Dict[str, Tuple[int, int]]:
+def _entry_offsets(space) -> dict[str, tuple[int, int]]:
     """Смещения trainable-записей ParameterSpace в плоском векторе φ."""
-    offsets: Dict[str, Tuple[int, int]] = {}
+    offsets: dict[str, tuple[int, int]] = {}
     start = 0
     for name, entry in space.phi_entries.items():
         offsets[str(name)] = (start, entry.numel)
@@ -116,12 +117,12 @@ def _entry_offsets(space) -> Dict[str, Tuple[int, int]]:
     return offsets
 
 
-def _flat_names(space, size: int) -> List[str]:
+def _flat_names(space, size: int) -> list[str]:
     """
     Имена φ-координат: full_name для скалярных trainable-записей,
     'name[i]' иначе (non-trainable записи реестра в φ не входят).
     """
-    names: List[str] = []
+    names: list[str] = []
     for name, entry in space.phi_entries.items():
         if entry.numel == 1:
             names.append(str(name))
@@ -135,7 +136,7 @@ def _flat_names(space, size: int) -> List[str]:
     return names
 
 
-def _counters(problem) -> Tuple[int, int]:
+def _counters(problem) -> tuple[int, int]:
     return (
         int(getattr(problem, "n_forward", 0)),
         int(getattr(problem, "n_gradient", 0)),
@@ -160,7 +161,7 @@ def _pack_current(problem, where: str) -> np.ndarray:
         ) from exc
 
 
-def _resolve_evaluator(evaluator) -> Tuple[Callable, str]:
+def _resolve_evaluator(evaluator) -> tuple[Callable, str]:
     """
     Приведение evaluator к callable(problem, phi0) -> результат.
 
@@ -199,7 +200,7 @@ def _clean_tree(value: Any) -> Any:
     return value
 
 
-def _f(value: Any) -> Optional[float]:
+def _f(value: Any) -> float | None:
     """float либо None, если нефинитен."""
     v = float(value)
     return v if np.isfinite(v) else None
@@ -209,7 +210,7 @@ def _symmetrize(a: np.ndarray) -> np.ndarray:
     return 0.5 * (a + a.T)
 
 
-def _pd_inverse(precision: np.ndarray) -> Tuple[np.ndarray, float, bool]:
+def _pd_inverse(precision: np.ndarray) -> tuple[np.ndarray, float, bool]:
     """
     Обращение precision-матрицы с PD-гарантией через Cholesky.
 
@@ -238,7 +239,7 @@ def _pd_inverse(precision: np.ndarray) -> Tuple[np.ndarray, float, bool]:
     return _symmetrize(cov), float("nan"), False
 
 
-def _lag_autocorr(series: np.ndarray, max_lag: int) -> List[Optional[float]]:
+def _lag_autocorr(series: np.ndarray, max_lag: int) -> list[float | None]:
     """
     Автокорреляция лагов 1..max_lag одномерного ряда (парная, по Пирсону).
 
@@ -246,7 +247,7 @@ def _lag_autocorr(series: np.ndarray, max_lag: int) -> List[Optional[float]]:
     дисперсии или недостаточном числе пар возвращается None.
     """
     s = np.asarray(series, dtype=np.float64).reshape(-1)
-    out: List[Optional[float]] = []
+    out: list[float | None] = []
     for lag in range(1, int(max_lag) + 1):
         if lag >= s.size - 1:
             out.append(None)
@@ -286,7 +287,7 @@ def _observation_blocks(problem):
     return blocks
 
 
-def _spec_mask(spec, shape) -> Optional[np.ndarray]:
+def _spec_mask(spec, shape) -> np.ndarray | None:
     """Булева маска спецификации, приведённая к форме target (None — нет)."""
     if spec.mask is None:
         return None
@@ -294,7 +295,7 @@ def _spec_mask(spec, shape) -> Optional[np.ndarray]:
     return np.broadcast_to(mask, shape) > 0.0
 
 
-def _prior_precision(prior_cov, n: int, where: str) -> Optional[np.ndarray]:
+def _prior_precision(prior_cov, n: int, where: str) -> np.ndarray | None:
     """
     P = inv(prior_cov) из prior_cov (скаляр — изотропный приор, [n, n] —
     полный). None — плоский приор. Проверки: размерность, симметрия,
@@ -328,16 +329,16 @@ def _prior_precision(prior_cov, n: int, where: str) -> Optional[np.ndarray]:
         ) from exc
 
 
-def _theta_row(space, phi_row: np.ndarray) -> Dict[str, np.ndarray]:
+def _theta_row(space, phi_row: np.ndarray) -> dict[str, np.ndarray]:
     """φ-строка → физические θ {name: array формы записи}; NaN при отказе."""
-    theta: Dict[str, np.ndarray] = {}
+    theta: dict[str, np.ndarray] = {}
     try:
         unpacked = space.unpack(
             cast_if_needed(tf.convert_to_tensor(phi_row), neuraltide.config.get_dtype())
         )
         for name, value in unpacked.items():
             theta[str(name)] = np.asarray(value, dtype=np.float64)
-    except Exception:  # noqa: BLE001 — нефинитная строка/трансформ: честный NaN
+    except Exception:
         for name, entry in space.phi_entries.items():
             theta[str(name)] = np.full(entry.shape.as_list(), np.nan)
     return theta
@@ -376,17 +377,17 @@ class SpecResidualDiagnostics(_JsonDTO):
     population: str = ""
     n_elements: int = 0
     n_masked: int = 0
-    mean: Optional[float] = None
-    std: Optional[float] = None
+    mean: float | None = None
+    std: float | None = None
     max_abs: float = 0.0
-    time_mean: List[Optional[float]] = field(default_factory=list)
-    autocorr: List[Optional[float]] = field(default_factory=list)
-    bin_stds: List[Optional[float]] = field(default_factory=list)
-    bin_edges: List[float] = field(default_factory=list)
-    levene_stat: Optional[float] = None
-    levene_pvalue: Optional[float] = None
+    time_mean: list[float | None] = field(default_factory=list)
+    autocorr: list[float | None] = field(default_factory=list)
+    bin_stds: list[float | None] = field(default_factory=list)
+    bin_edges: list[float] = field(default_factory=list)
+    levene_stat: float | None = None
+    levene_pvalue: float | None = None
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "name": str(self.name),
             "population": str(self.population),
@@ -438,11 +439,11 @@ class WindowDiagnostics(_JsonDTO):
 
     start: int = 0
     stop: int = 0
-    mean: Dict[str, Optional[float]] = field(default_factory=dict)
-    std: Dict[str, Optional[float]] = field(default_factory=dict)
-    max_abs: Dict[str, float] = field(default_factory=dict)
+    mean: dict[str, float | None] = field(default_factory=dict)
+    std: dict[str, float | None] = field(default_factory=dict)
+    max_abs: dict[str, float] = field(default_factory=dict)
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "start": int(self.start),
             "stop": int(self.stop),
@@ -479,8 +480,8 @@ class ResidualDiagnostics(_JsonDTO):
         n_forward / wall_time: дельта счётчиков задачи за вызов.
     """
 
-    specs: List[SpecResidualDiagnostics] = field(default_factory=list)
-    windows: List[WindowDiagnostics] = field(default_factory=list)
+    specs: list[SpecResidualDiagnostics] = field(default_factory=list)
+    windows: list[WindowDiagnostics] = field(default_factory=list)
     max_abs: float = 0.0
     phi: np.ndarray = field(default_factory=lambda: np.zeros(0))
     loss: float = 0.0
@@ -495,7 +496,7 @@ class ResidualDiagnostics(_JsonDTO):
     def __post_init__(self) -> None:
         self.phi = np.asarray(self.phi, dtype=np.float64)
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "specs": [s.to_dict() for s in self.specs],
             "windows": [w.to_dict() for w in self.windows],
@@ -529,15 +530,15 @@ class ResidualDiagnostics(_JsonDTO):
         )
 
 
-def _default_windows(t: int) -> List[Tuple[int, int]]:
+def _default_windows(t: int) -> list[tuple[int, int]]:
     """Окна по умолчанию: 4 равных смежных интервала [start, stop)."""
     edges = np.unique(np.linspace(0, int(t), 5, dtype=int))
     return [(int(edges[i]), int(edges[i + 1])) for i in range(len(edges) - 1)]
 
 
 def _validate_windows(
-    windows: Sequence[Tuple[int, int]], t: int
-) -> List[Tuple[int, int]]:
+    windows: Sequence[tuple[int, int]], t: int
+) -> list[tuple[int, int]]:
     out = []
     for w in windows:
         s, e = int(w[0]), int(w[1])
@@ -551,11 +552,11 @@ def _validate_windows(
 
 def _bin_stats(
     block: np.ndarray, unmasked: np.ndarray, n_bins: int
-) -> Tuple[List[Optional[float]], List[int]]:
+) -> tuple[list[float | None], list[int]]:
     """СКО невязок по временным бинам + целочисленные границы бинов."""
     t = block.shape[1]
     edges = [int(v) for v in np.unique(np.linspace(0, t, int(n_bins) + 1, dtype=int))]
-    stds: List[Optional[float]] = []
+    stds: list[float | None] = []
     for i in range(len(edges) - 1):
         s, e = edges[i], edges[i + 1]
         pool = block[:, s:e, :][unmasked[:, s:e, :]]
@@ -565,7 +566,7 @@ def _bin_stats(
 
 def _levene_across_bins(
     bins: Sequence[np.ndarray],
-) -> Tuple[Optional[float], Optional[float]]:
+) -> tuple[float | None, float | None]:
     groups = [np.asarray(b, dtype=np.float64) for b in bins if np.asarray(b).size >= 2]
     if len(groups) < 2:
         return None, None
@@ -575,7 +576,7 @@ def _levene_across_bins(
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             stat, pvalue = sp_stats.levene(*groups, center="median")
-    except Exception:  # noqa: BLE001 — вырожденные группы: честный None
+    except Exception:
         return None, None
     return _f(stat), _f(pvalue)
 
@@ -586,7 +587,7 @@ def residual_diagnostics(
     *,
     max_lag: int = 10,
     n_bins: int = 10,
-    windows: Optional[Sequence[Tuple[int, int]]] = None,
+    windows: Sequence[tuple[int, int]] | None = None,
 ) -> ResidualDiagnostics:
     """
     Диагностика вектора невязок задачи в точке φ.
@@ -630,13 +631,13 @@ def residual_diagnostics(
     loss = 0.5 * float(r @ r)
 
     blocks = _observation_blocks(problem)
-    specs_out: List[SpecResidualDiagnostics] = []
-    windows_out: List[WindowDiagnostics] = []
-    window_bounds: List[Tuple[int, int]] = []
+    specs_out: list[SpecResidualDiagnostics] = []
+    windows_out: list[WindowDiagnostics] = []
+    window_bounds: list[tuple[int, int]] = []
 
     if blocks is None:
         ts = r
-        bin_stds: List[Optional[float]] = []
+        bin_stds: list[float | None] = []
         edges = np.unique(np.linspace(0, ts.size, n_bins + 1, dtype=int))
         for i in range(len(edges) - 1):
             pool = ts[edges[i] : edges[i + 1]]
@@ -690,7 +691,7 @@ def residual_diagnostics(
         )
 
         offset = 0
-        spec_blocks: List[Tuple[Any, np.ndarray, np.ndarray]] = []
+        spec_blocks: list[tuple[Any, np.ndarray, np.ndarray]] = []
         for spec, numel in blocks:
             shape = tuple(spec.target.shape.as_list())
             block = r[offset : offset + numel].reshape(shape)
@@ -817,18 +818,18 @@ class LaplaceResult(_JsonDTO):
     phi_map: np.ndarray = field(default_factory=lambda: np.zeros(0))
     covariance: np.ndarray = field(default_factory=lambda: np.zeros((0, 0)))
     precision_gn: np.ndarray = field(default_factory=lambda: np.zeros((0, 0)))
-    prior_precision: Optional[np.ndarray] = None
+    prior_precision: np.ndarray | None = None
     eigvals: np.ndarray = field(default_factory=lambda: np.zeros(0))
     eigvecs: np.ndarray = field(default_factory=lambda: np.zeros((0, 0)))
     std: np.ndarray = field(default_factory=lambda: np.zeros(0))
-    param_names: List[str] = field(default_factory=list)
-    intervals: Dict[str, Tuple[float, float]] = field(default_factory=dict)
-    phi_intervals: Dict[str, Tuple[float, float]] = field(default_factory=dict)
+    param_names: list[str] = field(default_factory=list)
+    intervals: dict[str, tuple[float, float]] = field(default_factory=dict)
+    phi_intervals: dict[str, tuple[float, float]] = field(default_factory=dict)
     level: float = 0.95
     z: float = _Z95
     method: str = "gn"
     pd: bool = True
-    jitter_used: Optional[float] = None
+    jitter_used: float | None = None
     loss: float = 0.0
     n_forward: int = 0
     wall_time: float = 0.0
@@ -851,7 +852,7 @@ class LaplaceResult(_JsonDTO):
             str(k): (float(v[0]), float(v[1])) for k, v in self.phi_intervals.items()
         }
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "phi_map": self.phi_map.tolist(),
             "covariance": self.covariance.tolist(),
@@ -917,8 +918,8 @@ def _intervals_from_covariance(space, phi, covariance, z):
     offsets = _entry_offsets(space)
     diag = np.maximum(np.diag(covariance), 0.0)
     std = np.sqrt(diag)
-    intervals: Dict[str, Tuple[float, float]] = {}
-    phi_intervals: Dict[str, Tuple[float, float]] = {}
+    intervals: dict[str, tuple[float, float]] = {}
+    phi_intervals: dict[str, tuple[float, float]] = {}
     dtype = neuraltide.config.get_dtype()
     for name, entry in space.phi_entries.items():
         start, numel = offsets[name]
@@ -942,7 +943,7 @@ def _intervals_from_covariance(space, phi, covariance, z):
     return names, intervals, phi_intervals
 
 
-def _fd_hessian(problem, phi: np.ndarray, h: float) -> Tuple[np.ndarray, float]:
+def _fd_hessian(problem, phi: np.ndarray, h: float) -> tuple[np.ndarray, float]:
     """
     Центральные конечные разности градиента потери: H[:, j] ≈ ∂²L/∂φ∂φ_j.
 
@@ -970,7 +971,7 @@ def laplace_approximation(
     problem,
     phi_map,
     *,
-    jac: Optional[JacobianResult] = None,
+    jac: JacobianResult | None = None,
     prior_cov=None,
     method: str = "gn",
     level: float = 0.95,
@@ -1183,14 +1184,14 @@ class BootstrapResult(_JsonDTO):
 
     scheme: str = ""
     n_draws: int = 0
-    seed: Optional[int] = None
+    seed: int | None = None
     phi0: np.ndarray = field(default_factory=lambda: np.zeros(0))
     phi_samples: np.ndarray = field(default_factory=lambda: np.zeros((0, 0)))
-    theta_samples: Optional[Dict[str, np.ndarray]] = None
-    losses: List[Optional[float]] = field(default_factory=list)
-    statuses: List[str] = field(default_factory=list)
-    messages: List[str] = field(default_factory=list)
-    weights: List[Any] = field(default_factory=list)
+    theta_samples: dict[str, np.ndarray] | None = None
+    losses: list[float | None] = field(default_factory=list)
+    statuses: list[str] = field(default_factory=list)
+    messages: list[str] = field(default_factory=list)
+    weights: list[Any] = field(default_factory=list)
     evaluator: str = ""
     n_forward: int = 0
     wall_time: float = 0.0
@@ -1205,7 +1206,7 @@ class BootstrapResult(_JsonDTO):
                 for k, v in self.theta_samples.items()
             }
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "scheme": str(self.scheme),
             "n_draws": int(self.n_draws),
@@ -1280,17 +1281,17 @@ class _WeightedObjective:
         return tf.sqrt(w) * r
 
 
-def _collect_theta_samples(space, phi_samples: np.ndarray) -> Dict[str, np.ndarray]:
+def _collect_theta_samples(space, phi_samples: np.ndarray) -> dict[str, np.ndarray]:
     """Стек физических θ по draw: {full_name: [n_draws, *entry.shape]}.
 
     Ключи — только trainable-записи (координаты φ): non-trainable
     реестровые записи в φ-строках отсутствуют.
     """
-    columns: Dict[str, List[np.ndarray]] = {str(n): [] for n in space.phi_entries}
+    columns: dict[str, list[np.ndarray]] = {str(n): [] for n in space.phi_entries}
     for row in phi_samples:
         theta_row = _theta_row(space, row)
-        for name in columns:
-            columns[name].append(theta_row[name])
+        for name, col_values in columns.items():
+            col_values.append(theta_row[name])
     return {name: np.stack(values, axis=0) for name, values in columns.items()}
 
 
@@ -1308,7 +1309,7 @@ def _boot_experiment_name(draw: int, position: int, original: str) -> str:
     return f"boot_{int(draw)}_{int(position)}_{str(original).replace('/', '_')}"
 
 
-def _exp_specific_x0_names(space) -> List[str]:
+def _exp_specific_x0_names(space) -> list[str]:
     """
     Полные имена exp-specific x0-записей ParameterSpace: trainable-записи
     kind 'initial_state'/'shooting_state' с locator.experiment != None.
@@ -1330,7 +1331,7 @@ def bootstrap_experiments(
     problem,
     *,
     n_draws: int,
-    seed: Optional[int],
+    seed: int | None,
     evaluator=None,
 ) -> BootstrapResult:
     """
@@ -1411,10 +1412,10 @@ def bootstrap_experiments(
             )
 
     phi_samples = np.full((n_draws, phi0.size), np.nan, dtype=np.float64)
-    losses: List[Optional[float]] = []
-    statuses: List[str] = []
-    messages: List[str] = []
-    weights: List[Any] = []
+    losses: list[float | None] = []
+    statuses: list[str] = []
+    messages: list[str] = []
+    weights: list[Any] = []
 
     for i, child in enumerate(children):
         rng = np.random.default_rng(child)
@@ -1462,7 +1463,7 @@ def bootstrap_experiments(
                 )
             status = "ok"
             message = str(getattr(result, "message", ""))
-        except Exception as exc:  # noqa: BLE001 — draw не должен ронять прогон
+        except Exception as exc:
             phi_b = np.full(phi0.size, np.nan)
             loss_b = None
             status = "failed"
@@ -1519,7 +1520,7 @@ def bootstrap_experiments(
 # ---------------------------------------------------------------------------
 
 
-def _invert_residual_block(spec, block: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+def _invert_residual_block(spec, block: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     """
     Ошибка модели e (в kind-пространстве) из блока невязок.
 
@@ -1595,7 +1596,7 @@ def residual_bootstrap(
     problem,
     *,
     n_draws: int,
-    seed: Optional[int],
+    seed: int | None,
 ) -> BootstrapResult:
     """
     Residual (pairs-style) bootstrap: target* = pred − e*.
@@ -1676,9 +1677,9 @@ def residual_bootstrap(
     children = ss.spawn(n_draws)
 
     phi_samples = np.full((n_draws, phi0.size), np.nan, dtype=np.float64)
-    losses: List[Optional[float]] = []
-    statuses: List[str] = []
-    messages: List[str] = []
+    losses: list[float | None] = []
+    statuses: list[str] = []
+    messages: list[str] = []
 
     for i, child in enumerate(children):
         rng = np.random.default_rng(child)
@@ -1720,7 +1721,7 @@ def residual_bootstrap(
                 )
             status = "ok"
             message = str(getattr(result, "message", ""))
-        except Exception as exc:  # noqa: BLE001 — draw не должен ронять прогон
+        except Exception as exc:
             phi_b = np.full(phi0.size, np.nan)
             loss_b = None
             status = "failed"
@@ -1788,11 +1789,11 @@ class EnsembleResult(_JsonDTO):
     """
 
     phi_samples: np.ndarray = field(default_factory=lambda: np.zeros((0, 0)))
-    theta_samples: Optional[Dict[str, np.ndarray]] = None
+    theta_samples: dict[str, np.ndarray] | None = None
     mean: np.ndarray = field(default_factory=lambda: np.zeros(0))
     std: np.ndarray = field(default_factory=lambda: np.zeros(0))
-    cov: Optional[np.ndarray] = None
-    losses: List[Optional[float]] = field(default_factory=list)
+    cov: np.ndarray | None = None
+    losses: list[float | None] = field(default_factory=list)
     n_samples: int = 0
     size: int = 0
     notes: str = ""
@@ -1809,7 +1810,7 @@ class EnsembleResult(_JsonDTO):
                 for k, v in self.theta_samples.items()
             }
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "phi_samples": self.phi_samples.tolist(),
             "theta_samples": (
@@ -1867,11 +1868,11 @@ def parameter_ensemble(results) -> EnsembleResult:
             "parameter_ensemble: непустая последовательность результатов обязательна."
         )
     bases = [getattr(item, "base", item) for item in items]
-    phi_rows: List[np.ndarray] = []
-    losses: List[Optional[float]] = []
-    sizes: List[int] = []
+    phi_rows: list[np.ndarray] = []
+    losses: list[float | None] = []
+    sizes: list[int] = []
     for base in bases:
-        phi = np.asarray(getattr(base, "phi_best"), dtype=np.float64).reshape(-1)
+        phi = np.asarray(base.phi_best, dtype=np.float64).reshape(-1)
         phi_rows.append(phi)
         sizes.append(int(phi.size))
         loss = getattr(base, "loss_best", None)
@@ -1885,10 +1886,10 @@ def parameter_ensemble(results) -> EnsembleResult:
     # theta: ключи — от первого результата, предоставляющего theta_best;
     # пропуски и недостающие ключи — NaN-подушкой соответствующей формы.
     theta_best_list = [getattr(base, "theta_best", None) for base in bases]
-    theta_samples: Optional[Dict[str, np.ndarray]] = None
+    theta_samples: dict[str, np.ndarray] | None = None
     if any(tb is not None for tb in theta_best_list):
         reference = next(tb for tb in theta_best_list if tb is not None)
-        cols: Dict[str, List[np.ndarray]] = {str(k): [] for k in reference}
+        cols: dict[str, list[np.ndarray]] = {str(k): [] for k in reference}
         for theta_best in theta_best_list:
             for key, shape in ((k, np.asarray(v).shape) for k, v in reference.items()):
                 value = None if theta_best is None else theta_best.get(key)
@@ -1953,11 +1954,11 @@ class PredictiveResult(_JsonDTO):
     """
 
     level: float = 0.95
-    populations: List[str] = field(default_factory=list)
-    lower: Dict[str, np.ndarray] = field(default_factory=dict)
-    upper: Dict[str, np.ndarray] = field(default_factory=dict)
-    central: Dict[str, np.ndarray] = field(default_factory=dict)
-    mean: Dict[str, np.ndarray] = field(default_factory=dict)
+    populations: list[str] = field(default_factory=list)
+    lower: dict[str, np.ndarray] = field(default_factory=dict)
+    upper: dict[str, np.ndarray] = field(default_factory=dict)
+    central: dict[str, np.ndarray] = field(default_factory=dict)
+    mean: dict[str, np.ndarray] = field(default_factory=dict)
     n_samples: int = 0
     n_skipped_nonfinite: int = 0
     n_forward: int = 0
@@ -1975,7 +1976,7 @@ class PredictiveResult(_JsonDTO):
                 },
             )
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "level": float(self.level),
             "populations": [str(p) for p in self.populations],
@@ -2056,7 +2057,7 @@ def predictive_intervals(
     finite_rows = np.all(np.isfinite(arr), axis=1)
     skipped = int(np.count_nonzero(~finite_rows))
 
-    runs: Dict[str, List[np.ndarray]] = {}
+    runs: dict[str, list[np.ndarray]] = {}
     for row in arr[finite_rows]:
         output = problem.simulate(np.asarray(row, dtype=np.float64))
         for pop, rates in output.firing_rates.items():
@@ -2129,9 +2130,9 @@ class NoiseFactorResult(_JsonDTO):
     sigma_factor: float = 1.0
     covariance: np.ndarray = field(default_factory=lambda: np.zeros((0, 0)))
     std: np.ndarray = field(default_factory=lambda: np.zeros(0))
-    phi_intervals: Dict[str, Tuple[float, float]] = field(default_factory=dict)
+    phi_intervals: dict[str, tuple[float, float]] = field(default_factory=dict)
     pd: bool = True
-    jitter_used: Optional[float] = None
+    jitter_used: float | None = None
 
     def __post_init__(self) -> None:
         self.sigma_factor = float(self.sigma_factor)
@@ -2141,7 +2142,7 @@ class NoiseFactorResult(_JsonDTO):
             str(k): (float(v[0]), float(v[1])) for k, v in self.phi_intervals.items()
         }
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "sigma_factor": float(self.sigma_factor),
             "covariance": self.covariance.tolist(),
@@ -2178,9 +2179,9 @@ class SensitivityResult(_JsonDTO):
             про prior.
     """
 
-    entries: List[NoiseFactorResult] = field(default_factory=list)
+    entries: list[NoiseFactorResult] = field(default_factory=list)
     phi_map: np.ndarray = field(default_factory=lambda: np.zeros(0))
-    param_names: List[str] = field(default_factory=list)
+    param_names: list[str] = field(default_factory=list)
     level: float = 0.95
     z: float = _Z95
     notes: str = ""
@@ -2188,7 +2189,7 @@ class SensitivityResult(_JsonDTO):
     def __post_init__(self) -> None:
         self.phi_map = np.asarray(self.phi_map, dtype=np.float64)
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "entries": [e.to_dict() for e in self.entries],
             "phi_map": self.phi_map.tolist(),
@@ -2250,7 +2251,7 @@ def noise_sensitivity(
     z = float(laplace_result.z)
     names = list(laplace_result.param_names)
 
-    entries: List[NoiseFactorResult] = []
+    entries: list[NoiseFactorResult] = []
     for factor in factors:
         scaled = g_mat / (factor * factor)
         precision = scaled if prior is None else _symmetrize(scaled + prior)

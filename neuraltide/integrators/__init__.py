@@ -9,14 +9,14 @@ from neuraltide.integrators.rosenbrock import RosenbrockIntegrator
 from neuraltide.integrators.stiffness import classify_failure, stiffness_report
 
 __all__ = [
+    "AdaptiveRKIntegrator",
     "BaseIntegrator",
     "EulerIntegrator",
-    "HeunIntegrator",
-    "RK4Integrator",
-    "AdaptiveRKIntegrator",
-    "IMEXEulerIntegrator",
-    "RosenbrockIntegrator",
     "ExponentialEulerIntegrator",
-    "stiffness_report",
+    "HeunIntegrator",
+    "IMEXEulerIntegrator",
+    "RK4Integrator",
+    "RosenbrockIntegrator",
     "classify_failure",
+    "stiffness_report",
 ]

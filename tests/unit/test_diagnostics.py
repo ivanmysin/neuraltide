@@ -10,11 +10,8 @@ import tensorflow as tf
 
 import neuraltide.config
 from neuraltide.core.network import NetworkGraph, NetworkRNN
-from neuraltide.populations import IzhikevichMeanField
-from neuraltide.synapses import TsodyksMarkramSynapse
 from neuraltide.inputs import VonMisesGenerator
 from neuraltide.integrators import RK4Integrator
-from neuraltide.training import MSELoss, CompositeLoss
 from neuraltide.optimization.diagnostics import (
     compare_bptt_adjoint,
     dot_product_test,
@@ -23,7 +20,9 @@ from neuraltide.optimization.diagnostics import (
     finite_difference_scan,
     taylor_test,
 )
-
+from neuraltide.populations import IzhikevichMeanField
+from neuraltide.synapses import TsodyksMarkramSynapse
+from neuraltide.training import CompositeLoss, MSELoss
 
 # ── Чисто-numpy проверки ─────────────────────────────────────────────────────
 
@@ -31,7 +30,7 @@ from neuraltide.optimization.diagnostics import (
 class TestFiniteDifferenceScan:
     def test_quadratic_gradient(self):
         phi0 = np.array([0.7, -1.3, 2.2])
-        func = lambda phi: float(np.sum(phi**2))  # noqa: E731
+        func = lambda phi: float(np.sum(phi**2))
         report = finite_difference_scan(func, phi0)
         assert report["f0"] == pytest.approx(float(np.sum(phi0**2)))
         # центральные разности квадратичной функции точны до пола округления
@@ -40,7 +39,7 @@ class TestFiniteDifferenceScan:
 
     def test_single_h(self):
         phi0 = np.array([1.0, 2.0])
-        func = lambda phi: float(np.sum(phi**3))  # noqa: E731
+        func = lambda phi: float(np.sum(phi**3))
         report = finite_difference_scan(func, phi0, h_values=[1e-4])
         assert report["best_h"] == pytest.approx(1e-4)
         assert np.allclose(report["best"], 3.0 * phi0**2, rtol=1e-4)

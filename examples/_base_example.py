@@ -3,9 +3,9 @@
 Импорты, настройка matplotlib и общие утилиты.
 """
 
+import matplotlib.pyplot as plt
 import numpy as np
 import tensorflow as tf
-import matplotlib.pyplot as plt
 
 from neuraltide.core.network import NetworkGraph, NetworkRNN
 from neuraltide.integrators import RK4Integrator
@@ -58,7 +58,7 @@ def plot_population_dynamics(t_values, pop, pop_states_history, output, save_pat
     n_states = len(pop.state_size)
     n_units = pop.n_units
 
-    fig, axes = plt.subplots(n_states + 1, 1, figsize=(10, 3 * (n_states + 1)))
+    _fig, axes = plt.subplots(n_states + 1, 1, figsize=(10, 3 * (n_states + 1)))
 
     state_labels = ["r (firing rate)", "v (membrane)", "w (adaptation)"][:n_states]
 

@@ -190,8 +190,8 @@ class TestSamplePhi0s:
         space = l0_problem.parameter_space
         with pytest.warns(UserWarning):
             sobol = sample_phi0s(space, 8, method="sobol", seed=3)
-            lhs = sample_phi0s(space, 8, method="lhs", seed=3)
-            random = sample_phi0s(space, 8, method="random", seed=3)
+        lhs = sample_phi0s(space, 8, method="lhs", seed=3)
+        random = sample_phi0s(space, 8, method="random", seed=3)
         assert not np.allclose(sobol, lhs)
         assert not np.allclose(sobol, random)
 
@@ -221,7 +221,7 @@ class TestSamplePhi0s:
         space = l0_problem.parameter_space
         with pytest.warns(UserWarning):
             clipped = sample_phi0s(space, 8, seed=5, clip_to_bounds=True)
-            raw = sample_phi0s(space, 8, seed=5, clip_to_bounds=False)
+        raw = sample_phi0s(space, 8, seed=5, clip_to_bounds=False)
         assert clipped.shape == raw.shape == (8, space.size)
         assert np.all(np.isfinite(clipped))
         assert np.all(np.isfinite(raw))
@@ -620,7 +620,7 @@ class TestScreenRefine:
 
 
 class TestResume:
-    ARGS = dict(n_starts=12, refine_top_k=3, seed=5)
+    ARGS = {"n_starts": 12, "refine_top_k": 3, "seed": 5}
 
     def test_resume_matches_continuous(self, tmp_path):
         path = tmp_path / "checkpoint.json"
@@ -763,7 +763,7 @@ class TestResume:
 
 
 class TestScreenRefineResume:
-    ARGS = dict(n_starts=10, refine_top_k=3, seed=5, screen_refine_steps=2)
+    ARGS = {"n_starts": 10, "refine_top_k": 3, "seed": 5, "screen_refine_steps": 2}
 
     def _assert_matches_reference(self, resumed, reference):
         assert resumed.best_index == reference.best_index

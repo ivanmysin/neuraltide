@@ -281,9 +281,9 @@ class TestPublicApi:
 
     def test_unknown_name_raises_attribute_error(self):
         with pytest.raises(AttributeError):
-            opt.not_a_real_name
+            _ = opt.not_a_real_name
         # имя вне публичного API не импортируется и не даёт ImportError;
         # гарантированно несуществующее — чтобы не зависеть от того,
         # привязан ли реальный подмодуль к пакету чужим импортом
         with pytest.raises(AttributeError):
-            opt.definitely_not_a_p1_module_xyz
+            _ = opt.definitely_not_a_p1_module_xyz

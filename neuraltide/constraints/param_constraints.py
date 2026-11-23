@@ -1,11 +1,22 @@
+from collections.abc import Sequence
+
 import tensorflow as tf
-from typing import Optional
 
 
 class MinMaxConstraint(tf.keras.constraints.Constraint):
-    """Ограничение параметра на отрезок [min_val, max_val]."""
+    """Ограничение параметра на отрезок [min_val, max_val].
 
-    def __init__(self, min_val: Optional[float], max_val: Optional[float]):
+    min_val/max_val могут быть скаляром (broadcast на форму переменной)
+    или последовательностью поэлементных границ (например, списком длины
+    n_units у параметров популяций). Поэлементные границы попадают в
+    ``ParameterSpace`` как есть и поддерживаются ``bounds_phi``.
+    """
+
+    def __init__(
+        self,
+        min_val: float | Sequence[float] | None,
+        max_val: float | Sequence[float] | None,
+    ):
         self.min_val = min_val
         self.max_val = max_val
 

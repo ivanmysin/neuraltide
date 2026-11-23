@@ -9,13 +9,14 @@
 
 import numpy as np
 import tensorflow as tf
+
 from neuraltide.core.network import NetworkGraph, NetworkRNN
-from neuraltide.populations import IzhikevichMeanField
-from neuraltide.synapses import TsodyksMarkramSynapse, StaticSynapse
 from neuraltide.inputs import VonMisesGenerator
 from neuraltide.integrators import RK4Integrator
-from neuraltide.training.adjoint import AdjointSolver
+from neuraltide.populations import IzhikevichMeanField
+from neuraltide.synapses import StaticSynapse, TsodyksMarkramSynapse
 from neuraltide.training import MSELoss
+from neuraltide.training.adjoint import AdjointSolver
 from neuraltide.utils import seed_everything
 
 seed_everything(42)

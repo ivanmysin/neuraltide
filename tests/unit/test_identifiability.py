@@ -339,7 +339,7 @@ class TestLikelihoodProfileQuadratic:
         assert prof.n_forward > 0 and prof.n_gradient > 0
 
     def test_warm_start_not_worse_than_cold(self, quadratic):
-        problem, A, phi_true = quadratic
+        problem, _A, phi_true = quadratic
         grid = phi_true[1] + np.linspace(-1.5, 1.5, 21)
         warm = likelihood_profile(problem, "p1", grid=grid, warm_start=True)
         cold = likelihood_profile(problem, "p1", grid=grid, warm_start=False)
@@ -353,7 +353,7 @@ class TestLikelihoodProfileQuadratic:
             np.testing.assert_allclose(pw, pc, rtol=1e-6, atol=1e-5)
 
     def test_least_squares_optimizer_string(self, quadratic):
-        problem, A, phi_true = quadratic
+        problem, _A, phi_true = quadratic
         grid = phi_true[1] + np.linspace(-1.0, 1.0, 11)
         prof = likelihood_profile(problem, "p1", grid=grid, optimizer="least_squares")
         assert prof.optimizer == "least_squares"
@@ -361,7 +361,7 @@ class TestLikelihoodProfileQuadratic:
         assert min(prof.losses) == pytest.approx(0.0, abs=1e-9)
 
     def test_callable_optimizer(self, quadratic):
-        problem, A, phi_true = quadratic
+        problem, _A, phi_true = quadratic
         starts = []
 
         def _custom(frozen, phi0):
@@ -470,7 +470,7 @@ class TestLikelihoodProfilePhiStart:
     def test_pack_none_unavailable_requires_explicit_phi(self, quadratic):
         """pack() без phi невозможен (tensor-backed записи) — честный
         ValueError с подсказкой передать phi=; с phi= профиль строится."""
-        problem, A, phi_true = quadratic
+        problem, _A, phi_true = quadratic
         tb = _TensorBackedProblem(problem._A, problem._b, names=problem._names)
 
         with pytest.raises(ValueError, match="phi"):
@@ -489,7 +489,7 @@ class TestLikelihoodProfilePhiStart:
     def test_explicit_phi_sets_cold_start(self, quadratic):
         """phi= задаёт cold start свободных координат и непрофилируемые
         координаты phi_path (а не pack() текущего состояния модели)."""
-        problem, A, phi_true = quadratic
+        problem, _A, phi_true = quadratic
         phi0 = phi_true + np.array([0.3, -0.4, 0.2])
         starts = []
 
@@ -530,7 +530,7 @@ class TestMixedSpace:
         return _MixedQuadraticProblem(A, A @ phi_true), A, phi_true
 
     def test_likelihood_profile_trainable_only(self):
-        problem, A, phi_true = self._problem()
+        problem, _A, phi_true = self._problem()
         grid = phi_true[0] + np.linspace(-1.0, 1.0, 5)
         prof = likelihood_profile(problem, "p0", grid=grid)
         assert all(prof.successes)
@@ -658,7 +658,7 @@ class TestSelectSubset:
         res = select_subset(problem, jac, ["exc/tau", "exc/I_ext"])
         assert res.refit_result.success
         assert res.loss_after == pytest.approx(res.loss_before, abs=1e-10)
-        for name, delta in res.theta_delta_kept.items():
+        for delta in res.theta_delta_kept.values():
             assert float(np.max(np.abs(delta))) < 1e-8
         assert res.prediction_delta is not None
         assert res.prediction_delta["exc"] < 1e-8
@@ -843,7 +843,7 @@ class TestDtypeAndTypes:
         assert all(isinstance(name, str) for name, _ in res.param_sensitivity)
 
     def test_profile_phi_path_float64(self, quadratic):
-        problem, A, phi_true = quadratic
+        problem, _A, phi_true = quadratic
         prof = likelihood_profile(
             problem, "p1", grid=phi_true[1] + np.linspace(-1.0, 1.0, 5)
         )

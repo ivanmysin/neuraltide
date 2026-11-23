@@ -35,9 +35,9 @@ data.h5
 ```python
 @dataclass
 class Dataset:
-    inputs: np.ndarray          # [T, total_input_units]
-    target: np.ndarray          # [T, total_target_units]
-    time_seq: np.ndarray        # [T]
+    inputs: np.ndarray  # [T, total_input_units]
+    target: np.ndarray  # [T, total_target_units]
+    time_seq: np.ndarray  # [T]
     dt: float
     input_names: List[str]
     input_n_units: Dict[str, int]
@@ -61,7 +61,7 @@ class Dataset:
 Возвращает срез входа по имени.
 
 ```python
-data.input_slice('theta')  # [T, n_units_theta]
+data.input_slice("theta")  # [T, n_units_theta]
 ```
 
 #### `target_slice(name)`
@@ -69,7 +69,7 @@ data.input_slice('theta')  # [T, n_units_theta]
 Возвращает срез цели по имени.
 
 ```python
-data.target_slice('exc')  # [T, n_units_exc]
+data.target_slice("exc")  # [T, n_units_exc]
 ```
 
 ---
@@ -111,29 +111,25 @@ t = np.arange(T) * dt
 
 # Входные данные
 theta_rate = 10.0 + 5.0 * np.sin(2 * np.pi * 8.0 * t / 1000.0)
-place_rate = np.where(
-    np.sqrt((t % 500 - 250)**2) < 100,
-    20.0,
-    2.0
-)
+place_rate = np.where(np.sqrt((t % 500 - 250) ** 2) < 100, 20.0, 2.0)
 
 # Целевые данные
 exc_rate = 0.5 * theta_rate + 0.3 * place_rate
 
 save_dataset(
-    path='training_data.h5',
+    path="training_data.h5",
     inputs={
-        'theta': theta_rate[:, np.newaxis],
-        'place': place_rate[:, np.newaxis],
+        "theta": theta_rate[:, np.newaxis],
+        "place": place_rate[:, np.newaxis],
     },
     target={
-        'exc': exc_rate[:, np.newaxis],
+        "exc": exc_rate[:, np.newaxis],
     },
     dt=dt,
     generator_params={
-        'theta': {'freq': 8.0, 'amplitude': 5.0},
-        'place': {'center': 250.0, 'width': 100.0},
-    }
+        "theta": {"freq": 8.0, "amplitude": 5.0},
+        "place": {"center": 250.0, "width": 100.0},
+    },
 )
 ```
 
@@ -162,7 +158,7 @@ def load_dataset(path: str) -> Dataset:
 ```python
 from neuraltide.data import load_dataset
 
-data = load_dataset('training_data.h5')
+data = load_dataset("training_data.h5")
 
 print(f"T = {data.T}")
 print(f"dt = {data.dt}")
@@ -170,8 +166,8 @@ print(f"Inputs: {data.input_names}")
 print(f"Targets: {data.target_names}")
 
 # Доступ к данным
-theta_data = data.input_slice('theta')  # [T, 1]
-exc_data = data.target_slice('exc')     # [T, 1]
+theta_data = data.input_slice("theta")  # [T, 1]
+exc_data = data.target_slice("exc")  # [T, 1]
 ```
 
 ---
@@ -201,7 +197,7 @@ def plot_dataset(
 ```python
 from neuraltide.data import load_dataset, plot_dataset
 
-data = load_dataset('training_data.h5')
+data = load_dataset("training_data.h5")
 plot_dataset(data, max_t=500)  # Показать первые 500 мс
 ```
 
@@ -216,13 +212,15 @@ import numpy as np
 import tensorflow as tf
 from neuraltide.data import load_dataset
 
-data = load_dataset('training_data.h5')
+data = load_dataset("training_data.h5")
 
 # Конвертация в тензоры
 t_seq = tf.constant(data.time_seq[None, :, None], dtype=tf.float32)
 inputs = tf.constant(data.inputs[None, :, :], dtype=tf.float32)
-target = {name: tf.constant(data.target_slice(name)[None, :, :], dtype=tf.float32)
-          for name in data.target_names}
+target = {
+    name: tf.constant(data.target_slice(name)[None, :, :], dtype=tf.float32)
+    for name in data.target_names
+}
 
 # Обучение
 trainer = Trainer(network, loss_fn, optimizer)
@@ -239,8 +237,8 @@ output = network(t_seq, inputs=inputs)
 
 # Сохранение результатов
 save_dataset(
-    path='simulation_results.h5',
-    inputs={'input': inputs.numpy()[0]},
+    path="simulation_results.h5",
+    inputs={"input": inputs.numpy()[0]},
     target={name: rate.numpy()[0] for name, rate in output.firing_rates.items()},
     dt=network._graph.dt,
 )

@@ -14,6 +14,7 @@
 
 ```python
 from neuraltide.utils import seed_everything
+
 seed_everything(42)
 ```
 
@@ -26,6 +27,7 @@ seed_everything(42)
 
 ```python
 from neuraltide.utils import print_summary
+
 print_summary(network)
 ```
 
@@ -53,19 +55,19 @@ dtype = config.get_dtype()
 #### `register_population(name, cls)`
 
 ```python
-config.register_population('MyPopulation', MyPopulation)
+config.register_population("MyPopulation", MyPopulation)
 ```
 
 #### `register_synapse(name, cls)`
 
 ```python
-config.register_synapse('MySynapse', MySynapse)
+config.register_synapse("MySynapse", MySynapse)
 ```
 
 #### `register_input(name, cls)`
 
 ```python
-config.register_input('MyGenerator', MyGenerator)
+config.register_input("MyGenerator", MyGenerator)
 ```
 
 ### Реестры
@@ -626,7 +628,7 @@ class SynapseConfig:
     tgt: str
     dt: float
     params: Dict[str, Any]
-    components: Optional[List['SynapseConfig']] = None
+    components: Optional[List["SynapseConfig"]] = None
 ```
 
 ### InputConfig
@@ -671,9 +673,9 @@ def build_network_from_config(config: NetworkConfig) -> Tuple[NetworkRNN, Dict[s
 ```python
 @dataclass
 class Dataset:
-    inputs: np.ndarray          # [T, total_input_units]
-    target: np.ndarray          # [T, total_target_units]
-    time_seq: np.ndarray        # [T]
+    inputs: np.ndarray  # [T, total_input_units]
+    target: np.ndarray  # [T, total_target_units]
+    time_seq: np.ndarray  # [T]
     dt: float
     input_names: List[str]
     input_n_units: Dict[str, int]
@@ -771,12 +773,11 @@ from neuraltide.model import BrainModelKeras
 from neuraltide.training import MSELoss
 
 graph = NetworkGraph(dt=0.5)
-graph.declare_input('theta', n_units=1)
-graph.add_population('exc', pop)
-graph.add_synapse('theta->exc', syn, src='theta', tgt='exc')
+graph.declare_input("theta", n_units=1)
+graph.add_population("exc", pop)
+graph.add_synapse("theta->exc", syn, src="theta", tgt="exc")
 
-model = BrainModelKeras(graph, RK4Integrator(), dt=0.5,
-                        loss_fn=MSELoss(target))
+model = BrainModelKeras(graph, RK4Integrator(), dt=0.5, loss_fn=MSELoss(target))
 model.compile(optimizer=tf.keras.optimizers.Adam(1e-3))
 model.fit(inputs, targets, epochs=100)
 ```
@@ -875,9 +876,15 @@ class AntiPhaseLoss:
 
 **Конструктор**:
 ```python
-AntiPhaseLoss(pop_pairs, target_correlation=-1.0, correlation_weight=1.0,
-              activity_target=20.0, activity_weight=0.5,
-              transient_steps=0, eps=1e-8)
+AntiPhaseLoss(
+    pop_pairs,
+    target_correlation=-1.0,
+    correlation_weight=1.0,
+    activity_target=20.0,
+    activity_weight=0.5,
+    transient_steps=0,
+    eps=1e-8,
+)
 ```
 
 Корреляционный член — per-batch-item: Pearson по свёртке `[T·N]` внутри
@@ -957,13 +964,13 @@ TRANSFORM_REGISTRY: Dict[str, Type[Transform]]
 ```python
 @dataclass
 class ParameterEntry:
-    full_name: str                 # стабильное имя вида 'exc/Delta_I'
+    full_name: str  # стабильное имя вида 'exc/Delta_I'
     shape: tf.TensorShape
     transform: Transform = IdentityTransform()
-    min: Optional[float] = None    # физические границы
+    min: Optional[float] = None  # физические границы
     max: Optional[float] = None
-    group: str = "population"      # 'population' | 'synapse' | пользовательская
-    trainable: bool = True         # False — реестровая константа вне вектора φ
+    group: str = "population"  # 'population' | 'synapse' | пользовательская
+    trainable: bool = True  # False — реестровая константа вне вектора φ
     variable: Optional[tf.Variable] = None  # None для ручных записей
 ```
 
@@ -976,11 +983,11 @@ class ParameterEntry:
 ```python
 @dataclass
 class StateLocator:
-    population: str                  # имя популяции в NetworkGraph
-    slot: int                        # индекс тензора в state_size популяции
-    experiment: Optional[str] = None # None — common 'x0/<pop>/<slot>';
-                                     # str — exp-specific
-                                     # 'x0/<experiment>/<pop>/<slot>'
+    population: str  # имя популяции в NetworkGraph
+    slot: int  # индекс тензора в state_size популяции
+    experiment: Optional[str] = None  # None — common 'x0/<pop>/<slot>';
+    # str — exp-specific
+    # 'x0/<experiment>/<pop>/<slot>'
 ```
 
 Адрес компоненты начального состояния в плоском списке pop-состояний сети
@@ -1040,18 +1047,18 @@ class ParameterSpace:
 ```python
 @dataclass
 class ObservationSpec:
-    name: str                       # уникальное имя наблюдения
-    population: str                 # имя популяции в NetworkGraph
-    target: TensorType              # [batch, T, n_units]
-    sigma: float = 1.0              # масштаб шума; вклад делится на sigma**2
+    name: str  # уникальное имя наблюдения
+    population: str  # имя популяции в NetworkGraph
+    target: TensorType  # [batch, T, n_units]
+    sigma: float = 1.0  # масштаб шума; вклад делится на sigma**2
     mask: Optional[TensorType] = None
     weight: float = 1.0
-    kind: str = "l2"                # l2 | relative | msle | huber |
-                                    # pseudo_huber | cauchy | tukey
+    kind: str = "l2"  # l2 | relative | msle | huber |
+    # pseudo_huber | cauchy | tukey
     readout: Optional[BaseReadout] = None
     eps: float = 1e-8
-    delta: float = 1.0              # порог Хьюбера (> 0): huber/pseudo_huber
-    scale: float = 1.0              # масштаб c (> 0): cauchy/tukey
+    delta: float = 1.0  # порог Хьюбера (> 0): huber/pseudo_huber
+    scale: float = 1.0  # масштаб c (> 0): cauchy/tukey
 ```
 
 `cauchy` и `tukey` — робастные виды: ограничивают вклад выбросов (у tukey
@@ -1134,9 +1141,9 @@ CalibrationProblem(
 class Evaluation:
     loss: float
     components: Dict[str, float] = {}
-    residuals: np.ndarray          # нулевой длины, если residual-интерфейса нет
+    residuals: np.ndarray  # нулевой длины, если residual-интерфейса нет
     grad: Optional[np.ndarray] = None
-    status: str = "ok"             # 'ok' | 'no_residual_interface'
+    status: str = "ok"  # 'ok' | 'no_residual_interface'
     n_forward: int = 0
     n_gradient: int = 0
     wall_time: float = 0.0
@@ -1168,9 +1175,9 @@ class OptimizationResult:
 
 ```python
 @dataclass
-class LocalOptimizerResult:   # результат local-адаптера
+class LocalOptimizerResult:  # результат local-адаптера
     base: OptimizationResult
-    method: str = "L-BFGS-B"       # 'L-BFGS-B' | 'TRF' | 'LM'
+    method: str = "L-BFGS-B"  # 'L-BFGS-B' | 'TRF' | 'LM'
     success: bool = False
     status: int = 0
     message: str = ""
@@ -1179,28 +1186,30 @@ class LocalOptimizerResult:   # результат local-адаптера
     njev: int = 0
     grad_norm: float = 0.0
     bounds_active: List[str] = []  # имена координат на границе
-    n_forward: int = 0             # дельта счётчиков задачи за запуск
+    n_forward: int = 0  # дельта счётчиков задачи за запуск
     n_gradient: int = 0
     wall_time: float = 0.0
-    validation: Dict[str, float] = {}   # held-out протоколы
+    validation: Dict[str, float] = {}  # held-out протоколы
+
 
 @dataclass
-class StartResult:            # один старт мультистарта
+class StartResult:  # один старт мультистарта
     index: int = 0
     x0_origin: str = "manual"  # 'sobol' | 'lhs' | 'random' | ...
     phi0: np.ndarray = ...
     phi: np.ndarray = ...
     loss: float = 0.0
-    status: str = "pending"    # 'ok' | 'screen_rejected' | 'failed'
+    status: str = "pending"  # 'ok' | 'screen_rejected' | 'failed'
     message: str = ""
     screened_loss: Optional[float] = None
     refined: bool = False
-    screen_refined: bool = False     # короткий screen-refine выполнен
+    screen_refined: bool = False  # короткий screen-refine выполнен
     local: Optional[LocalOptimizerResult] = None
     wall_time: float = 0.0
 
+
 @dataclass
-class MultistartResult:       # итог мультистарта
+class MultistartResult:  # итог мультистарта
     base: OptimizationResult
     solutions: List[StartResult] = []
     best_index: int = -1
@@ -1208,22 +1217,24 @@ class MultistartResult:       # итог мультистарта
     n_refined: int = 0
     n_failed: int = 0
     seed: Optional[int] = None
-    clustering: Dict[str, Any] = {}    # n_clusters / labels / representatives
+    clustering: Dict[str, Any] = {}  # n_clusters / labels / representatives
     wall_time: float = 0.0
 
+
 @dataclass
-class RunCheckpoint:          # чекпоинт прерванного запуска
+class RunCheckpoint:  # чекпоинт прерванного запуска
     seed: Optional[int] = None
     config: Dict[str, Any] = {}
     completed: List[Any] = []
     pending: List[Any] = []
     best_index: int = -1
 
+
 @dataclass
-class JacobianResult:         # якобиан невязок (forward sensitivities)
-    J: np.ndarray = ...        # [n_residuals, size]
+class JacobianResult:  # якобиан невязок (forward sensitivities)
+    J: np.ndarray = ...  # [n_residuals, size]
     r: np.ndarray = ...
-    loss: float = 0.0          # 0.5 * ||r||^2
+    loss: float = 0.0  # 0.5 * ||r||^2
     phi: np.ndarray = ...
     n_forward: int = 0
     wall_time: float = 0.0
@@ -1236,19 +1247,30 @@ class JacobianResult:         # якобиан невязок (forward sensitivi
 
 ```python
 @dataclass
-class Experiment:             # протокол одного эксперимента
+class Experiment:  # протокол одного эксперимента
     name: str
     t_sequence: TensorType
     inputs: Optional[TensorType] = None
-    objective: Optional[Callable] = None   # None -> objective задачи (validate)
+    objective: Optional[Callable] = None  # None -> objective задачи (validate)
     initial_state: Optional[tuple] = None  # (pop, syn)
+
 
 class MultiExperimentProblem:
     # одна сеть + один ParameterSpace; сумма потерь в одной GradientTape,
     # residual — конкатенация, компоненты с префиксом '{name}/'
-    def __init__(self, network, parameter_space, experiments,
-                 grad_mode="assign", held_out=None, compiled=False,
-                 vectorize=False, chunk_length=None, chunk_grad="checkpointed"): ...
+    def __init__(
+        self,
+        network,
+        parameter_space,
+        experiments,
+        grad_mode="assign",
+        held_out=None,
+        compiled=False,
+        vectorize=False,
+        chunk_length=None,
+        chunk_grad="checkpointed",
+    ): ...
+
     # compiled=True: отдельное скомпилированное ядро на обучающий
     # эксперимент (см. CalibrationProblem), суммы потерь/градиентов —
     # eager-сложение снаружи; simulate/validate — eager в обоих режимах
@@ -1270,10 +1292,12 @@ class MultiExperimentProblem:
     # эксперимента с совпадающим именем (включая held-out в validate),
     # с приоритетом над общими; orphan/exp-вне-контекста — UserWarning
 
+
 class FrozenProblem:
     # подпространство φ: free_names свободны, fixed заморожены на явных θ,
     # прочие — на текущих значениях модели на момент конструирования
     def __init__(self, problem, free_names=None, fixed=None): ...
+
     # evaluate/value_and_gradient (reduced-градиент)/residual/validate/
     # simulate/bounds_phi/pack/unpack; счётчики общие с базовой задачей
 ```
@@ -1350,26 +1374,37 @@ class TruncatedResult:
 ```python
 @dataclass
 class ShootingConfig:
-    nodes: Union[int, Sequence[int]]   # сегменты или явные границы [0..T]
+    nodes: Union[int, Sequence[int]]  # сегменты или явные границы [0..T]
+
     def resolve(self, T: int) -> List[int]: ...
+
 
 @dataclass
 class SingleShootingCheck:
     loss_ms: float
     loss_single: float
-    gaps: Dict[str, Any]       # max/mean/l2/finite/joints
-    consistent: bool           # разрывы <= gap_tol, потери конечны
+    gaps: Dict[str, Any]  # max/mean/l2/finite/joints
+    consistent: bool  # разрывы <= gap_tol, потери конечны
+
 
 class MultipleShootingProblem:
-    def __init__(self, problem, config, *, continuity_weight=1.0,
-                 include_syn_states=True, fix_first_segment=False): ...
+    def __init__(
+        self,
+        problem,
+        config,
+        *,
+        continuity_weight=1.0,
+        include_syn_states=True,
+        fix_first_segment=False,
+    ): ...
     # duck parity с CalibrationProblem + специфичные:
     def simulate_segment(self, phi, k) -> NetworkOutput: ...
     def continuity_gaps(self, phi=None) -> Dict[str, Any]: ...
     def initialize_from_single_shooting(self, phi_base=None) -> tf.Tensor: ...
     def to_single_shooting_problem(self, phi) -> CalibrationProblem: ...
-    def finalize(self, phi, gap_tol=1e-6, loss_rtol=1e-6,
-                 loss_atol=1e-10) -> SingleShootingCheck: ...  # + сравнение loss_ms и loss_single
+    def finalize(
+        self, phi, gap_tol=1e-6, loss_rtol=1e-6, loss_atol=1e-10
+    ) -> SingleShootingCheck: ...  # + сравнение loss_ms и loss_single
 ```
 
 Residual-раскладка `r = [r_data; √w·gap_k]`, `0.5·‖r‖² == loss_ms` точно.
@@ -1452,7 +1487,8 @@ class FIMDirection:
     eigenvalue: float
     energy_fraction: float
     cumulative_energy: float
-    top_params: List[Tuple[str, float]]   # до 5 крупнейших компонент
+    top_params: List[Tuple[str, float]]  # до 5 крупнейших компонент
+
 
 @dataclass
 class CollinearityPair:
@@ -1460,15 +1496,16 @@ class CollinearityPair:
     second: str
     cosine: float
 
+
 @dataclass
-class FIMResult:              # F = JᵀJ по готовому якобиану
+class FIMResult:  # F = JᵀJ по готовому якобиану
     fim: np.ndarray
     eigenvalues: np.ndarray
     eigenvectors: np.ndarray
     singular_values: np.ndarray
-    condition_number: float       # kappa(J) по ненулевым s
-    condition_number_fim: float   # kappa(F)
-    effective_rank: int           # по накопленной энергии lambda
+    condition_number: float  # kappa(J) по ненулевым s
+    condition_number_fim: float  # kappa(F)
+    effective_rank: int  # по накопленной энергии lambda
     energy: float = 0.99
     stiff_dirs: List[FIMDirection] = []
     soft_dirs: List[FIMDirection] = []
@@ -1479,19 +1516,20 @@ class FIMResult:              # F = JᵀJ по готовому якобиану
     loss: float = 0.0
     J_shape: Tuple[int, int] = (0, 0)
 
+
 @dataclass
-class ProfileResult:         # одномерный профиль правдоподобия
+class ProfileResult:  # одномерный профиль правдоподобия
     name: str
     theta_values: List[float]
-    losses: List[float]           # NaN для неуспешных узлов
+    losses: List[float]  # NaN для неуспешных узлов
     rel_loss: List[float]
     successes: List[bool]
     phi_path: List[Optional[np.ndarray]]
     nfev: List[int]
     messages: List[str]
     intervals: Dict[str, Optional[Tuple[float, float]]]  # '0.95' по chi2
-    chi2_threshold: float         # 3.8414588 (2*dNLL ~ chi2(1))
-    rel_loss_threshold: float     # 1.9207294
+    chi2_threshold: float  # 3.8414588 (2*dNLL ~ chi2(1))
+    rel_loss_threshold: float  # 1.9207294
     warnings: List[str] = []
     optimizer: str = "lbfgsb"
     warm_start: bool = True
@@ -1500,8 +1538,9 @@ class ProfileResult:         # одномерный профиль правдо�
     wall_time: float = 0.0
     notes: str = ""
 
+
 @dataclass
-class SubsetResult:          # доводка подмножества с оценкой смещения
+class SubsetResult:  # доводка подмножества с оценкой смещения
     kept_names: List[str]
     fixed_names: List[str]
     refit_result: Optional[LocalOptimizerResult]
@@ -1509,8 +1548,8 @@ class SubsetResult:          # доводка подмножества с оце
     loss_after: Optional[float]
     theta_delta_kept: Optional[Dict[str, np.ndarray]]
     theta_delta_fixed: Optional[Dict[str, np.ndarray]]  # структурно 0
-    prediction_delta: Optional[Dict[str, float]]   # ||dr||/||r|| по популяциям
-    validation_delta: Optional[Dict[str, float]]   # dloss на held-out
+    prediction_delta: Optional[Dict[str, float]]  # ||dr||/||r|| по популяциям
+    validation_delta: Optional[Dict[str, float]]  # dloss на held-out
     notes: str = ""
     n_forward: int = 0
     n_gradient: int = 0
@@ -1534,29 +1573,31 @@ def global_search(problem, *, method="de", max_evals=None, bounds=None,
 (`parallel.make_evaluator`), несовместим с `'nsga2'`.
 
 ```python
-class OptionalDependencyError(ImportError): ...   # cma / pymoo не установлены
+class OptionalDependencyError(ImportError): ...  # cma / pymoo не установлены
+
 
 @dataclass
 class GlobalOptimizerResult:
-    base: OptimizationResult      # phi_best/theta_best/loss_best/история
-    method: str                   # 'de' | 'cma' | 'spsa' | 'basinhopping'
+    base: OptimizationResult  # phi_best/theta_best/loss_best/история
+    method: str  # 'de' | 'cma' | 'spsa' | 'basinhopping'
     success: bool
     message: str
-    n_evals: int                  # оценок глобальной фазы (<= max_evals)
+    n_evals: int  # оценок глобальной фазы (<= max_evals)
     n_forward: int
     n_gradient: int
     wall_time: float
-    history: List[Dict[str, Any]]   # {"n_evals", "loss", "failed"}
-    candidates: List[StartResult]   # доводка refine_top_k
+    history: List[Dict[str, Any]]  # {"n_evals", "loss", "failed"}
+    candidates: List[StartResult]  # доводка refine_top_k
     validation: Dict[str, float]
 
+
 @dataclass
-class ParetoResult:               # method='nsga2'
-    base: OptimizationResult      # knee-точка фронта (loss_best — сумма целей)
+class ParetoResult:  # method='nsga2'
+    base: OptimizationResult  # knee-точка фронта (loss_best — сумма целей)
     frontier: Dict[str, np.ndarray]  # {objective_name: значения на фронте}
-    objective_names: List[str]    # порядок столбцов frontier
+    objective_names: List[str]  # порядок столбцов frontier
     method: str = "nsga2"
-    success: bool = False         # непустой фронт
+    success: bool = False  # непустой фронт
     message: str = ""
     n_evals: int = 0
     n_forward: int = 0

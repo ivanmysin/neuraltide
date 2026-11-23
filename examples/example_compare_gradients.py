@@ -17,19 +17,18 @@ import gc
 import time
 import tracemalloc
 
+import matplotlib.pyplot as plt
 import numpy as np
 import tensorflow as tf
-import matplotlib.pyplot as plt
 
 from neuraltide.core.network import NetworkGraph, NetworkRNN
-from neuraltide.populations import IzhikevichMeanField
-from neuraltide.synapses import TsodyksMarkramSynapse
 from neuraltide.inputs import VonMisesGenerator
 from neuraltide.integrators import RK4Integrator
-from neuraltide.training import MSELoss, StabilityPenalty, CompositeLoss
+from neuraltide.populations import IzhikevichMeanField
+from neuraltide.synapses import TsodyksMarkramSynapse
+from neuraltide.training import CompositeLoss, MSELoss, StabilityPenalty
 from neuraltide.training.adjoint import AdjointSolver
 from neuraltide.utils import print_summary
-
 
 # ── Network configuration ─────────────────────────────────────────────────────
 dt = 0.1  # ms

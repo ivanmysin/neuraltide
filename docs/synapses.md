@@ -20,14 +20,12 @@ NeuralTide предоставляет несколько типов синапт
 
 **Пример**: 2 входа → 2 нейрона, полносвязная
 ```python
-pconn = [[1.0, 1.0],
-         [1.0, 1.0]]
+pconn = [[1.0, 1.0], [1.0, 1.0]]
 ```
 
 **Пример**: 2 входа → 2 нейрона, диагональная (1→1, 2→2)
 ```python
-pconn = [[1.0, 0.0],
-         [0.0, 1.0]]
+pconn = [[1.0, 0.0], [0.0, 1.0]]
 ```
 
 ### Выход синапса
@@ -35,10 +33,39 @@ pconn = [[1.0, 0.0],
 Метод `forward()` возвращает словарь:
 ```python
 {
-    'I_syn': tf.Tensor [1, n_post],  # синаптический ток
-    'g_syn': tf.Tensor [1, n_post],  # синаптическая проводимость
+    "I_syn": tf.Tensor[1, n_post],  # синаптический ток
+    "g_syn": tf.Tensor[1, n_post],  # синаптическая проводимость
 }
 ```
+
+### Единицы gsyn_max и e_r
+
+Синапс вычисляет `I_syn = gsyn_max · g · (e_r − V_post)`, где `V_post` —
+мембранный потенциал целевой популяции (её observables-поле `v_mean`).
+Единицы `e_r` и `gsyn_max` должны быть согласованы с тем, в каких
+единицах эта популяция выражает свой потенциал:
+
+- **`IzhikevichMeanField`** (оба режима параметров): состояние `v`
+  **безразмерное** — отсчёт от `V_rest`. Значения из литературы
+  конвертируйте:
+
+  ```text
+  e_r*  = (E_rev_mV − V_rest_mV) / |V_rest_mV|
+  gsyn* = gsyn_nS / (K_nS/мВ · |V_rest_mV|)
+  ```
+
+  Пример (CA1: `V_rest = −69.36 мВ`, `K = 1.5626 нС/мВ`): тормозный
+  реверс `E_rev = −75 мВ` → `e_r* ≈ −0.081`; проводимость `1 нС` →
+  `gsyn* ≈ 1 / 108.38 ≈ 0.0092`.
+
+- **Собственные Fokker–Planck-модели**: `e_r` — в единицах вашей сетки
+  по потенциалу, `gsyn_max` — согласованно с ней.
+
+Указанные ниже в таблицах «мВ»/«мС/см²» — это масштаб для популяций,
+выражающих потенциал в физических единицах; для безразмерных mean-field
+популяций используйте конверсию выше. То же согласование касается
+`av_nmda`/`v_ref` NMDA-синапса: они работают с тем же `v_mean` целевой
+популяции.
 
 ---
 
@@ -73,9 +100,9 @@ StaticSynapse(
 
 | Параметр | Тип | Описание | Единицы |
 |----------|-----|-----------|---------|
-| `gsyn_max` | float/matrix | Максимальная проводимость | мС/см² |
+| `gsyn_max` | float/matrix | Максимальная проводимость | ед. V_post (см. «Единицы gsyn_max и e_r») |
 | `pconn` | matrix [n_pre, n_post] | Матрица соединений | безразмерный |
-| `e_r` | float/matrix | Потенциал реверса | мВ |
+| `e_r` | float/matrix | Потенциал реверса | ед. V_post (см. «Единицы gsyn_max и e_r») |
 
 **Пример**:
 ```python
@@ -84,10 +111,10 @@ syn = StaticSynapse(
     n_post=2,
     dt=0.5,
     params={
-        'gsyn_max': {'value': [[0.1, 0.15]], 'trainable': True},
-        'pconn':    {'value': [[1.0, 1.0]], 'trainable': False},
-        'e_r':      {'value': 0.0, 'trainable': False},
-    }
+        "gsyn_max": {"value": [[0.1, 0.15]], "trainable": True},
+        "pconn": {"value": [[1.0, 1.0]], "trainable": False},
+        "e_r": {"value": 0.0, "trainable": False},
+    },
 )
 ```
 
@@ -101,9 +128,24 @@ state_size = []  # пустой список, нет состояния
 
 ```python
 {
-    'gsyn_max': {'shape': (n_pre, n_post), 'trainable': ..., 'constraint': 'NonNegConstraint', 'units': 'mS/cm^2'},
-    'pconn':    {'shape': (n_pre, n_post), 'trainable': False, 'constraint': 'UnitIntervalConstraint', 'units': 'dimensionless'},
-    'e_r':      {'shape': (n_pre, n_post), 'trainable': False, 'constraint': None, 'units': 'mV'},
+    "gsyn_max": {
+        "shape": (n_pre, n_post),
+        "trainable": ...,
+        "constraint": "NonNegConstraint",
+        "units": "mS/cm^2",
+    },
+    "pconn": {
+        "shape": (n_pre, n_post),
+        "trainable": False,
+        "constraint": "UnitIntervalConstraint",
+        "units": "dimensionless",
+    },
+    "e_r": {
+        "shape": (n_pre, n_post),
+        "trainable": False,
+        "constraint": None,
+        "units": "mV",
+    },
 }
 ```
 
@@ -147,11 +189,11 @@ SecondOrderSynapse(
 
 | Параметр | Тип | Описание | Единицы |
 |----------|-----|-----------|---------|
-| `gsyn_max` | float/matrix | Максимальная проводимость | мС/см² |
+| `gsyn_max` | float/matrix | Максимальная проводимость | ед. V_post (см. «Единицы gsyn_max и e_r») |
 | `tau1` | float/matrix | Первая постоянная времени | мс |
 | `tau2` | float/matrix | Вторая постоянная времени | мс |
 | `pconn` | matrix [n_pre, n_post] | Матрица соединений | безразмерный |
-| `e_r` | float/matrix | Потенциал реверса | мВ |
+| `e_r` | float/matrix | Потенциал реверса | ед. V_post (см. «Единицы gsyn_max и e_r») |
 
 **Пример**:
 ```python
@@ -160,12 +202,12 @@ syn = SecondOrderSynapse(
     n_post=2,
     dt=0.5,
     params={
-        'gsyn_max': {'value': [[0.1, 0.15]], 'trainable': True},
-        'tau1':     {'value': 3.0,  'trainable': True, 'min': 0.1, 'max': 20.0},
-        'tau2':     {'value': 10.0, 'trainable': True, 'min': 0.1, 'max': 50.0},
-        'pconn':    {'value': [[1.0, 1.0]], 'trainable': False},
-        'e_r':      {'value': 0.0, 'trainable': False},
-    }
+        "gsyn_max": {"value": [[0.1, 0.15]], "trainable": True},
+        "tau1": {"value": 3.0, "trainable": True, "min": 0.1, "max": 20.0},
+        "tau2": {"value": 10.0, "trainable": True, "min": 0.1, "max": 50.0},
+        "pconn": {"value": [[1.0, 1.0]], "trainable": False},
+        "e_r": {"value": 0.0, "trainable": False},
+    },
 )
 ```
 
@@ -182,11 +224,36 @@ state_size = [
 
 ```python
 {
-    'gsyn_max': {'shape': (n_pre, n_post), 'trainable': ..., 'constraint': 'NonNegConstraint', 'units': 'mS/cm^2'},
-    'tau1':     {'shape': (n_pre, n_post), 'trainable': ..., 'constraint': 'MinMaxConstraint', 'units': 'ms'},
-    'tau2':     {'shape': (n_pre, n_post), 'trainable': ..., 'constraint': 'MinMaxConstraint', 'units': 'ms'},
-    'pconn':    {'shape': (n_pre, n_post), 'trainable': False, 'constraint': 'UnitIntervalConstraint', 'units': 'dimensionless'},
-    'e_r':      {'shape': (n_pre, n_post), 'trainable': False, 'constraint': None, 'units': 'mV'},
+    "gsyn_max": {
+        "shape": (n_pre, n_post),
+        "trainable": ...,
+        "constraint": "NonNegConstraint",
+        "units": "mS/cm^2",
+    },
+    "tau1": {
+        "shape": (n_pre, n_post),
+        "trainable": ...,
+        "constraint": "MinMaxConstraint",
+        "units": "ms",
+    },
+    "tau2": {
+        "shape": (n_pre, n_post),
+        "trainable": ...,
+        "constraint": "MinMaxConstraint",
+        "units": "ms",
+    },
+    "pconn": {
+        "shape": (n_pre, n_post),
+        "trainable": False,
+        "constraint": "UnitIntervalConstraint",
+        "units": "dimensionless",
+    },
+    "e_r": {
+        "shape": (n_pre, n_post),
+        "trainable": False,
+        "constraint": None,
+        "units": "mV",
+    },
 }
 ```
 
@@ -229,14 +296,14 @@ NMDASynapse(
 
 | Параметр | Тип | Описание | Единицы |
 |----------|-----|-----------|---------|
-| `gsyn_max_nmda` | float/matrix | Максимальная проводимость NMDA | мС/см² |
+| `gsyn_max_nmda` | float/matrix | Максимальная проводимость NMDA | ед. V_post (см. «Единицы gsyn_max и e_r») |
 | `tau1_nmda` | float/matrix | Время нарастания | мс |
 | `tau2_nmda` | float/matrix | Время спада | мс |
 | `Mgb` | float/matrix | Концентрация магния | мМ |
-| `av_nmda` | float/matrix | Коэффициент блока | 1/мВ |
+| `av_nmda` | float/matrix | Коэффициент блока | ед. v_mean (см. «Единицы gsyn_max и e_r») |
 | `pconn_nmda` | matrix [n_pre, n_post] | Матрица соединений | безразмерный |
-| `e_r_nmda` | float/matrix | Потенциал реверса NMDA | мВ |
-| `v_ref` | float/matrix | Опорный потенциал для блока | мВ |
+| `e_r_nmda` | float/matrix | Потенциал реверса NMDA | ед. V_post (см. «Единицы gsyn_max и e_r») |
+| `v_ref` | float/matrix | Опорный потенциал для блока | ед. v_mean (см. «Единицы gsyn_max и e_r») |
 
 **Пример**:
 ```python
@@ -245,15 +312,15 @@ syn_nmda = NMDASynapse(
     n_post=2,
     dt=0.5,
     params={
-        'gsyn_max_nmda': {'value': 0.15, 'trainable': True},
-        'tau1_nmda':     {'value': 5.0, 'trainable': False},
-        'tau2_nmda':     {'value': 150.0, 'trainable': False},
-        'Mgb':           {'value': 1.0, 'trainable': False},
-        'av_nmda':       {'value': 0.08, 'trainable': False},
-        'pconn_nmda':    {'value': [[1.0, 1.0]], 'trainable': False},
-        'e_r_nmda':      {'value': 0.0, 'trainable': False},
-        'v_ref':         {'value': 0.0, 'trainable': False},
-    }
+        "gsyn_max_nmda": {"value": 0.15, "trainable": True},
+        "tau1_nmda": {"value": 5.0, "trainable": False},
+        "tau2_nmda": {"value": 150.0, "trainable": False},
+        "Mgb": {"value": 1.0, "trainable": False},
+        "av_nmda": {"value": 0.08, "trainable": False},
+        "pconn_nmda": {"value": [[1.0, 1.0]], "trainable": False},
+        "e_r_nmda": {"value": 0.0, "trainable": False},
+        "v_ref": {"value": 0.0, "trainable": False},
+    },
 )
 ```
 
@@ -270,14 +337,54 @@ state_size = [
 
 ```python
 {
-    'gsyn_max_nmda': {'shape': (n_pre, n_post), 'trainable': ..., 'constraint': 'NonNegConstraint', 'units': 'mS/cm^2'},
-    'tau1_nmda':     {'shape': (n_pre, n_post), 'trainable': False, 'constraint': None, 'units': 'ms'},
-    'tau2_nmda':     {'shape': (n_pre, n_post), 'trainable': False, 'constraint': None, 'units': 'ms'},
-    'Mgb':           {'shape': (n_pre, n_post), 'trainable': False, 'constraint': None, 'units': 'mM'},
-    'av_nmda':       {'shape': (n_pre, n_post), 'trainable': False, 'constraint': None, 'units': 'mV^-1'},
-    'pconn_nmda':    {'shape': (n_pre, n_post), 'trainable': False, 'constraint': 'UnitIntervalConstraint', 'units': 'dimensionless'},
-    'e_r_nmda':      {'shape': (n_pre, n_post), 'trainable': False, 'constraint': None, 'units': 'mV'},
-    'v_ref':         {'shape': (n_pre, n_post), 'trainable': False, 'constraint': None, 'units': 'mV'},
+    "gsyn_max_nmda": {
+        "shape": (n_pre, n_post),
+        "trainable": ...,
+        "constraint": "NonNegConstraint",
+        "units": "mS/cm^2",
+    },
+    "tau1_nmda": {
+        "shape": (n_pre, n_post),
+        "trainable": False,
+        "constraint": None,
+        "units": "ms",
+    },
+    "tau2_nmda": {
+        "shape": (n_pre, n_post),
+        "trainable": False,
+        "constraint": None,
+        "units": "ms",
+    },
+    "Mgb": {
+        "shape": (n_pre, n_post),
+        "trainable": False,
+        "constraint": None,
+        "units": "mM",
+    },
+    "av_nmda": {
+        "shape": (n_pre, n_post),
+        "trainable": False,
+        "constraint": None,
+        "units": "mV^-1",
+    },
+    "pconn_nmda": {
+        "shape": (n_pre, n_post),
+        "trainable": False,
+        "constraint": "UnitIntervalConstraint",
+        "units": "dimensionless",
+    },
+    "e_r_nmda": {
+        "shape": (n_pre, n_post),
+        "trainable": False,
+        "constraint": None,
+        "units": "mV",
+    },
+    "v_ref": {
+        "shape": (n_pre, n_post),
+        "trainable": False,
+        "constraint": None,
+        "units": "mV",
+    },
 }
 ```
 
@@ -326,13 +433,13 @@ TsodyksMarkramSynapse(
 
 | Параметр | Тип | Описание | Единицы |
 |----------|-----|-----------|---------|
-| `gsyn_max` | float/matrix | Максимальная проводимость | мС/см² |
+| `gsyn_max` | float/matrix | Максимальная проводимость | ед. V_post (см. «Единицы gsyn_max и e_r») |
 | `tau_f` | float/matrix | Время фасилитации | мс |
 | `tau_d` | float/matrix | Время депрессии | мс |
 | `tau_r` | float/matrix | Время восстановления | мс |
 | `Uinc` | float/matrix | Инкремент использования | безразмерный |
 | `pconn` | matrix [n_pre, n_post] | Матрица соединений | безразмерный |
-| `e_r` | float/matrix | Потенциал реверса | мВ |
+| `e_r` | float/matrix | Потенциал реверса | ед. V_post (см. «Единицы gsyn_max и e_r») |
 
 **Типичные значения**:
 - Фасилитация: `tau_f > 0`, `tau_d ≈ tau_r`, `Uinc` мало
@@ -345,14 +452,14 @@ syn_stp = TsodyksMarkramSynapse(
     n_post=2,
     dt=0.5,
     params={
-        'gsyn_max': {'value': [[0.1, 0.1]], 'trainable': True},
-        'tau_f':    {'value': 20.0,  'trainable': True, 'min': 6.0,  'max': 240.0},
-        'tau_d':    {'value': 5.0,   'trainable': True, 'min': 2.0,  'max': 15.0},
-        'tau_r':    {'value': 200.0, 'trainable': True, 'min': 91.0, 'max': 1300.0},
-        'Uinc':     {'value': 0.2,   'trainable': True, 'min': 0.04, 'max': 0.7},
-        'pconn':    {'value': [[1.0, 1.0]], 'trainable': False},
-        'e_r':      {'value': 0.0,   'trainable': False},
-    }
+        "gsyn_max": {"value": [[0.1, 0.1]], "trainable": True},
+        "tau_f": {"value": 20.0, "trainable": True, "min": 6.0, "max": 240.0},
+        "tau_d": {"value": 5.0, "trainable": True, "min": 2.0, "max": 15.0},
+        "tau_r": {"value": 200.0, "trainable": True, "min": 91.0, "max": 1300.0},
+        "Uinc": {"value": 0.2, "trainable": True, "min": 0.04, "max": 0.7},
+        "pconn": {"value": [[1.0, 1.0]], "trainable": False},
+        "e_r": {"value": 0.0, "trainable": False},
+    },
 )
 ```
 
@@ -376,13 +483,48 @@ state_size = [
 
 ```python
 {
-    'gsyn_max': {'shape': (n_pre, n_post), 'trainable': ..., 'constraint': 'NonNegConstraint', 'units': 'mS/cm^2'},
-    'tau_f':    {'shape': (n_pre, n_post), 'trainable': ..., 'constraint': 'MinMaxConstraint', 'units': 'ms'},
-    'tau_d':    {'shape': (n_pre, n_post), 'trainable': ..., 'constraint': 'MinMaxConstraint', 'units': 'ms'},
-    'tau_r':    {'shape': (n_pre, n_post), 'trainable': ..., 'constraint': 'MinMaxConstraint', 'units': 'ms'},
-    'Uinc':     {'shape': (n_pre, n_post), 'trainable': ..., 'constraint': 'MinMaxConstraint', 'units': 'dimensionless'},
-    'pconn':    {'shape': (n_pre, n_post), 'trainable': False, 'constraint': 'UnitIntervalConstraint', 'units': 'dimensionless'},
-    'e_r':      {'shape': (n_pre, n_post), 'trainable': False, 'constraint': None, 'units': 'mV'},
+    "gsyn_max": {
+        "shape": (n_pre, n_post),
+        "trainable": ...,
+        "constraint": "NonNegConstraint",
+        "units": "mS/cm^2",
+    },
+    "tau_f": {
+        "shape": (n_pre, n_post),
+        "trainable": ...,
+        "constraint": "MinMaxConstraint",
+        "units": "ms",
+    },
+    "tau_d": {
+        "shape": (n_pre, n_post),
+        "trainable": ...,
+        "constraint": "MinMaxConstraint",
+        "units": "ms",
+    },
+    "tau_r": {
+        "shape": (n_pre, n_post),
+        "trainable": ...,
+        "constraint": "MinMaxConstraint",
+        "units": "ms",
+    },
+    "Uinc": {
+        "shape": (n_pre, n_post),
+        "trainable": ...,
+        "constraint": "MinMaxConstraint",
+        "units": "dimensionless",
+    },
+    "pconn": {
+        "shape": (n_pre, n_post),
+        "trainable": False,
+        "constraint": "UnitIntervalConstraint",
+        "units": "dimensionless",
+    },
+    "e_r": {
+        "shape": (n_pre, n_post),
+        "trainable": False,
+        "constraint": None,
+        "units": "mV",
+    },
 }
 ```
 
@@ -423,30 +565,21 @@ CompositeSynapse(
 ### Пример: NMDA + Tsodyks-Markram
 
 ```python
-syn_static = StaticSynapse(
-    n_pre=1, n_post=2, dt=0.5,
-    params={...}
-)
+syn_static = StaticSynapse(n_pre=1, n_post=2, dt=0.5, params={...})
 
-syn_nmda = NMDASynapse(
-    n_pre=1, n_post=2, dt=0.5,
-    params={...}
-)
+syn_nmda = NMDASynapse(n_pre=1, n_post=2, dt=0.5, params={...})
 
-syn_stp = TsodyksMarkramSynapse(
-    n_pre=1, n_post=2, dt=0.5,
-    params={...}
-)
+syn_stp = TsodyksMarkramSynapse(n_pre=1, n_post=2, dt=0.5, params={...})
 
 composite = CompositeSynapse(
     n_pre=1,
     n_post=2,
     dt=0.5,
     components=[
-        ('static', syn_static),
-        ('nmda', syn_nmda),
-        ('stp', syn_stp),
-    ]
+        ("static", syn_static),
+        ("nmda", syn_nmda),
+        ("stp", syn_stp),
+    ],
 )
 ```
 
@@ -461,13 +594,13 @@ state_size = static.state_size + nmda.state_size + stp.state_size
 
 ```python
 {
-    'static_gsyn_max': {...},
-    'static_pconn': {...},
-    'nmda_gsyn_max_nmda': {...},
-    'nmda_tau1_nmda': {...},
+    "static_gsyn_max": {...},
+    "static_pconn": {...},
+    "nmda_gsyn_max_nmda": {...},
+    "nmda_tau1_nmda": {...},
     # ... и т.д.
-    'stp_gsyn_max': {...},
-    'stp_tau_f': {...},
+    "stp_gsyn_max": {...},
+    "stp_tau_f": {...},
 }
 ```
 
@@ -480,13 +613,11 @@ state_size = static.state_size + nmda.state_size + stp.state_size
 ```python
 # Для каждого синапса:
 pre_rate = src_pop.get_firing_rate(src_state)  # [1, n_pre]
-post_v = tgt_pop.observables(tgt_state)['v_mean']  # [1, n_post]
+post_v = tgt_pop.observables(tgt_state)["v_mean"]  # [1, n_post]
 
-current_dict, new_syn_state = synapse.forward(
-    pre_rate, post_v, syn_state, dt
-)
+current_dict, new_syn_state = synapse.forward(pre_rate, post_v, syn_state, dt)
 
 # Накопление токов к целевой популяции:
-syn_I[tgt] += current_dict['I_syn']
-syn_g[tgt] += current_dict['g_syn']
+syn_I[tgt] += current_dict["I_syn"]
+syn_g[tgt] += current_dict["g_syn"]
 ```

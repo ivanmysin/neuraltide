@@ -99,8 +99,8 @@ def build_brunel():
         v_min=-80.0,
     )
     graph = NetworkGraph(dt=DT)
+    graph.add_population("brunel", pop)
     with pytest.warns(UserWarning, match="has no incoming synapses"):
-        graph.add_population("brunel", pop)
         network = NetworkRNN(graph, EulerIntegrator())
     return network
 
@@ -365,7 +365,7 @@ class TestChunkedGradients:
 class TestChunkedValidations:
     def test_dynamic_T_raises(self):
         net = build_l0()
-        t_seq, inputs = build_l0_data(net)
+        t_seq, _inputs = build_l0_data(net)
 
         @tf.function(input_signature=[tf.TensorSpec([None, None, 1], tf.float32)])
         def dyn(x):
@@ -715,8 +715,8 @@ class TestChunkedX0AndLosses:
             v_min=-80.0,
         )
         graph = NetworkGraph(dt=DT)
+        graph.add_population("brunel", pop)
         with pytest.warns(UserWarning, match="has no incoming synapses"):
-            graph.add_population("brunel", pop)
             net = NetworkRNN(graph, EulerIntegrator())
         t_seq = _t_seq(30)
 

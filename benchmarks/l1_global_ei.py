@@ -378,7 +378,7 @@ def main() -> None:
         for name, m in table:
             print(
                 f"  {name:<12} {m['best_loss']:>12.4g} "
-                f"{str(m['reached_tol']):>8} {m['frac_to_tol']:>6.2f} "
+                f"{m['reached_tol']!s:>8} {m['frac_to_tol']:>6.2f} "
                 f"{m['n_forward']:>10} {m['wall']:>7.1f}s "
                 f"{m['theta_err']:>10.2e}"
             )

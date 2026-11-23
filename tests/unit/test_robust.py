@@ -614,6 +614,48 @@ class TestBalancedGradient:
             assert value == pytest.approx(eval_result.components[name], rel=1e-10)
         assert grad.shape == (problem.size,)
 
+    def test_stop_gradient_diagnostic_component(self, l0_factory):
+        """Диагностическая stop_gradient-компонента не ломает градиент.
+
+        Регрессия по полевому отчёту: balanced_gradient с компонентой,
+        обёрнутой в tf.stop_gradient, на малых сетях даёт градиент,
+        совпадающий с value_and_gradient; сегфолт из отчёта —
+        масштабо-зависимый эффект больших графов (см. docs/troubleshooting.md).
+        """
+
+        class WithDiag:
+            def __init__(self, inner):
+                self._inner = inner
+
+            def __call__(self, output, model):
+                return self._inner(output, model)
+
+            def components(self, output, model):
+                comps = self._inner.components(output, model)
+                comps["diag"] = tf.stop_gradient(
+                    tf.reduce_mean(output.firing_rates["exc"])
+                )
+                return comps
+
+            def residual(self, output):
+                return self._inner.residual(output)
+
+        base = _build_f64(l0_factory)
+        problem = CalibrationProblem(
+            base.network,
+            base.parameter_space,
+            base.t_sequence,
+            inputs=base.inputs,
+            objective=WithDiag(base.objective),
+        )
+        phi = np.asarray(problem.pack(), dtype=np.float64) + 0.05
+        losses, grad = balanced_gradient(problem, phi, {"obs": 1.0, "diag": 0.0})
+        assert "diag" in losses
+        _, grad_ref = base.value_and_gradient(phi)
+        np.testing.assert_allclose(
+            np.asarray(grad), np.asarray(grad_ref), rtol=1e-10, atol=1e-12
+        )
+
     def test_weighted_sum_against_value_and_gradient(self, l0_factory):
         problem = _two_component_problem(_build_f64(l0_factory))
         phi = np.asarray(problem.pack(), dtype=np.float64) + 0.05
@@ -896,12 +938,12 @@ class TestBalancedTrain:
     def test_pcgrad_seeded_train_reproducible(self, l0_factory):
         problem = _two_component_problem(_build_f64(l0_factory))
         phi0 = np.asarray(problem.pack(), dtype=np.float64) + 0.1
-        kwargs = dict(
-            optimizer="sgd",
-            max_steps=3,
-            projector=pcgrad_project,
-            projector_kwargs={"seed": 7},
-        )
+        kwargs = {
+            "optimizer": "sgd",
+            "max_steps": 3,
+            "projector": pcgrad_project,
+            "projector_kwargs": {"seed": 7},
+        }
         first = balanced_train(problem, phi0, FixedWeights(1.0), **kwargs)
         second = balanced_train(problem, phi0, FixedWeights(1.0), **kwargs)
         assert first.weight_history == second.weight_history

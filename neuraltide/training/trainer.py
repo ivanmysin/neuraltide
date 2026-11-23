@@ -2,15 +2,15 @@ import csv
 import json
 import os
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Literal, Tuple, Union
+from typing import Any, Literal
 
 import tensorflow as tf
 
 import neuraltide
 import neuraltide.config
-from neuraltide.core.network import NetworkRNN, NetworkOutput
+from neuraltide.core.network import NetworkOutput, NetworkRNN
+from neuraltide.core.types import StateList, TensorType
 from neuraltide.training.losses import CompositeLoss
-from neuraltide.core.types import TensorType, StateList
 
 try:
     from neuraltide.training.adjoint import AdjointSolver
@@ -22,7 +22,7 @@ except ImportError:
 class TrainingHistory:
     """История обучения."""
 
-    loss_history: List[float]
+    loss_history: list[float]
     epochs: int
 
     def to_dict(self) -> dict:
@@ -69,7 +69,7 @@ class Trainer:
         grad_clip_norm: float = 0.0,
         run_eagerly: bool = False,
         jit_compile: bool = False,
-        chunk_length: Optional[int] = None,
+        chunk_length: int | None = None,
         chunk_grad: str = "checkpointed",
     ):
         if run_eagerly and jit_compile:
@@ -113,18 +113,16 @@ class Trainer:
         if grad_method == "adjoint" and AdjointSolver is None:
             raise ImportError("adjoint method not available")
 
-        self._compiled_train_step: Optional[tf.types.experimental.ConcreteFunction] = (
-            None
-        )
+        self._compiled_train_step: tf.types.experimental.ConcreteFunction | None = None
         if grad_method != "adjoint" and not run_eagerly:
             self._compiled_train_step = tf.function(
                 self._compute_and_apply_grads, jit_compile=jit_compile
             )
 
     @staticmethod
-    def _extract_targets(loss_fn) -> Dict[str, TensorType]:
+    def _extract_targets(loss_fn) -> dict[str, TensorType]:
         """Collect target tensors from a (possibly composite) loss."""
-        targets: Dict[str, TensorType] = {}
+        targets: dict[str, TensorType] = {}
         terms = (
             loss_fn.terms if isinstance(loss_fn, CompositeLoss) else [(1.0, loss_fn)]
         )
@@ -145,7 +143,7 @@ class Trainer:
             if c is not None:
                 v.assign(c(v))
 
-    def _apply_grads(self, grads_and_vars: List[Tuple[tf.Tensor, tf.Variable]]) -> None:
+    def _apply_grads(self, grads_and_vars: list[tuple[tf.Tensor, tf.Variable]]) -> None:
         """Опционально клипает по глобальной норме, применяет к оптимизатору, накладывает constraints."""
         if not grads_and_vars:
             return
@@ -162,8 +160,8 @@ class Trainer:
         self,
         t_sequence: TensorType,
         inputs: TensorType,
-        initial_state: Optional[Tuple[StateList, StateList]] = None,
-    ) -> Dict[str, Any]:
+        initial_state: tuple[StateList, StateList] | None = None,
+    ) -> dict[str, Any]:
         with tf.GradientTape() as tape:
             output = self.network(
                 t_sequence,
@@ -189,8 +187,8 @@ class Trainer:
         self,
         t_sequence: TensorType,
         inputs: TensorType,
-        initial_state: Optional[Tuple[StateList, StateList]] = None,
-    ) -> Dict[str, Any]:
+        initial_state: tuple[StateList, StateList] | None = None,
+    ) -> dict[str, Any]:
         """Train step using AdjointSolver (memory-efficient gradients).
 
         initial_state передаётся в AdjointSolver.compute_gradients и влияет
@@ -217,8 +215,8 @@ class Trainer:
         self,
         t_sequence: TensorType,
         inputs: TensorType,
-        initial_state: Optional[Tuple[StateList, StateList]] = None,
-    ) -> Dict[str, Any]:
+        initial_state: tuple[StateList, StateList] | None = None,
+    ) -> dict[str, Any]:
         if self.grad_method == "adjoint":
             return self._train_step_adjoint(t_sequence, inputs, initial_state)
         if self._compiled_train_step is not None:
@@ -228,11 +226,11 @@ class Trainer:
     def fit(
         self,
         t_sequence: TensorType,
-        inputs: Optional[TensorType] = None,
+        inputs: TensorType | None = None,
         epochs: int = 10,
-        callbacks: Optional[List] = None,
+        callbacks: list | None = None,
         verbose: int = 1,
-        initial_state: Optional[Tuple[StateList, StateList]] = None,
+        initial_state: tuple[StateList, StateList] | None = None,
     ) -> TrainingHistory:
         """Обучение на заданное число эпох."""
         history = TrainingHistory(loss_history=[], epochs=epochs)
@@ -249,7 +247,7 @@ class Trainer:
             history.loss_history.append(loss_val)
 
             if callbacks:
-                logs: Dict[str, Any] = {"loss": loss_val}
+                logs: dict[str, Any] = {"loss": loss_val}
                 # Градиенты (до клиппинга) получают callbacks, например
                 # GradientMonitor читает их из logs["grads"].
                 if step_result.get("grads") is not None:
@@ -265,7 +263,7 @@ class Trainer:
         self,
         t_sequence: TensorType,
         inputs: TensorType,
-        chunk_length: Optional[int] = None,
+        chunk_length: int | None = None,
         chunk_grad: str = "checkpointed",
     ) -> NetworkOutput:
         """Предсказание без обучения.
@@ -285,9 +283,9 @@ class Trainer:
         self,
         t_sequence: TensorType,
         inputs: TensorType,
-        initial_state: Optional[Tuple[StateList, StateList]] = None,
+        initial_state: tuple[StateList, StateList] | None = None,
         return_final_state: bool = False,
-        chunk_length: Optional[int] = None,
+        chunk_length: int | None = None,
         chunk_grad: str = "checkpointed",
     ) -> NetworkOutput:
         """
@@ -368,7 +366,7 @@ class Trainer:
 
     def export_results(
         self,
-        path_or_fd: Union[str, os.PathLike],
+        path_or_fd: str | os.PathLike,
         format: Literal["json", "csv"] = "json",
         include_config: bool = True,
     ) -> None:
@@ -387,9 +385,7 @@ class Trainer:
         else:
             raise ValueError(f"Unknown format: {format}")
 
-    def _export_json(
-        self, path_or_fd: Union[str, os.PathLike], include_config: bool
-    ) -> None:
+    def _export_json(self, path_or_fd: str | os.PathLike, include_config: bool) -> None:
         results = {
             "trainable_variables": [],
             "loss_history": [],
@@ -415,7 +411,7 @@ class Trainer:
         else:
             json.dump(results, path_or_fd, indent=2)
 
-    def _export_csv(self, path_or_fd: Union[str, os.PathLike]) -> None:
+    def _export_csv(self, path_or_fd: str | os.PathLike) -> None:
         rows = []
 
         rows.append(["name", "value"])

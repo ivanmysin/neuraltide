@@ -54,10 +54,10 @@ params[name] = [0.5, 0.6, 0.4, 0.7]
 
 # Словарь с полным контролем:
 params[name] = {
-    'value': 0.5,           # скаляр или список длины n_units
-    'trainable': True,      # по умолчанию False
-    'min': 0.01,            # нижняя граница (опционально)
-    'max': 2.0,             # верхняя граница (опционально)
+    "value": 0.5,  # скаляр или список длины n_units
+    "trainable": True,  # по умолчанию False
+    "min": 0.01,  # нижняя граница (опционально)
+    "max": 2.0,  # верхняя граница (опционально)
 }
 ```
 
@@ -100,7 +100,7 @@ params[name] = {
 
 **По умолчанию**:
 ```python
-{'firing_rate': self.get_firing_rate(state)}
+{"firing_rate": self.get_firing_rate(state)}
 ```
 
 **Опциональные ключи**:
@@ -199,10 +199,10 @@ params[name] = {
 ```python
 (
     {
-        'I_syn': tf.Tensor [1, n_post],
-        'g_syn': tf.Tensor [1, n_post],
+        "I_syn": tf.Tensor[1, n_post],
+        "g_syn": tf.Tensor[1, n_post],
     },
-    new_state  # list of tf.Tensor
+    new_state,  # list of tf.Tensor
 )
 ```
 
@@ -272,37 +272,40 @@ from typing import Optional
 from neuraltide.core.base import BaseInputGenerator
 from neuraltide.core.types import TensorType
 
+
 class MyGenerator(BaseInputGenerator):
     def __init__(self, dt: float, params: dict, name: str = "my_generator", **kwargs):
         super().__init__(params=params, dt=dt, name=name, **kwargs)
-        
+
         # Регистрация параметров
-        self.amplitude = self._make_param(self._params, 'amplitude')
-        self.freq = self._make_param(self._params, 'freq')
-    
-    def call(self, t: TensorType, extra_inputs: Optional[TensorType] = None) -> TensorType:
+        self.amplitude = self._make_param(self._params, "amplitude")
+        self.freq = self._make_param(self._params, "freq")
+
+    def call(
+        self, t: TensorType, extra_inputs: Optional[TensorType] = None
+    ) -> TensorType:
         # Реализация генератора
         two_pi = tf.constant(2.0 * 3.141592653589793)
         amplitude = tf.reshape(self.amplitude, [1, self.n_units])
         freq = tf.reshape(self.freq, [1, self.n_units])
-        
+
         rate = amplitude * tf.sin(two_pi * freq * t / 1000.0)
         return tf.nn.relu(rate)
-    
+
     @property
     def parameter_spec(self) -> dict:
         return {
-            'amplitude': {
-                'shape': (self.n_units,),
-                'trainable': self.amplitude.trainable,
-                'constraint': None,
-                'units': 'Hz',
+            "amplitude": {
+                "shape": (self.n_units,),
+                "trainable": self.amplitude.trainable,
+                "constraint": None,
+                "units": "Hz",
             },
-            'freq': {
-                'shape': (self.n_units,),
-                'trainable': self.freq.trainable,
-                'constraint': None,
-                'units': 'Hz',
+            "freq": {
+                "shape": (self.n_units,),
+                "trainable": self.freq.trainable,
+                "constraint": None,
+                "units": "Hz",
             },
         }
 ```

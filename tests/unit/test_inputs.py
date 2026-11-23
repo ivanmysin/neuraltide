@@ -266,3 +266,76 @@ class TestPlaceFieldGenerator:
         f = tf.function(lambda t, e: gen(t, extra_inputs=e))
         out = f(t_seq, extra)
         assert out.shape == (1, t_seq.shape[1], 1)
+
+
+class TestPeakTimeToPhases:
+    """peak_time_to_phases согласует конвенции фаз генераторов (§1 report)."""
+
+    T_PEAK_MS = 31.0  # на сетке t_seq (шаг 0.5 мс); период 8 Гц = 125 мс
+    FREQ = 8.0
+
+    def test_helper_values_at_zero(self):
+        from neuraltide.inputs import peak_time_to_phases
+
+        phases = peak_time_to_phases(t_peak_ms=0.0, freq_hz=self.FREQ)
+        assert phases["von_mises"] == pytest.approx(0.0)
+        assert phases["sinusoidal"] == pytest.approx(np.pi / 2.0)
+        assert phases["place_field"] == pytest.approx(0.0)
+
+    def test_von_mises_peaks_at_t_peak(self, t_seq):
+        from neuraltide.inputs import peak_time_to_phases
+
+        phases = peak_time_to_phases(self.T_PEAK_MS, self.FREQ)
+        gen = VonMisesGenerator(
+            dt=0.5,
+            params={
+                "mean_rate": 20.0,
+                "R": 0.5,
+                "freq": self.FREQ,
+                "phase": float(phases["von_mises"]),
+            },
+        )
+        out = gen(t_seq).numpy()[0, :, 0]
+        t_axis = t_seq.numpy()[0, :, 0]
+        assert t_axis[np.argmax(out)] == pytest.approx(self.T_PEAK_MS, abs=1.0)
+
+    def test_sinusoidal_peaks_at_t_peak(self, t_seq):
+        from neuraltide.inputs import peak_time_to_phases
+
+        phases = peak_time_to_phases(self.T_PEAK_MS, self.FREQ)
+        gen = SinusoidalGenerator(
+            dt=0.5,
+            params={
+                "amplitude": 10.0,
+                "freq": self.FREQ,
+                "phase": float(phases["sinusoidal"]),
+                "offset": 5.0,
+            },
+        )
+        out = gen(t_seq).numpy()[0, :, 0]
+        t_axis = t_seq.numpy()[0, :, 0]
+        assert t_axis[np.argmax(out)] == pytest.approx(self.T_PEAK_MS, abs=1.0)
+
+    def test_place_field_peaks_at_t_peak(self, t_seq):
+        from neuraltide.inputs import peak_time_to_phases
+
+        phases = peak_time_to_phases(self.T_PEAK_MS, self.FREQ)
+        params = {
+            "center_x": [0.0],
+            "center_y": [0.0],
+            "radius": [20.0],
+            "peak_rate": [5.0],
+            "background_rate": [0.5],
+            "theta_modulation_factor": [0.0],
+            "precession_slope": [5.0],
+            "precession_init_phase": [float(phases["place_field"])],
+            "phase_outside": [0.0],
+            "R": [0.8],
+            "freq": self.FREQ,
+        }
+        gen = PlaceFieldGenerator(dt=0.5, params=params)
+        # позиция в центре поля: spatial=1, dphi=0 — чистая тета-модуляция
+        center = tf.zeros((1, int(t_seq.shape[1]), 2), dtype=tf.float32)
+        out = gen(t_seq, extra_inputs=center).numpy()[0, :, 0]
+        t_axis = t_seq.numpy()[0, :, 0]
+        assert t_axis[np.argmax(out)] == pytest.approx(self.T_PEAK_MS, abs=1.0)
